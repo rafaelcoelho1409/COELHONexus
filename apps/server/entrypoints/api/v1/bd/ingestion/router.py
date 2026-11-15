@@ -183,11 +183,55 @@ async def resume_agentic_run(book_id: str, agentic_run_id: str) -> dict:
 
 
 @router.post(
+    "/{book_id}/agentic/runs/{agentic_run_id}/replay/{node_id}",
+    response_model = schemas.AgenticRunStart,
+    status_code = 202,
+)
+async def replay_agentic_run_from_node(book_id: str, agentic_run_id: str, node_id: str) -> dict:
+    """Replay one node and its descendants from the persisted pre-node LangGraph checkpoint."""
+    try:
+        manifest = await domains.bd.ingestion.ai.service.queue_ingestion_ai_node_replay(
+            book_id, agentic_run_id, node_id,
+        )
+    except FileNotFoundError as error:
+        raise HTTPException(status_code = 404, detail = str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code = 409, detail = str(error)) from error
+
+    await domains.bd.ingestion.ai.progress.service.emit(
+        book_id,
+        agentic_run_id,
+        "run_queued",
+        status = manifest["status"],
+        progress = manifest["progress"],
+    )
+    try:
+        task = domains.bd.ingestion.ai.task.run_ingestion_ai.apply_async(args = (
+            book_id,
+            manifest["extraction_run_id"],
+            agentic_run_id,
+        ))
+    except Exception as error:
+        await domains.bd.ingestion.ai.service.mark_ingestion_ai_run_failed(
+            book_id, agentic_run_id, error,
+        )
+        logger.exception("[bd-agentic] unable to replay node %s for run %s", node_id, agentic_run_id)
+        raise HTTPException(status_code = 503, detail = "Unable to queue the Agentic AI node replay") from error
+    infra.opentelemetry.service.tag_celery_task(task.id)
+    return {
+        "status": "queued",
+        "book_id": book_id,
+        "extraction_run_id": manifest["extraction_run_id"],
+        "agentic_run_id": agentic_run_id,
+    }
+
+
+@router.post(
     "/{book_id}/agentic/runs/{agentic_run_id}/cancel",
     response_model = schemas.AgenticRunCancelResponse,
 )
 async def cancel_agentic_run(book_id: str, agentic_run_id: str) -> dict:
-    """Request a cooperative Agentic AI stop at the next safe page or graph-node boundary."""
+    """Request a cooperative Agentic AI stop at the next safe work or LLM-call boundary."""
     try:
         return await domains.bd.ingestion.ai.service.cancel_ingestion_ai_run(book_id, agentic_run_id)
     except FileNotFoundError as error:

@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "description": "Human-reviewed cases from the 2026-11-13 r2 tier runs. Source reports and page inputs are immutable benchmark artifacts.",
+  "description": "Human-reviewed cases from the 2026-11-13 through 2026-11-15 tier runs. Source reports and page inputs are immutable benchmark artifacts.",
   "fixtures": [
     {
       "id": "unsloth-page-46-figure-marker",
@@ -109,6 +109,7 @@
           "[session recordings](https://docs.browserbase.com/platform/browser/observability/observability)",
           "[Search](https://docs.browserbase.com/platform/search/overview)"
         ],
+        "forbidden_descriptions": ["broken link syntax"],
         "max_accepted_repairs": 0
       },
       "human_rubric": "The cited evidence contains complete inline Markdown links. Do not describe these links as missing a closing bracket or repair the source. Keep the page text byte-identical; unrelated real findings may remain reviewable."
@@ -222,6 +223,52 @@
       "human_rubric": "The current audit found no actionable issue on this page, so no repair call is needed. Preserve the source unchanged. This fixture does not exercise the repair structured-output retry."
     },
     {
+      "id": "unsloth-r3-page-116-valid-gfm-closing-pipes",
+      "round_id": "dd-refine-2026-11-14-r3",
+      "run_id": "e599457f8f984058a2274318362cb53e",
+      "tier": "llms_full",
+      "page_idx": 116,
+      "labels": ["valid_gfm_table", "auditor_false_positive", "source_preservation"],
+      "expected": {
+        "forbidden_descriptions": ["missing its closing pipe delimiter"],
+        "max_accepted_repairs": 0
+      },
+      "human_rubric": "The cited benchmark rows end with an unescaped closing pipe and are valid GFM. Do not report a missing delimiter or alter the source table."
+    },
+    {
+      "id": "unsloth-r3-page-127-model-size-tutorial-repeats",
+      "round_id": "dd-refine-2026-11-14-r3",
+      "run_id": "e599457f8f984058a2274318362cb53e",
+      "tier": "llms_full",
+      "page_idx": 127,
+      "labels": ["model_variant_context", "contextual_repetition", "source_preservation"],
+      "expected": {"forbidden_descriptions": ["same block of text appears twice"], "max_accepted_repairs": 0},
+      "human_rubric": "The guide repeats Studio and setup instructions under separate 4B and 30B-A3B tutorials, where each model section is independently usable. Preserve both tutorials and do not remove model-specific steps or screenshots automatically."
+    },
+    {
+      "id": "unsloth-r3-page-129-model-size-tutorial-repeats",
+      "round_id": "dd-refine-2026-11-14-r3",
+      "run_id": "e599457f8f984058a2274318362cb53e",
+      "tier": "llms_full",
+      "page_idx": 129,
+      "labels": ["model_variant_context", "contextual_repetition", "source_preservation"],
+      "expected": {"forbidden_descriptions": ["same block of text appears twice"], "max_accepted_repairs": 0},
+      "human_rubric": "The guide repeats feature and setup instructions under separate 20B and 120B model tutorials, where each section applies to a different model variant. Preserve both tutorials and do not remove their contextual instructions or screenshots automatically."
+    },
+    {
+      "id": "unsloth-r3-page-162-valid-gfm-table-edge-pipes",
+      "round_id": "dd-refine-2026-11-14-r3",
+      "run_id": "e599457f8f984058a2274318362cb53e",
+      "tier": "llms_full",
+      "page_idx": 162,
+      "labels": ["valid_gfm_table", "auditor_false_positive", "source_preservation"],
+      "expected": {
+        "forbidden_descriptions": ["trailing pipes with no content", "trailing empty cells in the last column"],
+        "max_accepted_repairs": 0
+      },
+      "human_rubric": "GFM tables permit optional leading and trailing pipe delimiters and empty cells. These cited rows are structurally valid; suppress speculative formatting complaints and preserve the source."
+    },
+    {
       "id": "asyncio-r3-page-49-audit-structured-output",
       "round_id": "dd-refine-2026-11-14-r3",
       "run_id": "84a14914693e4d24bc94034e23aac1fa",
@@ -256,7 +303,7 @@
       "tier": "sitemap",
       "page_idx": 70,
       "labels": ["valid_gfm_table", "auditor_false_positive"],
-      "expected": {"forbidden_descriptions": ["valid Markdown but may indicate missing data"]},
+      "expected": {"forbidden_descriptions": ["empty capability cells", "valid Markdown but may indicate missing data"], "max_accepted_repairs": 0},
       "human_rubric": "The source is a structurally valid GFM integration table; empty cells are rendered as empty values and the audit itself describes the row as valid Markdown. Do not report speculative missing data as a formatting defect."
     },
     {
@@ -331,12 +378,12 @@
       "run_id": "3324037265224d729cc08baf0355a013",
       "tier": "sitemap",
       "page_idx": 27,
-      "labels": ["source_editorial_defects", "source_preservation"],
+      "labels": ["source_editorial_defects", "source_preservation", "stochastic_audit_candidate"],
       "expected": {
-        "expected_issue_categories": ["other"],
+        "audit_status": "completed",
         "max_accepted_repairs": 0
       },
-      "human_rubric": "The captured guide contains the cited misspellings in ordinary prose. Report them for source-owner review; automatic Markdown repair must not rewrite editorial wording."
+      "human_rubric": "The captured guide contains minor misspellings in ordinary prose. If detected, surface them for source-owner review; never rewrite editorial wording automatically. Detection is an advisory model judgment, so absence of this low-impact finding does not fail the deterministic replay gate; preserve the source and record the observed result."
     },
     {
       "id": "deepagents-r3-page-41-duplicate-card-review",

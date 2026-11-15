@@ -7,6 +7,7 @@ from typing import Any, TypedDict
 class IngestionChunkState(TypedDict, total = False):
     video_ids: list[str]
     extract_id: str | None
+    replay_node: str | None
     metadata_videos: list[dict[str, Any]]
     metadata_result: dict[str, Any]
     transcription_result: dict[str, Any]

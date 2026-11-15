@@ -6,8 +6,7 @@ import { ChartNoAxesColumn } from "lucide-react";
 import dynamic from "next/dynamic";
 import type { JSX } from "react";
 import { useState } from "react";
-
-import { MermaidTopology } from "@/shared/markdown/mermaid-topology";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/shared/ui/tabs";
 
 import { STATUS_WORD_LABEL, statusWord } from "../domain";
 import { ActionButton } from "./action-button";
@@ -28,7 +27,6 @@ const IngestionAgenticFlow = dynamic(
 const MODES = [
   { id: "graph", label: "Graph" },
   { id: "list", label: "List" },
-  { id: "langgraph", label: "LangGraph" },
 ] as const;
 
 export type IngestionWorkflowAction = {
@@ -49,26 +47,20 @@ export type IngestionWorkflowActions = {
 const DEFAULT_CAPTION =
   "Playwright retrieves transcripts → Elasticsearch indexes them → Qdrant writes vectors while Neo4j writes graph data.";
 
-const INGESTION_TOPOLOGY = `flowchart TD
-  __start__([Start]) --> playwright["Playwright"]
-  playwright --> elasticsearch["Elasticsearch"]
-  elasticsearch --> qdrant["Qdrant"]
-  elasticsearch --> neo4j["Neo4j"]
-  qdrant --> __end__([End])
-  neo4j --> __end__`;
-
 export function IngestionAgenticStructure({
   steps,
   actions,
   onOpenUsage,
   ariaLabel = "Agentic ingestion workflow",
   caption = DEFAULT_CAPTION,
+  onPlayNode,
 }: {
   steps: ReadonlyArray<Step>;
   actions: IngestionWorkflowActions;
   onOpenUsage: () => void;
   ariaLabel?: string;
   caption?: string;
+  onPlayNode?: (nodeId: string) => void;
 }): JSX.Element {
   const [mode, setMode] = useState<(typeof MODES)[number]["id"]>("graph");
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
@@ -134,16 +126,18 @@ export function IngestionAgenticStructure({
           </fieldset>
 
           {mode === "graph" ? (
-            <IngestionAgenticFlow steps={steps} onOpen={setSelectedKey} />
-          ) : mode === "list" ? (
-            <PipelineSteps steps={steps} onOpen={(step) => setSelectedKey(step.key)} />
-          ) : (
-            <MermaidTopology
-              title="YCS ingestion workflow"
-              source={INGESTION_TOPOLOGY}
-              note="Elasticsearch branches to separate Qdrant vector and Neo4j graph writes."
+            <IngestionAgenticFlow
+              steps={steps}
+              onOpen={setSelectedKey}
+              onPlay={onPlayNode}
             />
-          )}
+          ) : mode === "list" ? (
+            <PipelineSteps
+              steps={steps}
+              onOpen={(step) => setSelectedKey(step.key)}
+              onPlay={onPlayNode ? (step) => onPlayNode(step.key) : undefined}
+            />
+          ) : null}
         </section>
       </div>
 
@@ -160,29 +154,36 @@ export function IngestionAgenticStructure({
           closeLabel="Close ingestion node details"
           onClose={() => setSelectedKey(null)}
         >
-          <section aria-label="Node purpose" className="rounded-sm border border-border bg-card p-3">
-            <h3 className="text-sm font-medium">What this node does</h3>
-            <p className="mt-2 text-sm text-muted-foreground">{selected.defaultHint}</p>
-          </section>
-          <section aria-label="Node resources" className="mt-3 rounded-sm border border-border bg-card p-3">
-            <h3 className="text-sm font-medium">Agent, skills, and tools</h3>
-            <IngestionNodeResources nodeId={selected.key} />
-          </section>
-          <dl className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
-            <div className="rounded-sm border border-border px-3 py-2">
-              <dt className="text-xs text-muted-foreground">Current state</dt>
-              <dd className="mt-1 text-sm font-medium">
-                {STATUS_WORD_LABEL[statusWord(selected.view.state)]}
-              </dd>
-            </div>
-            <div className="rounded-sm border border-border px-3 py-2">
-              <dt className="text-xs text-muted-foreground">Latest update</dt>
-              <dd className="mt-1 break-words font-mono text-xs">{selected.view.label}</dd>
-            </div>
-          </dl>
-          {selected.view.hint ? (
-            <p className="mt-3 text-sm text-muted-foreground">{selected.view.hint}</p>
-          ) : null}
+          <Tabs defaultValue="overview" className="w-full">
+            <TabsList aria-label="Node details">
+              <TabsTrigger value="overview">Overview</TabsTrigger>
+              <TabsTrigger value="resources">Resources</TabsTrigger>
+            </TabsList>
+            <TabsContent value="overview" className="flex flex-col gap-3 pt-4">
+              <section aria-label="Node purpose" className="rounded-sm border border-border bg-card p-3">
+                <h3 className="text-sm font-medium">What this node does</h3>
+                <p className="mt-2 text-sm text-muted-foreground">{selected.defaultHint}</p>
+              </section>
+              <dl className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                <div className="rounded-sm border border-border px-3 py-2">
+                  <dt className="text-xs text-muted-foreground">Current state</dt>
+                  <dd className="mt-1 text-sm font-medium">
+                    {STATUS_WORD_LABEL[statusWord(selected.view.state)]}
+                  </dd>
+                </div>
+                <div className="rounded-sm border border-border px-3 py-2">
+                  <dt className="text-xs text-muted-foreground">Latest update</dt>
+                  <dd className="mt-1 break-words font-mono text-xs">{selected.view.label}</dd>
+                </div>
+              </dl>
+              {selected.view.hint ? <p className="text-sm text-muted-foreground">{selected.view.hint}</p> : null}
+            </TabsContent>
+            <TabsContent value="resources" className="pt-4">
+              <section aria-label="Agent, skills, and tools" className="rounded-sm border border-border bg-card p-3">
+                <IngestionNodeResources nodeId={selected.key} />
+              </section>
+            </TabsContent>
+          </Tabs>
         </SideSheet>
       ) : null}
     </>

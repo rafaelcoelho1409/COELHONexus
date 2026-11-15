@@ -2,7 +2,9 @@
 
 The worker's composition root (`domains/dd/pipeline/ai/synth`) binds the graph, object storage and run context to COELHO Cloud and hands them in as a `Binding`."""
 from __future__ import annotations
+import ai
 import domains
+import infra
 from . import params
 
 import asyncio
@@ -91,6 +93,93 @@ async def resume_chapter(binding: domains.dd.pipeline.runtime.runner.entities.Bi
         logger.warning(f"[synth] {thread_id}: run_started_at reset on resume failed (the wall-clock gate will use the stale value): {type(error).__name__}: {error}")
     main_task, watcher_task = domains.dd.pipeline.runtime.runner.service.launch(binding, None, config, thread_id)
     return await _finish(binding, config, main_task, watcher_task, thread_id)
+
+
+async def replay_chapter_from_node(
+    binding: domains.dd.pipeline.runtime.runner.entities.Binding,
+    thread_id: str,
+    node_id: str,
+) -> dict:
+    """Fork a saved chapter run immediately before ``node_id`` and run forward."""
+    if node_id not in domains.dd.pipeline.ai.synth.service.node_order():
+        raise ValueError(f"unknown Synth node {node_id!r}")
+    base_config = binding.config(thread_id)
+    snapshot = await binding.graph.aget_state(base_config)
+    if not snapshot.values:
+        raise ValueError(f"no checkpoints found for thread_id={thread_id!r}")
+    values = dict(snapshot.values)
+    if values.get("status") in {"running", "queued"}:
+        raise ValueError("stop the active Synth run before replaying a node")
+    replay_config = await ai.langgraph.service.checkpoint_before_node(
+        binding.graph,
+        base_config,
+        node_id,
+    )
+    replay_snapshot = await binding.graph.aget_state(replay_config)
+    replay_values = dict(replay_snapshot.values or {})
+    slug = str(replay_values.get("framework_slug") or "")
+    chapter_id = str(replay_values.get("chapter_id") or "")
+    if not slug or not chapter_id:
+        raise ValueError("the saved Synth state is missing its framework or chapter")
+
+    output_fields = {
+        "outline_sdp": ("outline_path", "outline_stats"),
+        "digest_construct": ("digest_path", "digest_stats"),
+        "ledger_prepare": ("ledger_path", "ledger_stats", "digest_path", "digest_stats"),
+        "sawc_write": ("sawc_path", "sawc_stats"),
+        "sawc_derive": ("derive_stats",),
+        "verify": ("verify_path", "verify_stats"),
+        "checklist_eval": ("checklist_path", "checklist_stats"),
+        "mgsr_replan": ("mgsr_path", "mgsr_stats"),
+        "render_audit_write": ("chapter_path", "chapter_stats"),
+    }
+    node_order = domains.dd.pipeline.ai.synth.service.node_order()
+    descendants = node_order[node_order.index(node_id):]
+    reset_state = {
+        field: None
+        for node in descendants
+        for field in output_fields[node]
+    }
+    # A replay from the section writer repeats the current refinement pass.
+    # Carry its prior checklist feedback in a one-shot input, then clear the
+    # downstream checklist output so the replay does not present stale status.
+    if node_id == "sawc_write":
+        reset_state["sawc_feedback"] = replay_values.get("checklist_stats")
+    if node_id in {"outline_sdp", "digest_construct", "ledger_prepare"}:
+        reset_state.update(
+            refine_iter=None,
+            prev_checklist_score=None,
+            best_seen_sawc_path=None,
+            best_seen_score=None,
+            best_seen_pregate=None,
+            consecutive_infra_degraded=None,
+        )
+    reset_state.update(run_started_at=time.time(), status="running", error=None)
+    replay_config = await binding.graph.aupdate_state(replay_config, reset_state)
+
+    await domains.dd.pipeline.runtime.cancel.service.reset(thread_id)
+    await domains.dd.pipeline.runtime.progress.service.emit_progress(
+        thread_id,
+        params.STAGE,
+        "resumed",
+        next_nodes = [node_id],
+    )
+    started = time.monotonic()
+    main_task, watcher_task = domains.dd.pipeline.runtime.runner.service.launch(
+        binding,
+        None,
+        replay_config,
+        thread_id,
+    )
+    result = await _finish(binding, base_config, main_task, watcher_task, thread_id)
+    if result.get("status") == "done":
+        await domains.dd.pipeline.storage.service.write_chapter_timing(
+            binding.blobs,
+            slug,
+            chapter_id,
+            int((time.monotonic() - started) * 1000),
+        )
+    return result
 
 
 async def _finish(binding: domains.dd.pipeline.runtime.runner.entities.Binding, config: dict, main_task: asyncio.Task, watcher_task: asyncio.Task, thread_id: str) -> dict:

@@ -221,6 +221,7 @@ class IngestionAIRunManifest(BaseModel):
     processed_book_revision: int | None = Field(default = None, ge = 1, strict = True)
     processed_page_count: int | None = Field(default = None, ge = 1, strict = True)
     contents_status: Literal["complete", "needs_review", "unavailable"] | None = None
+    replay_from_node: str | None = None
     created_at: float = Field(gt = 0, allow_inf_nan = False)
     updated_at: float = Field(gt = 0, allow_inf_nan = False)
     finished_at: float | None = Field(default = None, gt = 0, allow_inf_nan = False)

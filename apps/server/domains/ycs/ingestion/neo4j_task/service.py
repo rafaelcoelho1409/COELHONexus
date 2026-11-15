@@ -61,9 +61,12 @@ async def ingest_async(
             })
             try:
                 result = await ingest_pipeline(
-            video_ids, batch_size, skip_resolution, extract_id,
-            progress_cb = progress_cb,
-        )
+                    video_ids,
+                    batch_size,
+                    skip_resolution,
+                    extract_id,
+                    progress_cb = progress_cb,
+                )
             except Exception as e:
                 infra.langfuse.service.set_current_span_langfuse_io(output_data = {
                     "status": "failed",
@@ -72,6 +75,12 @@ async def ingest_async(
                     "error": f"{type(e).__name__}: {e}",
                 })
                 raise
+            finally:
+                # `ingest_to_neo4j` runs inside a Celery `asyncio.run()`
+                # boundary. Release its loop-local pooled transport before
+                # that loop closes; otherwise the shared client can retain
+                # stale loop resources across YCS ingestion tasks.
+                await domains.settings.chat.service.close_shared_http_client()
             infra.langfuse.service.set_current_span_langfuse_io(output_data = {
                 "status": "done" if not result.get("error") else "failed",
                 "kind": "neo4j",
@@ -267,6 +276,10 @@ async def ingest_pipeline(
                 progress_cb(meta)
                 return
             progress_cb(payload)
+        # Celery workers are long-lived and Settings can change after a
+        # worker starts. Refresh before constructing the model so this
+        # run uses the current endpoint URL, model, and credential.
+        domains.settings.chat.service.refresh_endpoint(force = True)
         llm = domains.settings.chat.service.build_chat_model(timeout_s = 650.0)
         logger.info(
             f"[ingest_to_neo4j] videos={len(all_video_ids)}, "

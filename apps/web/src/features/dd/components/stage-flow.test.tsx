@@ -41,7 +41,7 @@ describe("StageFlow", () => {
   it("opens a node by its button, with the keyboard as well as the mouse", async () => {
     const onOpen = vi.fn();
     renderSynthGraph({}, onOpen);
-    const button = screen.getByRole("button", { name: /SAWC write/ });
+    const button = screen.getByRole("button", { name: /Open SAWC write node details/ });
     await userEvent.click(button);
     expect(onOpen).toHaveBeenCalledWith("sawc_write");
     button.focus();

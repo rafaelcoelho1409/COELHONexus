@@ -5,7 +5,7 @@ import { ChartNoAxesColumn } from "lucide-react";
 import dynamic from "next/dynamic";
 import { useState } from "react";
 import { apiErrorMessage } from "@/shared/lib/api-error";
-import { MermaidTopology } from "@/shared/markdown/mermaid-topology";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/shared/ui/tabs";
 
 import { ActionButton } from "../../components/action-button";
 import {
@@ -36,15 +36,7 @@ const AgenticFlow = dynamic(
 const MODES = [
   { id: "graph", label: "Graph" },
   { id: "list", label: "List" },
-  { id: "langgraph", label: "LangGraph" },
 ] as const;
-
-const RAG_LANGGRAPH_TOPOLOGY = `flowchart TD
-  __start__([__start__]) --> pin_sources["pin_sources"]
-  pin_sources --> build_vector_index["build_vector_index"]
-  build_vector_index --> materialize_knowledge_graph["materialize_knowledge_graph"]
-  materialize_knowledge_graph --> publish_retrieval_index["publish_retrieval_index"]
-  publish_retrieval_index --> __end__([__end__])`;
 
 const emptyResources: AgenticNodeResources = { agents: [], skills: [], tools: [] };
 
@@ -76,7 +68,11 @@ const NODES = [
       "Connect chapters, lessons, glossary concepts, diagrams, and cited source pages in a book-scoped graph.",
     reads: ["Verified Learning Guide", "Citation references"],
     writes: ["Book-scoped concepts", "Evidence-linked relationships"],
-    resources: { agents: ["rag_graph_extractor"], skills: [], tools: [] },
+    resources: {
+      agents: ["rag_graph_extractor"],
+      skills: [],
+      tools: ["LLMGraphTransformer", "Neo4j"],
+    },
     usageNodeIds: ["rag_graph_extractor"],
   },
   {
@@ -98,12 +94,14 @@ export function RagIndexBoard({
   executionEnabled,
   infoOpen,
   onInfoOpenChange,
+  onPlayNode,
 }: {
   bookId: string;
   index: RagIndexStatus | null;
   executionEnabled: boolean;
   infoOpen: boolean;
   onInfoOpenChange: (open: boolean) => void;
+  onPlayNode?: (nodeId: string) => void;
 }) {
   const [mode, setMode] = useState<(typeof MODES)[number]["id"]>("graph");
   const [selectedNodeId, setSelectedNodeId] = useState<NodeId>("pin_sources");
@@ -155,18 +153,27 @@ export function RagIndexBoard({
 
         <div className="min-w-0 overflow-hidden rounded-sm border border-border bg-background">
           {mode === "graph" ? (
-            <AgenticFlow views={views} onOpenNode={selectNode} ariaLabel="Agentic RAG pipeline graph" />
+            <AgenticFlow
+              views={views}
+              onOpenNode={selectNode}
+              onPlayNode={onPlayNode}
+              ariaLabel="Agentic RAG pipeline graph"
+            />
           ) : mode === "list" ? (
             <div className="p-3">
-              <AgenticNodeList rows={views} onOpen={selectNode} label="Agentic RAG pipeline nodes" />
+              <AgenticNodeList
+                rows={views}
+                onOpen={selectNode}
+                onPlay={onPlayNode}
+                label="Agentic RAG pipeline nodes"
+              />
             </div>
-          ) : (
-            <MermaidTopology title="Agentic RAG" source={RAG_LANGGRAPH_TOPOLOGY} />
-          )}
+          ) : null}
         </div>
       </div>
       {infoOpen && selectedNode ? (
         <SideSheet
+          key={selectedNode.id}
           title={selectedNode.label}
           subtitle={
             <AgenticStatusBadge
@@ -177,16 +184,28 @@ export function RagIndexBoard({
           onClose={() => onInfoOpenChange(false)}
         >
           <div className="flex flex-col gap-5">
-            <section aria-label="Selected retrieval stage" className="flex flex-col gap-3">
-              <p className="text-sm">{selectedNode.detail}</p>
-              <div className="grid grid-cols-[auto_1fr] items-baseline gap-x-3 gap-y-2 text-xs text-muted-foreground">
-                <span>Reads</span>
-                <AgenticPills items={selectedNode.reads} />
-                <span>Writes</span>
-                <AgenticPills items={selectedNode.writes} />
-              </div>
-              <AgenticNodeDetailsList resources={selectedNode.resources} />
-            </section>
+            <Tabs defaultValue="overview" className="w-full">
+              <TabsList aria-label="Node details">
+                <TabsTrigger value="overview">Overview</TabsTrigger>
+                <TabsTrigger value="resources">Resources</TabsTrigger>
+              </TabsList>
+              <TabsContent value="overview" className="flex flex-col gap-3 pt-4">
+                <section aria-label="Selected retrieval stage" className="flex flex-col gap-3">
+                  <p className="text-sm">{selectedNode.detail}</p>
+                  <div className="grid grid-cols-[auto_1fr] items-baseline gap-x-3 gap-y-2 text-xs text-muted-foreground">
+                    <span>Reads</span>
+                    <AgenticPills items={selectedNode.reads} />
+                    <span>Writes</span>
+                    <AgenticPills items={selectedNode.writes} />
+                  </div>
+                </section>
+              </TabsContent>
+              <TabsContent value="resources" className="pt-4">
+                <section aria-label="Agent, skills, and tools">
+                  <AgenticNodeDetailsList resources={selectedNode.resources} />
+                </section>
+              </TabsContent>
+            </Tabs>
             <section aria-label="Node LLM usage" className="flex flex-col gap-3">
               <div>
                 <h3 className="text-sm font-medium">LLM usage</h3>

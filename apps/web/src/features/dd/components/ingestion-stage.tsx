@@ -24,6 +24,7 @@ import {
   useLibrary,
   useManifest,
   useResumeAgenticRun,
+  useReplayAgenticRunNode,
   useRunPoll,
   useStartAgenticRun,
   useStartRun,
@@ -148,6 +149,7 @@ function IngestionWorkspace({
   const start = useStartRun();
   const startAgentic = useStartAgenticRun();
   const resumeAgentic = useResumeAgenticRun();
+  const replayAgenticNode = useReplayAgenticRunNode();
   const wipeAgentic = useWipeAgenticRun();
   const wipe = useDeleteLibrary();
   const router = useRouter();
@@ -168,6 +170,7 @@ function IngestionWorkspace({
       ? completedProgress(manifestQuery.data.entries.length)
       : null);
   const status = progress?.status ?? null;
+  const agentic = progress?.stages?.agentic ?? null;
   const terminal = isRunTerminal(status);
 
   useEffect(() => {
@@ -259,6 +262,24 @@ function IngestionWorkspace({
     );
   };
 
+  const replayAgenticAIFromNode = async (nodeId: string) => {
+    const agenticRunId = activeManifest?.agentic_run_id;
+    if (!agenticRunId || agentic?.status === "queued" || agentic?.status === "running") return;
+    const confirmed = await confirm({
+      title: "Replay Agentic AI from this node?",
+      message: `Clears saved output from “${nodeId}” and later nodes, then reruns them. Earlier work is preserved. This cannot be undone.`,
+      confirmLabel: "Replay node",
+    });
+    if (!confirmed) return;
+    replayAgenticNode.mutate(
+      { slug, runId: agenticRunId, nodeId },
+      {
+        onSuccess: () => notice(`Agentic AI replay queued from ${nodeId}.`),
+        onError: (error) => toast(apiErrorMessage(error)),
+      },
+    );
+  };
+
   const stopAgenticAI = () => {
     if (effectiveRunId) cancel.mutate(effectiveRunId);
   };
@@ -314,6 +335,7 @@ function IngestionWorkspace({
       >
         <IngestionPipeline
           runId={effectiveRunId}
+          agenticRunId={activeManifest?.agentic_run_id ?? null}
           progress={progress}
           ingested={ingested}
           ingestedPages={manifestQuery.data?.entries.length ?? 0}
@@ -333,6 +355,7 @@ function IngestionWorkspace({
           onResumeAgentic={resumeAgenticAI}
           onStopAgentic={stopAgenticAI}
           onWipeAgentic={() => void wipeAgenticAI()}
+          onPlayAgenticNode={(nodeId) => void replayAgenticAIFromNode(nodeId)}
           onWipe={() => void wipeIngestion()}
         />
       </section>

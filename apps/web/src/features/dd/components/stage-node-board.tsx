@@ -1,6 +1,6 @@
 "use client";
 
-/** One stage's live nodes as a graph or list, or the compiled LangGraph topology, with the drawer of whichever node the reader opened. */
+/** One stage's live nodes as a graph or list, with the drawer of whichever node the reader opened. */
 
 import dynamic from "next/dynamic";
 import { useState } from "react";
@@ -13,7 +13,6 @@ import { plannerNodesFor, synthNodesFor, type StageNode, type StageNodeView } fr
 import type { StageEvent } from "../entities";
 import { useStageInfoQuery } from "../hooks/use-stage-queries";
 import type { RunStage } from "../params";
-import { LangGraphTopology } from "./langgraph-topology";
 import { NodeDrawer } from "./node-drawer";
 import { StageNodes } from "./stage-parts";
 import type { StageFlowNodeDetails } from "./stage-flow";
@@ -28,7 +27,6 @@ const StageFlow = dynamic(() => import("./stage-flow").then((module) => module.S
 const VIEWS = [
   { id: "graph", label: "Graph" },
   { id: "list", label: "List" },
-  { id: "langgraph", label: "LangGraph" },
 ] as const;
 
 type ViewMode = (typeof VIEWS)[number]["id"];
@@ -45,6 +43,7 @@ export function StageNodeBoard({
   live,
   caption,
   embedded = false,
+  onPlayNode,
 }: {
   stage: RunStage;
   views: StageNodeView[];
@@ -58,25 +57,28 @@ export function StageNodeBoard({
   caption: string;
   /** Draw the graph inside its stage's shared card with the run controls above. */
   embedded?: boolean;
+  onPlayNode?: (nodeId: string) => void;
 }) {
   const [openId, setOpenId] = useState<string | null>(null);
+  const [drawerTab, setDrawerTab] = useState<"overview" | "resources" | "activity" | "raw" | "usage">("usage");
   // When each node was last opened, so its Activity tab can mark what arrived since (this page visit only).
   const [openedAt, setOpenedAt] = useState<Record<string, number>>({});
   const [since, setSince] = useState(0);
-  const openNode = (nodeId: string) => {
+  const openNode = (nodeId: string, tab: "overview" | "usage" = "usage") => {
     setSince(openedAt[nodeId] ?? 0);
     setOpenedAt({ ...openedAt, [nodeId]: Date.now() });
+    setDrawerTab(tab);
     setOpenId(nodeId);
   };
   const [mode, setMode] = useState<ViewMode>("graph");
   const stageInfoQuery = useStageInfoQuery(stage);
   const stageInfo = stageInfoQuery.data;
-  const activeMode = mode;
   const topology = compiledTopology(stageInfo?.graph_mermaid, stage);
   const definitions =
     stage === "planner" ? plannerNodesFor(stageInfo?.implemented) : synthNodesFor(stageInfo?.implemented);
   const currentViews = new Map(views.map((view) => [view.node.id, view]));
   const nodeDefinitions = new Map(definitions.map((node) => [node.id, node]));
+  const replayableNodeIds = new Set(stageInfo?.implemented ?? []);
   const visibleNodeIds = topology?.nodeIds ?? [];
   const graphViews: StageNodeView[] = visibleNodeIds.map((id) => {
     const current = currentViews.get(id);
@@ -130,18 +132,12 @@ export function StageNodeBoard({
             <ToggleGroup
               legend={`${STAGE_TITLE[stage]} nodes shown as`}
               options={VIEWS}
-              value={activeMode}
+              value={mode}
               onChange={setMode}
             />
           </div>
         </div>
-        {activeMode === "langgraph" ? (
-          <LangGraphTopology
-            title={STAGE_TITLE[stage]}
-            source={stageInfo?.graph_mermaid ?? null}
-            loading={stageInfoQuery.isPending}
-          />
-        ) : !topology ? (
+        {!topology ? (
           <p
             role="status"
             className="flex min-h-36 items-center justify-center rounded-sm border border-border bg-background p-3 text-center text-xs text-muted-foreground"
@@ -150,7 +146,7 @@ export function StageNodeBoard({
               ? `Loading compiled ${STAGE_TITLE[stage]} topology…`
               : `Compiled ${STAGE_TITLE[stage]} topology is unavailable.`}
           </p>
-        ) : activeMode === "graph" ? (
+        ) : mode === "graph" ? (
           <StageFlow
             stage={stage}
             title={STAGE_TITLE[stage]}
@@ -160,6 +156,14 @@ export function StageNodeBoard({
             values={values}
             live={live}
             onOpen={openNode}
+            onPlay={
+              onPlayNode && !live && threadId
+                ? (nodeId) => {
+                    if (replayableNodeIds.has(nodeId)) onPlayNode?.(nodeId);
+                  }
+                : undefined
+            }
+            playableNodeIds={replayableNodeIds}
             edges={topology?.edges}
             nodeDetails={graphNodeDetails}
           />
@@ -168,14 +172,21 @@ export function StageNodeBoard({
             views={graphViews}
             liveLines={liveLines}
             kpis={kpis}
-            nodeDetails={graphNodeDetails}
             onOpen={openNode}
+            onPlay={
+              onPlayNode && !live && threadId
+                ? (nodeId) => {
+                    if (replayableNodeIds.has(nodeId)) onPlayNode?.(nodeId);
+                  }
+                : undefined
+            }
+            playableNodeIds={replayableNodeIds}
           />
         )}
       </section>
       {open ? (
         <NodeDrawer
-          key={open.node.id}
+          key={`${open.node.id}:${drawerTab}`}
           stage={stage}
           view={open}
           values={values}
@@ -183,6 +194,8 @@ export function StageNodeBoard({
           threadId={threadId}
           live={live}
           since={since}
+          initialTab={drawerTab}
+          resources={nodeResources(stage, open.node.id, stageInfo?.implemented)}
           onClose={() => setOpenId(null)}
         />
       ) : null}

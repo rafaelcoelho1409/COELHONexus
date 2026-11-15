@@ -20,3 +20,4 @@ MANIFEST_OWNED_FIELDS = frozenset(
 )
 # Sub-prefixes of a candidate's artifact prefix that a wipe deletes; its input pages are kept.
 CANDIDATE_PARTS = ("pages/", "assessments/", "audit/", "vault/")
+GRAPH_NODES = ("audit_pages", "normalize_pages", "publish")

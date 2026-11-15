@@ -1,11 +1,14 @@
 "use client";
 
-/** One agent graph (planner, synth or Agentic AI ingestion), drawn with React Flow: fixed positions (nothing moves when a status changes), a
- * button per node that opens its drawer, and — for synth — the refine loop as an amber arc that lights up when it
- * fires. Loaded lazily (`next/dynamic`), so the graph library stays out of every other page's JavaScript. */
+/** One agent graph (planner, synth or Agentic AI ingestion), drawn with React Flow: fixed positions (nothing moves
+ * when a status changes), a full-card node action, a separate replay target, and — for synth — the refine loop as
+ * an amber arc that lights up when it fires. Loaded lazily (`next/dynamic`), so the graph library stays out of every
+ * other page's JavaScript. */
 
 import "@xyflow/react/dist/style.css";
 import "./stage-flow.css";
+
+import { Play } from "lucide-react";
 
 import {
   BaseEdge,
@@ -30,7 +33,7 @@ import {
   NODE_WIDTH,
 } from "../domain/flow-layout";
 import type { NodeStatus, NodeView } from "../domain/stages";
-import { NODE_STATUS_LABEL, NodeDetailsList, type StageNodeDetails, StatusGlyph } from "./stage-parts";
+import { NODE_STATUS_LABEL, type StageNodeDetails, StatusGlyph } from "./stage-parts";
 
 type StageNodeData = {
   id: string;
@@ -45,6 +48,7 @@ type StageNodeData = {
   hasLoopOut: boolean;
   hasLoopIn: boolean;
   onOpen: () => void;
+  onPlay?: () => void;
 };
 type StageFlowNode = Node<StageNodeData, "stage">;
 
@@ -57,7 +61,7 @@ export type StageFlowNodeDetails = StageNodeDetails & {
   } | null;
 };
 
-/** A node: a real button, so it is one tab stop with a name that carries its state in words. */
+/** The node button contains its content and progress; replay uses a separate hit area. */
 function StageNodeCard({ data }: NodeProps<StageFlowNode>) {
   if (data.details) {
     const border =
@@ -77,67 +81,75 @@ function StageNodeCard({ data }: NodeProps<StageFlowNode>) {
           aria-label={`${data.label} — ${NODE_STATUS_LABEL[data.status]}`}
           data-status={data.status}
           style={{ width: data.width, height: data.height, pointerEvents: "none" }}
-          className={`relative m-0 flex min-w-0 flex-col overflow-hidden rounded-md border bg-card p-0 hover:bg-muted ${border} ${
+          className={`relative isolate m-0 flex min-w-0 flex-col overflow-hidden rounded-md border bg-card p-0 hover:bg-muted ${border} ${
             data.status === "future" ? "opacity-60" : ""
           }`}
         >
           <legend className="sr-only">{`${data.label} — ${NODE_STATUS_LABEL[data.status]}`}</legend>
-          <div
-            id={`dd-${data.stage}-node-${data.id}-details`}
-            className="pointer-events-none flex min-h-0 flex-1 flex-col"
-          >
-            <span className="flex min-h-9 w-full items-start gap-2 px-3 pt-2">
-              <StatusGlyph status={data.status} />
-              <span className="min-w-0 flex-1">
-                <span className="block text-sm leading-4">{data.label}</span>
-                <span className="mt-0.5 block font-mono text-xs text-muted-foreground">{data.id}</span>
-              </span>
-              <span className="sr-only">— {NODE_STATUS_LABEL[data.status]}</span>
-            </span>
-            {data.stage !== "ingestion" && data.kpi ? (
-              <span className="px-3 pt-1 text-xs tabular-nums text-muted-foreground">{data.kpi}</span>
-            ) : null}
-            {data.stage !== "ingestion" && data.liveLine ? (
-              <span className="px-3 pt-1 font-mono text-xs break-all text-muted-foreground">
-                {data.liveLine}
-              </span>
-            ) : null}
-            <NodeDetailsList details={data.details} compact />
-            {progress ? (
-              <span className="mt-auto block px-3 pb-2 pt-1">
-                <span className="flex items-center justify-between gap-2 text-xs">
-                  <span className="text-muted-foreground">{progress.label}</span>
-                  <span className="shrink-0 tabular-nums">
-                    {progress.total > 0 ? `${progress.current} of ${progress.total}` : "Waiting for pages"}
-                  </span>
-                </span>
-                <div
-                  role="progressbar"
-                  aria-label={`${data.label} ${progress.label} progress`}
-                  aria-valuemin={progress.total > 0 ? 0 : undefined}
-                  aria-valuemax={progress.total > 0 ? progress.total : undefined}
-                  aria-valuenow={progress.total > 0 ? progress.current : undefined}
-                  aria-valuetext={
-                    progress.total > 0
-                      ? `${progress.current} of ${progress.total} ${progress.label}`
-                      : "Waiting for pages"
-                  }
-                  className="mt-1 h-1 w-full overflow-hidden rounded-sm bg-muted"
-                >
-                  <div className="h-full bg-primary" style={{ width: `${progress.percent}%` }} />
-                </div>
-              </span>
-            ) : null}
-          </div>
           <button
             type="button"
             onClick={data.onOpen}
-            aria-label={`Open ${data.label} usage`}
+            aria-label={`Open ${data.label} node details — ${NODE_STATUS_LABEL[data.status]}`}
             aria-describedby={`dd-${data.stage}-node-${data.id}-details`}
             aria-haspopup="dialog"
-            style={{ pointerEvents: "auto" }}
-            className="nodrag nopan absolute inset-0 z-10 cursor-pointer rounded-md border-0 bg-transparent p-0 text-transparent hover:bg-transparent focus-visible:outline-2 focus-visible:outline-ring"
-          />
+            style={{
+              pointerEvents: "auto",
+              clipPath: data.onPlay
+                ? "polygon(44px 0, 100% 0, 100% 100%, 0 100%, 0 44px, 44px 44px)"
+                : undefined,
+            }}
+            className="nodrag nopan absolute inset-0 z-10 flex min-h-0 flex-col overflow-hidden rounded-md border-0 bg-transparent p-0 text-left text-foreground hover:bg-muted/20 focus-visible:outline-2 focus-visible:outline-ring"
+          >
+            <div
+              id={`dd-${data.stage}-node-${data.id}-details`}
+              className="pointer-events-none flex min-h-0 flex-1 flex-col"
+            >
+              <span
+                className={`flex min-h-9 w-full items-start gap-2 pt-2 ${data.onPlay ? "pl-11" : "px-3"}`}
+              >
+                <StatusGlyph status={data.status} />
+                <span className="min-w-0 flex-1">
+                  <span className="block text-sm leading-4">{data.label}</span>
+                  <span className="mt-0.5 block font-mono text-xs text-muted-foreground">{data.id}</span>
+                </span>
+                <span className="sr-only">— {NODE_STATUS_LABEL[data.status]}</span>
+              </span>
+              {data.stage !== "ingestion" && data.kpi ? (
+                <span className="px-3 pt-1 text-xs tabular-nums text-muted-foreground">{data.kpi}</span>
+              ) : null}
+              {data.stage !== "ingestion" && data.liveLine ? (
+                <span className="px-3 pt-1 font-mono text-xs break-all text-muted-foreground">
+                  {data.liveLine}
+                </span>
+              ) : null}
+              {progress ? (
+                <span className="mt-auto block px-3 pb-2 pt-1">
+                  <span className="flex items-center justify-between gap-2 text-xs">
+                    <span className="text-muted-foreground">{progress.label}</span>
+                    <span className="shrink-0 tabular-nums">
+                      {progress.total > 0 ? `${progress.current} of ${progress.total}` : "Waiting for pages"}
+                    </span>
+                  </span>
+                  <div
+                    role="progressbar"
+                    aria-label={`${data.label} ${progress.label} progress`}
+                    aria-valuemin={progress.total > 0 ? 0 : undefined}
+                    aria-valuemax={progress.total > 0 ? progress.total : undefined}
+                    aria-valuenow={progress.total > 0 ? progress.current : undefined}
+                    aria-valuetext={
+                      progress.total > 0
+                        ? `${progress.current} of ${progress.total} ${progress.label}`
+                        : "Waiting for pages"
+                    }
+                    className="mt-1 h-1 w-full overflow-hidden rounded-sm bg-muted"
+                  >
+                    <div className="h-full bg-primary" style={{ width: `${progress.percent}%` }} />
+                  </div>
+                </span>
+              ) : null}
+            </div>
+          </button>
+          {data.onPlay ? <NodePlayButton label={data.label} onClick={data.onPlay} /> : null}
         </fieldset>
         <Handle type="source" position={Position.Bottom} isConnectable={false} />
       </>
@@ -147,16 +159,10 @@ function StageNodeCard({ data }: NodeProps<StageFlowNode>) {
   return (
     <>
       <Handle type="target" position={Position.Top} isConnectable={false} />
-      <button
-        type="button"
-        onClick={data.onOpen}
-        aria-haspopup="dialog"
+      <div
         data-status={data.status}
-        // React Flow switches pointer events off for nodes that cannot be dragged or selected, and children
-        // inherit that; the button is the one thing here that must stay clickable.
-        style={{ width: data.width, height: data.height, pointerEvents: "auto" }}
-        // `overflow-hidden` is the guard: whatever a line holds, nothing paints outside the node's shape (every line also truncates).
-        className={`nodrag nopan flex flex-col justify-center overflow-hidden rounded-md border bg-card px-3 py-2.5 text-left transition-colors hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring ${
+        style={{ width: data.width, height: data.height, pointerEvents: "none" }}
+        className={`relative isolate nodrag nopan flex flex-col justify-center overflow-hidden rounded-md border bg-card px-3 py-2.5 text-left ${
           data.status === "running"
             ? "border-running"
             : data.status === "failed"
@@ -166,16 +172,31 @@ function StageNodeCard({ data }: NodeProps<StageFlowNode>) {
                 : "border-border"
         } ${data.status === "future" ? "opacity-60" : ""}`}
       >
-        <span className="flex items-center gap-1.5">
-          <StatusGlyph status={data.status} />
-          <span className="min-w-0 truncate text-sm">{data.label}</span>
-          <span className="sr-only">— {NODE_STATUS_LABEL[data.status]}</span>
-        </span>
-        {data.kpi ? <span className="mt-0.5 truncate text-xs text-muted-foreground">{data.kpi}</span> : null}
-        {data.liveLine ? (
-          <span className="mt-0.5 truncate font-mono text-xs text-muted-foreground">{data.liveLine}</span>
-        ) : null}
-      </button>
+        <button
+          type="button"
+          onClick={data.onOpen}
+          aria-label={`Open ${data.label} node details — ${NODE_STATUS_LABEL[data.status]}`}
+          aria-haspopup="dialog"
+          style={{
+            pointerEvents: "auto",
+            clipPath: data.onPlay
+              ? "polygon(44px 0, 100% 0, 100% 100%, 0 100%, 0 44px, 44px 44px)"
+              : undefined,
+          }}
+          className="nodrag nopan absolute inset-0 z-10 flex flex-col justify-center overflow-hidden rounded-md border-0 bg-transparent px-3 py-2.5 text-left text-foreground hover:bg-muted/20 focus-visible:outline-2 focus-visible:outline-ring"
+        >
+          <span className={`pointer-events-none flex items-center gap-1.5 ${data.onPlay ? "pl-8" : ""}`}>
+            <StatusGlyph status={data.status} />
+            <span className="min-w-0 truncate text-sm">{data.label}</span>
+            <span className="sr-only">— {NODE_STATUS_LABEL[data.status]}</span>
+          </span>
+          {data.kpi ? <span className="pointer-events-none mt-0.5 truncate text-xs text-muted-foreground">{data.kpi}</span> : null}
+          {data.liveLine ? (
+            <span className="pointer-events-none mt-0.5 truncate font-mono text-xs text-muted-foreground">{data.liveLine}</span>
+          ) : null}
+        </button>
+        {data.onPlay ? <NodePlayButton label={data.label} onClick={data.onPlay} /> : null}
+      </div>
       <Handle type="source" position={Position.Bottom} isConnectable={false} />
       {data.hasLoopOut ? (
         <Handle id="loop-out" type="source" position={Position.Right} isConnectable={false} />
@@ -204,6 +225,25 @@ function RefineLoopEdge({ id, sourceX, sourceY, targetX, targetY, label, markerE
   );
 }
 
+function NodePlayButton({ label, onClick }: { label: string; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onPointerDown={(event) => event.stopPropagation()}
+      onClick={(event) => {
+        event.stopPropagation();
+        onClick();
+      }}
+      aria-label={`Replay from ${label}`}
+      title={`Replay from ${label} and clear downstream results`}
+      style={{ pointerEvents: "auto", zIndex: 50 }}
+      className="nodrag nopan absolute left-1 top-1 inline-flex size-9 items-center justify-center rounded-sm bg-card text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"
+    >
+      <Play aria-hidden className="size-4" />
+    </button>
+  );
+}
+
 // Stable identities: React Flow re-registers its types whenever these objects change.
 const NODE_TYPES = { stage: StageNodeCard };
 const EDGE_TYPES = { loop: RefineLoopEdge };
@@ -219,6 +259,8 @@ export function StageFlow({
   values,
   live,
   onOpen,
+  onPlay,
+  playableNodeIds,
   edges: topologyEdges,
   nodeDetails = {},
 }: {
@@ -230,6 +272,8 @@ export function StageFlow({
   values: Record<string, unknown>;
   live: boolean;
   onOpen: (nodeId: string) => void;
+  onPlay?: (nodeId: string) => void;
+  playableNodeIds?: ReadonlySet<string>;
   /** Connections from LangGraph's compiled topology, when the server supplied it. */
   edges?: readonly FlowEdgeSpec[];
   /** Extra operational context for nodes that need richer cards. */
@@ -237,8 +281,8 @@ export function StageFlow({
 }) {
   const ids = views.map((view) => view.node.id);
   const hasNodeDetails = views.some((view) => nodeDetails[view.node.id]);
-  const nodeWidth = stage === "ingestion" || hasNodeDetails ? 304 : NODE_WIDTH;
-  const nodeHeight = stage === "ingestion" || hasNodeDetails ? 168 : NODE_HEIGHT;
+  const nodeWidth = stage === "ingestion" || hasNodeDetails ? 248 : NODE_WIDTH;
+  const nodeHeight = stage === "ingestion" || hasNodeDetails ? 112 : NODE_HEIGHT;
   const layout = flowLayout(stage, ids, { nodeWidth, nodeHeight });
   const statusOf = new Map(views.map((view) => [view.node.id, view.status]));
   const iteration = loopIteration(values);
@@ -261,6 +305,9 @@ export function StageFlow({
       hasLoopOut: layout.loop?.from === view.node.id,
       hasLoopIn: layout.loop?.to === view.node.id,
       onOpen: () => onOpen(view.node.id),
+      ...(onPlay && (!playableNodeIds || playableNodeIds.has(view.node.id))
+        ? { onPlay: () => onPlay(view.node.id) }
+        : {}),
     },
   }));
 

@@ -28,6 +28,9 @@ def extract_videos(
     video_ids:             list[str],
     include_transcription: bool             = True,
     languages:             list[str] | None = None,
+    replay_from_node: str | None = None,
+    checkpoint_extract_id: str | None = None,
+    preserved_node_progress: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Extract metadata + transcripts for specific video IDs → ES."""
     logger.info(f"[extract_videos] Starting: {len(video_ids)} videos")
@@ -40,24 +43,34 @@ def extract_videos(
         self.update_state(state = "PROGRESS", meta = payload)
 
     async def _run() -> dict[str, Any]:
-        with infra.langfuse.service.session(
-            "ycs-extract", session_id = self.request.id or "(no-request-id)",
-        ), infra.opentelemetry.service.get_tracer().start_as_current_span(
-            "ycs.extract.videos",
-            attributes = {
-                infra.langfuse.keys.KEEP:        True,
-                infra.langfuse.keys.KIND:        "workflow_root",
-                infra.langfuse.keys.TRACE_NAME:         "ycs.extract.videos",
-                "ycs.extract.kind":            "videos",
-                "ycs.video_count":             len(video_ids),
-                "ycs.include_transcription":   include_transcription,
-            },
-        ):
-            return await domains.ycs.ingestion.ai.service.run_ingestion_graph_async(
-                video_ids, include_transcription, languages,
-                progress_cb = _progress,
-                extract_id  = self.request.id,
-            )
+        await infra.postgres.service.init_checkpointer()
+        try:
+            with infra.langfuse.service.session(
+                "ycs-extract", session_id = self.request.id or "(no-request-id)",
+            ), infra.opentelemetry.service.get_tracer().start_as_current_span(
+                "ycs.extract.videos",
+                attributes = {
+                    infra.langfuse.keys.KEEP:        True,
+                    infra.langfuse.keys.KIND:        "workflow_root",
+                    infra.langfuse.keys.TRACE_NAME:         "ycs.extract.videos",
+                    "ycs.extract.kind":            "videos",
+                    "ycs.video_count":             len(video_ids),
+                    "ycs.include_transcription":   include_transcription,
+                },
+            ):
+                return await domains.ycs.ingestion.ai.service.run_ingestion_graph_async(
+                    video_ids,
+                    include_transcription,
+                    languages,
+                    progress_cb = _progress,
+                    extract_id = self.request.id,
+                    checkpointer = infra.postgres.service.get_checkpointer(),
+                    checkpoint_extract_id = checkpoint_extract_id,
+                    replay_from_node = replay_from_node,
+                    preserved_node_progress = preserved_node_progress,
+                )
+        finally:
+            await infra.postgres.service.close_checkpointer()
 
     t0 = time.monotonic()
     try:

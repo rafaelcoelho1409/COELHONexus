@@ -317,6 +317,24 @@ class _IngestionProgressReporter:
             self.transcription_failed_ids | self.elasticsearch_failed_ids,
         )
 
+    @staticmethod
+    def _node_state(
+        *,
+        started: bool,
+        current: int,
+        total: int,
+        failed_ids: set[str],
+    ) -> str:
+        if not started:
+            return "PENDING"
+        if total == 0:
+            return "SUCCESS"
+        if current >= total:
+            if not failed_ids:
+                return "SUCCESS"
+            return "FAILURE" if len(failed_ids) >= total else "PARTIAL"
+        return "PROGRESS"
+
     def _node_progress(self) -> dict[str, dict[str, Any]]:
         playwright_completed = (
             self.metadata_done - self.transcription_failed_ids
@@ -352,6 +370,12 @@ class _IngestionProgressReporter:
         )
         return {
             "playwright": {
+                "state": self._node_state(
+                    started = True,
+                    current = len(playwright_terminal),
+                    total = len(self.video_ids),
+                    failed_ids = self.transcription_failed_ids,
+                ),
                 "phase": "transcription",
                 "current": len(playwright_terminal),
                 "total": len(self.video_ids),
@@ -360,6 +384,12 @@ class _IngestionProgressReporter:
                 "no_transcript_ids": sorted(self.no_transcript_ids),
             },
             "elasticsearch": {
+                "state": self._node_state(
+                    started = self._elasticsearch_started,
+                    current = len(elasticsearch_terminal),
+                    total = len(self.video_ids),
+                    failed_ids = elasticsearch_failed,
+                ),
                 "phase": "es_indexing" if self._elasticsearch_started else "metadata",
                 "current": len(elasticsearch_terminal),
                 "total": len(self.video_ids),
@@ -368,6 +398,69 @@ class _IngestionProgressReporter:
                 "no_transcript_ids": sorted(self.no_transcript_ids),
             },
         }
+
+    @property
+    def node_progress(self) -> dict[str, dict[str, Any]]:
+        with self._lock:
+            return self._node_progress()
+
+    def seed_from_checkpoint(self, replay_node: str, state: dict[str, Any]) -> None:
+        """Restore the already-completed node counters that precede a replay target."""
+        if replay_node == "playwright":
+            return
+        with self._lock:
+            metadata_videos = state.get("metadata_videos", [])
+            metadata_by_id = {
+                str(video["id"]): domains.ycs.ingestion.extract.domain.project_video_meta(video)
+                for video in metadata_videos
+                if isinstance(video, dict) and video.get("id")
+            }
+            self.metadata_items.update(metadata_by_id)
+            self.metadata_done.update(metadata_by_id)
+            fetch_failed_ids = {
+                str(video_id) for video_id in state.get("fetch_failed_ids", []) if video_id
+            }
+            self.metadata_done.update(fetch_failed_ids)
+            self.transcription_failed_ids.update(fetch_failed_ids)
+            self.no_transcript_ids.update(
+                str(video_id) for video_id in state.get("no_transcript_ids", []) if video_id
+            )
+            completed_transcription_ids = {
+                str(video_id) for video_id in state.get("cached_ids", []) if video_id
+            }
+            for document in state.get("transcript_docs", []):
+                if isinstance(document, dict):
+                    video_id = str(document.get("parent_video_id") or document.get("video_id") or "")
+                    if video_id:
+                        completed_transcription_ids.add(domains.ycs.ingestion.domain.parent_video_id(video_id))
+            self.transcription_completed_ids.update(completed_transcription_ids - fetch_failed_ids)
+
+            if replay_node in {"qdrant", "neo4j"}:
+                metadata_result = state.get("metadata_result", {})
+                self.metadata_indexed_ids.update(
+                    str(video_id) for video_id in metadata_result.get("indexed_ids", []) if video_id
+                )
+                self.metadata_index_failed_ids.update(
+                    str(video_id) for video_id in metadata_result.get("failed_ids", []) if video_id
+                )
+                dispatched_ids = [
+                    str(video_id) for video_id in state.get("dispatched_ids", []) if video_id
+                ]
+                index_failed_ids = {
+                    str(video_id) for video_id in state.get("index_failed_ids", []) if video_id
+                }
+                self.elasticsearch_completed_ids.update(set(dispatched_ids) - index_failed_ids)
+                self.elasticsearch_failed_ids.update(index_failed_ids)
+                self._elasticsearch_started = True
+                self.register_dispatched(dispatched_ids, state.get("transcript_docs", []))
+
+    def started(self, replay_node: str | None = None) -> None:
+        with self._lock:
+            self._emit({
+                "phase": "streaming" if replay_node in {"qdrant", "neo4j"} else "metadata",
+                "current": 0 if replay_node == "playwright" or replay_node is None else len(self.metadata_done),
+                "total": len(self.video_ids),
+            })
 
     def _transcription_payload(self) -> dict[str, Any]:
         return {
@@ -467,12 +560,42 @@ class _IngestionProgressReporter:
             })
 
 
+async def _checkpoint_before_node(graph: Any, config: dict[str, Any], node_id: str) -> dict[str, Any]:
+    async for snapshot in graph.aget_state_history(config):
+        if node_id in tuple(snapshot.next or ()) and isinstance(snapshot.config, dict):
+            return snapshot.config
+    raise ValueError(
+        f"No saved YCS ingestion checkpoint exists before {node_id!r}; run the current workflow once before node replay."
+    )
+
+
+async def validate_replay_checkpoints(
+    video_ids: list[str],
+    checkpoint_extract_id: str,
+    node_id: str,
+    checkpointer: Any,
+) -> None:
+    """Reject a stage replay before dispatch unless every original chunk has its pre-node checkpoint."""
+    if node_id not in {"playwright", "elasticsearch", "qdrant", "neo4j"}:
+        raise ValueError(f"unknown YCS ingestion node {node_id!r}")
+    graph = ai.ycs.graphs.ingestion.graphs.ingestion_graph(checkpointer=checkpointer)
+    chunk_size = domains.ycs.ingestion.graph_builder.params.EXTRACT_CONCURRENCY
+    chunks = [video_ids[index:index + chunk_size] for index in range(0, len(video_ids), chunk_size)]
+    for index, _chunk in enumerate(chunks):
+        config = {"configurable": {"thread_id": f"ycs-ingestion:{checkpoint_extract_id}:{index}"}}
+        await _checkpoint_before_node(graph, config, node_id)
+
+
 async def run_ingestion_graph_async(
     video_ids: list[str],
     include_transcription: bool,
     languages: list[str] | None,
     progress_cb: Any = None,
     extract_id: str | None = None,
+    checkpointer: Any | None = None,
+    checkpoint_extract_id: str | None = None,
+    replay_from_node: str | None = None,
+    preserved_node_progress: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Run the four-node ingestion graph in bounded, streaming batches.
 
@@ -481,10 +604,10 @@ async def run_ingestion_graph_async(
     source of truth for cancellation and store progress.
     """
     video_ids = list(dict.fromkeys(video_ids))
-    graph = ai.ycs.graphs.ingestion.graphs.ingestion_graph()
+    graph = ai.ycs.graphs.ingestion.graphs.ingestion_graph(checkpointer=checkpointer)
     reporter = _IngestionProgressReporter(video_ids, progress_cb, include_transcription)
-    if progress_cb:
-        progress_cb({"phase": "metadata", "current": 0, "total": len(video_ids)})
+    if replay_from_node is not None and (checkpointer is None or checkpoint_extract_id is None):
+        raise ValueError("YCS node replay requires its saved graph checkpoint")
 
     es = infra.elasticsearch.service.new_es()
     transcript_service = None
@@ -499,19 +622,21 @@ async def run_ingestion_graph_async(
         if extract_id:
             redis = domains.ycs.ingestion.pipeline_task.service.build_redis_client()
         if extract_id and include_transcription and video_ids:
-            await domains.ycs.ingestion.pipeline_task.service.set_phase_total(
-                redis,
-                extract_id,
-                "neo4j",
-                len(video_ids),
-            )
-            await domains.ycs.ingestion.pipeline_task.service.set_phase_total(
-                redis,
-                extract_id,
-                "qdrant",
-                len(video_ids),
-            )
-        if include_transcription and video_ids:
+            if replay_from_node == "qdrant":
+                phases_to_initialize = ("qdrant",)
+            elif replay_from_node == "neo4j":
+                phases_to_initialize = ("neo4j",)
+            else:
+                phases_to_initialize = ("neo4j", "qdrant")
+            for phase in phases_to_initialize:
+                await domains.ycs.ingestion.pipeline_task.service.set_phase_total(
+                    redis,
+                    extract_id,
+                    phase,
+                    len(video_ids),
+                )
+        should_fetch_transcripts = replay_from_node in {None, "playwright"}
+        if include_transcription and video_ids and should_fetch_transcripts:
             transcript_service = await domains.ycs.ingestion.transcript.service.init_transcript_service(
                 max_concurrent = domains.ycs.ingestion.transcript.params.MAX_CONCURRENT,
                 browser_refresh_interval = 10,
@@ -520,6 +645,19 @@ async def run_ingestion_graph_async(
 
         chunk_size = domains.ycs.ingestion.graph_builder.params.EXTRACT_CONCURRENCY
         chunks = [video_ids[index:index + chunk_size] for index in range(0, len(video_ids), chunk_size)]
+        replay_checkpoints: dict[int, dict[str, Any]] = {}
+        if replay_from_node is not None and checkpointer is not None and checkpoint_extract_id:
+            for chunk_index, _chunk in enumerate(chunks):
+                base_config = {
+                    "configurable": {
+                        "thread_id": f"ycs-ingestion:{checkpoint_extract_id}:{chunk_index}",
+                    },
+                }
+                checkpoint_config = await _checkpoint_before_node(graph, base_config, replay_from_node)
+                checkpoint = await graph.aget_state(checkpoint_config)
+                replay_checkpoints[chunk_index] = checkpoint_config
+                reporter.seed_from_checkpoint(replay_from_node, dict(checkpoint.values or {}))
+        reporter.started(replay_from_node)
         concurrency = asyncio.Semaphore(ai.ycs.graphs.ingestion.params.MAX_CONCURRENT_BATCHES)
         context = ai.ycs.graphs.ingestion.entities.IngestionContext(
             es_client = es,
@@ -539,21 +677,40 @@ async def run_ingestion_graph_async(
             cancel_check = cancel_check if redis is not None else None,
         )
 
-        async def run_chunk(chunk: list[str]) -> dict[str, Any] | None:
+        async def run_chunk(chunk_index: int, chunk: list[str]) -> dict[str, Any] | None:
             async with concurrency:
                 if await cancel_check():
                     logger.info(f"[ycs:ingestion:graph] {extract_id}: skipped queued batch after cancellation")
                     return None
+                thread_id = checkpoint_extract_id or extract_id
+                graph_config = None
+                graph_input: dict[str, Any] | None = {
+                    "video_ids": chunk,
+                    "extract_id": extract_id,
+                }
+                if checkpointer is not None and thread_id:
+                    graph_config = {"configurable": {"thread_id": f"ycs-ingestion:{thread_id}:{chunk_index}"}}
+                    if replay_from_node is not None:
+                        checkpoint_config = replay_checkpoints[chunk_index]
+                        replay_state = {"extract_id": extract_id, "replay_node": replay_from_node}
+                        if replay_from_node in {"qdrant", "neo4j"}:
+                            graph_config = await graph.aupdate_state(
+                                checkpoint_config,
+                                replay_state,
+                                as_node="elasticsearch",
+                            )
+                        else:
+                            graph_config = await graph.aupdate_state(checkpoint_config, replay_state)
+                        graph_input = None
                 return await graph.ainvoke(
-                    {
-                        "video_ids": chunk,
-                        "extract_id": extract_id,
-                    },
-                    context = context,
+                    graph_input,
+                    config=graph_config,
+                    context=context,
+                    **({"durability": "sync"} if checkpointer is not None else {}),
                 )
 
         outcomes = await asyncio.gather(
-            *(run_chunk(chunk) for chunk in chunks),
+            *(run_chunk(index, chunk) for index, chunk in enumerate(chunks)),
             return_exceptions = True,
         )
         graph_errors = [outcome for outcome in outcomes if isinstance(outcome, BaseException)]
@@ -570,6 +727,12 @@ async def run_ingestion_graph_async(
         transcript_no_transcript = 0
         dispatched_ids: list[str] = reporter.dispatched_ids
         all_items: list[dict[str, Any]] = []
+        qdrant_completed_ids: set[str] = set()
+        qdrant_failed_ids: set[str] = set()
+        qdrant_cancelled_ids: set[str] = set()
+        neo4j_completed_ids: set[str] = set()
+        neo4j_failed_ids: set[str] = set()
+        neo4j_cancelled_ids: set[str] = set()
         for outcome in completed:
             metadata_result = outcome.get("metadata_result", {})
             metadata_indexed += int(metadata_result.get("indexed", 0) or 0)
@@ -583,6 +746,81 @@ async def run_ingestion_graph_async(
             transcript_no_transcript += int(transcript_stats.get("no_transcript", 0) or 0)
             dispatched_ids.extend(outcome.get("dispatched_ids", []))
             all_items.extend(outcome.get("metadata_videos", []))
+            qdrant_result = outcome.get("qdrant_result", {})
+            qdrant_completed_ids.update(qdrant_result.get("processed_ids", []))
+            qdrant_failed_ids.update(qdrant_result.get("failed_ids", []))
+            qdrant_cancelled_ids.update(qdrant_result.get("cancelled_ids", []))
+            neo4j_result = outcome.get("neo4j_result", {})
+            neo4j_completed_ids.update(
+                neo4j_result.get("completed_video_ids", [])
+                or neo4j_result.get("processed_ids", [])
+            )
+            neo4j_failed_ids.update(
+                neo4j_result.get("failed_video_ids", [])
+                or neo4j_result.get("failed_ids", [])
+            )
+            neo4j_cancelled_ids.update(neo4j_result.get("cancelled_ids", []))
+
+        dispatched_ids = list(dict.fromkeys(dispatched_ids))
+        expected_store_ids = {
+            domains.ycs.ingestion.domain.parent_video_id(video_id)
+            for video_id in dispatched_ids
+        }
+
+        def store_progress(
+            completed_ids: set[str],
+            failed_ids: set[str],
+            cancelled_ids: set[str],
+        ) -> dict[str, Any]:
+            completed_parents = {
+                domains.ycs.ingestion.domain.parent_video_id(video_id)
+                for video_id in completed_ids
+            }
+            failed_parents = {
+                domains.ycs.ingestion.domain.parent_video_id(video_id)
+                for video_id in failed_ids
+            }
+            cancelled_parents = {
+                domains.ycs.ingestion.domain.parent_video_id(video_id)
+                for video_id in cancelled_ids
+            }
+            completed_parents -= failed_parents
+            missing = expected_store_ids - completed_parents - failed_parents - cancelled_parents
+            failed_parents.update(missing)
+            current = len(completed_parents | failed_parents | cancelled_parents)
+            if cancelled_parents:
+                state = "CANCELLED"
+            elif failed_parents:
+                state = "FAILURE" if not completed_parents else "PARTIAL"
+            elif current >= len(expected_store_ids):
+                state = "SUCCESS"
+            else:
+                state = "FAILURE"
+            return {
+                "state": state,
+                "phase": "streaming",
+                "current": current,
+                "total": len(expected_store_ids),
+                "completed_ids": sorted(completed_parents),
+                "failed_ids": sorted(failed_parents),
+            }
+
+        node_progress = reporter.node_progress
+        node_progress["qdrant"] = store_progress(
+            qdrant_completed_ids,
+            qdrant_failed_ids,
+            qdrant_cancelled_ids,
+        )
+        node_progress["neo4j"] = store_progress(
+            neo4j_completed_ids,
+            neo4j_failed_ids,
+            neo4j_cancelled_ids,
+        )
+        if replay_from_node in {"qdrant", "neo4j"} and isinstance(preserved_node_progress, dict):
+            untouched_node = "neo4j" if replay_from_node == "qdrant" else "qdrant"
+            preserved_progress = preserved_node_progress.get(untouched_node)
+            if isinstance(preserved_progress, dict):
+                node_progress[untouched_node] = preserved_progress
 
         if extract_id:
             await domains.ycs.ingestion.extract.service.dispatch_streaming_totals(
@@ -605,6 +843,7 @@ async def run_ingestion_graph_async(
             "all_items": reporter.all_items or all_items,
             "no_transcript_ids": sorted(reporter.no_transcript_ids),
             "dispatched_ids": list(dict.fromkeys(dispatched_ids)),
+            "node_progress": node_progress,
             "status": "cancelled" if await cancel_check() else "complete",
         }
     except Exception:

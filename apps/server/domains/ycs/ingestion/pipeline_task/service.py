@@ -87,6 +87,7 @@ async def persist_pipeline_state(
     include_transcription: bool,
     languages:             list[str] | None,
     phases:                dict[str, str] | None = None,
+    checkpoint_extract_id: str | None = None,
 ) -> None:
     """Best-effort snapshot of the dispatch params to Redis. The
     FastHTML "Rerun" button POSTs the extract id back; the rerun
@@ -103,6 +104,7 @@ async def persist_pipeline_state(
         "video_ids":             list(video_ids),
         "include_transcription": bool(include_transcription),
         "languages":             list(languages) if languages else None,
+        "checkpoint_extract_id": checkpoint_extract_id or extract_id,
     }
     if phases:
         payload["phases"] = dict(phases)
@@ -117,6 +119,45 @@ async def persist_pipeline_state(
             f"[ycs:pipeline] persist failed for {extract_id}: "
             f"{type(e).__name__}: {e}"
         )
+
+
+async def copy_phase_progress(
+    redis: infra.redis.service.Redis | None,
+    source_extract_id: str,
+    target_extract_id: str,
+    phase: str,
+) -> None:
+    """Carry one untouched store branch's terminal progress into a node-replay run."""
+    if redis is None or not source_extract_id or not target_extract_id or phase not in PHASES:
+        return
+    scalar_keys = (
+        keys.phase_total_key,
+        keys.phase_finished_key,
+        keys.phase_piece_total_key,
+        keys.phase_piece_finished_key,
+    )
+    for key_builder in scalar_keys:
+        value = await redis.get(key_builder(source_extract_id, phase))
+        if value is not None:
+            await redis.set(
+                key_builder(target_extract_id, phase),
+                value,
+                ex=params.PIPELINE_STATE_TTL_S,
+            )
+
+    source_status_key = keys.phase_status_key(source_extract_id, phase)
+    target_status_key = keys.phase_status_key(target_extract_id, phase)
+    statuses = await redis.hgetall(source_status_key)
+    if statuses:
+        await redis.hset(target_status_key, mapping=statuses)
+        await redis.expire(target_status_key, params.PIPELINE_STATE_TTL_S)
+
+    source_preview_key = keys.phase_preview_key(source_extract_id, phase)
+    target_preview_key = keys.phase_preview_key(target_extract_id, phase)
+    preview = await redis.smembers(source_preview_key)
+    if preview:
+        await redis.sadd(target_preview_key, *preview)
+        await redis.expire(target_preview_key, params.PIPELINE_STATE_TTL_S)
 
 
 async def wipe_videos_data(
@@ -187,6 +228,34 @@ async def wipe_videos_data(
         f"[ycs:pipeline:wipe] {len(video_ids)} video(s): {summary}"
     )
     return summary
+
+
+async def wipe_video_stage_outputs(
+    video_ids: list[str],
+    node_id: str,
+    neo4j_graph: Any | None = None,
+) -> dict[str, Any]:
+    """Clear only the selected YCS graph stage's durable outputs before replay."""
+    if node_id in {"playwright", "elasticsearch"}:
+        return await wipe_videos_data(video_ids, neo4j_graph)
+    if node_id == "qdrant":
+        es = infra.elasticsearch.service.new_es()
+        qdrant = infra.qdrant.service.new_qdrant()
+        try:
+            expanded_ids = await domains.ycs.ingestion.service.expand_with_partition_ids(es, video_ids)
+            removed = await domains.ycs.ingestion.service.delete_points_for_videos(qdrant, expanded_ids)
+            return {"qdrant": removed}
+        finally:
+            await qdrant.close()
+            await es.close()
+    if node_id == "neo4j":
+        if neo4j_graph is None:
+            raise ValueError("Neo4j is unavailable; the selected stage cannot be safely replayed")
+        removed = domains.ycs.ingestion.graph_builder.service.delete_documents_for_videos(
+            neo4j_graph, video_ids,
+        )
+        return {"neo4j": removed}
+    raise ValueError(f"unknown YCS ingestion node {node_id!r}")
 
 
 def revoke_pipeline_phases(

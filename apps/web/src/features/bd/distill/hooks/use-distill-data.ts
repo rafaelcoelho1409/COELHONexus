@@ -19,6 +19,7 @@ import {
   cancelDistillRun,
   distillEventsUrl,
   resumeDistillRun,
+  replayDistillRunNode,
   saveContentSelection,
   startDistillRun,
   wipeDistillRun,
@@ -247,6 +248,12 @@ export function useDistillActions(bookId: string) {
     onSuccess: refresh,
     onError: refresh,
   });
+  const replay = useMutation({
+    mutationFn: ({ runId, nodeId }: { runId: string; nodeId: string }) =>
+      replayDistillRunNode(bookId, runId, nodeId),
+    onSuccess: refresh,
+    onError: refresh,
+  });
   const cancel = useMutation({
     mutationFn: (runId: string) => cancelDistillRun(bookId, runId),
     onSuccess: refresh,
@@ -272,5 +279,5 @@ export function useDistillActions(bookId: string) {
     },
     onError: refresh,
   });
-  return { start, resume, cancel, wipe };
+  return { start, resume, replay, cancel, wipe };
 }

@@ -23,7 +23,6 @@ import { useIngestionGraph } from "../hooks/use-stage-queries";
 import { ActionButton } from "./action-button";
 import { AgenticProgress, ExtractionProgress } from "./ingestion-progress";
 import { IngestionNodeSheet, IngestionUsageSheet, PipelineUsageTotal } from "./ingestion-usage";
-import { LangGraphTopology } from "./langgraph-topology";
 import type { StageFlowNodeDetails } from "./stage-flow";
 import { StageNodes } from "./stage-parts";
 import { ToggleGroup } from "./toggle-group";
@@ -48,13 +47,13 @@ function fallbackNodeTitle(id: string): string {
 const MODES = [
   { id: "graph", label: "Graph" },
   { id: "list", label: "List" },
-  { id: "langgraph", label: "LangGraph" },
 ] as const;
 
 type Progress = NonNullable<RunStatus["progress"]>;
 
 export function IngestionPipeline({
   runId,
+  agenticRunId,
   progress,
   ingested,
   ingestedPages,
@@ -73,8 +72,10 @@ export function IngestionPipeline({
   onResumeAgentic,
   onStopAgentic,
   onWipeAgentic,
+  onPlayAgenticNode,
 }: {
   runId: string | null;
+  agenticRunId: string | null;
   progress: Progress | null;
   /** The framework is in the library. */
   ingested: boolean;
@@ -94,6 +95,7 @@ export function IngestionPipeline({
   onResumeAgentic: () => void;
   onStopAgentic: () => void;
   onWipeAgentic: () => void;
+  onPlayAgenticNode?: (nodeId: string) => void;
 }) {
   const [mode, setMode] = useState<(typeof MODES)[number]["id"]>("graph");
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
@@ -110,6 +112,7 @@ export function IngestionPipeline({
   const agentic = progress?.stages?.agentic ?? null;
   const extractionActive = live && extraction?.status === "running";
   const agenticActive = live && (agentic?.status === "running" || agentic?.status === "queued");
+  const agenticTerminal = ["done", "failed", "cancelled", "aborted"].includes(agentic?.status ?? "");
   const extractionStopping = extractionActive && cancelRequested;
   const agenticStopping = agenticActive && cancelRequested;
 
@@ -171,6 +174,7 @@ export function IngestionPipeline({
   const pageRows = pageProgress(agentic);
   const pageSummary = pageProgressSummary(pageRows);
   const selectedNode = INGESTION_NODES.find((node) => node.id === selectedNodeId);
+  const selectedNodeResources = selectedNode ? INGESTION_NODE_DETAILS[selectedNode.id] : undefined;
   const usageFailed = hasRun && usage.isError;
   const usageLoading = hasRun && usage.isPending;
   const agenticError = agentic?.error ?? progress?.error ?? null;
@@ -254,6 +258,7 @@ export function IngestionPipeline({
                     edges={topology.edges}
                     nodeDetails={graphNodeDetails}
                     onOpen={setSelectedNodeId}
+                    onPlay={agenticTerminal && !agenticActive && agenticRunId ? onPlayAgenticNode : undefined}
                   />
                 ) : (
                   <p role="status" className="text-xs text-muted-foreground">
@@ -268,16 +273,10 @@ export function IngestionPipeline({
                   views={nodeViews}
                   kpis={nodeKpis}
                   liveLines={NO_LIVE_LINES}
-                  nodeDetails={graphNodeDetails}
                   onOpen={setSelectedNodeId}
+                  onPlay={agenticTerminal && !agenticActive && agenticRunId ? onPlayAgenticNode : undefined}
                 />
-              ) : (
-                <LangGraphTopology
-                  title="Ingestion Agentic AI"
-                  source={graphTopology}
-                  loading={graphQuery.loading}
-                />
-              )}
+              ) : null}
             </div>
             <div className="flex min-w-0 flex-col">
               <div className="mb-3 flex min-w-0 flex-col gap-2">
@@ -358,7 +357,9 @@ export function IngestionPipeline({
         <PipelineUsageTotal usage={usage.data} hasRun={hasRun} loading={usageLoading} failed={usageFailed} />
         {selectedNode ? (
           <IngestionNodeSheet
+            key={selectedNode.id}
             node={selectedNode}
+            resources={selectedNodeResources}
             status={ingestionNodeStatus(agentic, selectedNode.id, runStatus)}
             caption={ingestionNodeCaption(agentic, selectedNode.id)}
             usage={usage.data}

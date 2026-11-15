@@ -14,6 +14,11 @@ async def sawc_write(
     state: graphs.pipeline.synth.states.SynthState,
     runtime: Runtime[graphs.pipeline.synth.entities.SynthContext],
 ) -> dict:
+    checklist_feedback = (
+        state.get("sawc_feedback")
+        if state.get("sawc_feedback") is not None
+        else state.get("checklist_stats")
+    )
     result = await graphs.pipeline.synth.sawc.graphs.sawc_graph().ainvoke(
         {
             "framework_slug": state.get("framework_slug") or "",
@@ -21,14 +26,18 @@ async def sawc_write(
             "thread_id": state.get("thread_id") or "",
             "synth_mode": state.get("synth_mode") or "quality",
             "refine_iter": state.get("refine_iter"),
-            "checklist_stats": state.get("checklist_stats"),
+            "checklist_stats": checklist_feedback,
             "best_seen_score": state.get("best_seen_score"),
             "best_seen_sawc_path": state.get("best_seen_sawc_path"),
         },
         {"max_concurrency": params.CONCURRENCY},
         context = runtime.context,
     )
-    patch = {"sawc_path": result.get("sawc_path"), "sawc_stats": result.get("sawc_stats") or {}}
+    patch = {
+        "sawc_path": result.get("sawc_path"),
+        "sawc_stats": result.get("sawc_stats") or {},
+        "sawc_feedback": None,
+    }
     for field in ("refine_iter", "best_seen_sawc_path", "best_seen_score", "prev_checklist_score"):
         if result.get(field) is not None:
             patch[field] = result[field]

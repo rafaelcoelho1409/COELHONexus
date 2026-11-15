@@ -18,11 +18,24 @@ from langgraph.errors import NodeCancelledError
 logger = logging.getLogger(__name__)
 
 
+class _InterruptedRunError(RuntimeError):
+    """An Agentic AI worker stopped while its persisted run was still active."""
+
+
 def _safe_segment(value: object) -> bool:
     return isinstance(value, str) and bool(value) and all(
         character.isascii() and (character.isalnum() or character in "-_")
         for character in value
     )
+
+
+def _is_missing_storage_object(error: Exception) -> bool:
+    if isinstance(error, FileNotFoundError):
+        return True
+    if not isinstance(error, infra.minio.service.ClientError):
+        return False
+    code = (error.response or {}).get("Error", {}).get("Code", "")
+    return code in {"404", "NoSuchKey"}
 
 
 async def _load_run_source(
@@ -138,6 +151,8 @@ def _safe_error_message(error: Exception | str) -> str:
     while isinstance(current, BaseException) and id(current) not in seen:
         seen.add(id(current))
         message = str(current).lower()
+        if isinstance(current, _InterruptedRunError):
+            return str(current)
         if isinstance(current, ValueError) and "http:// or https://" in message:
             return "The configured language-model endpoint URL is invalid. Add an http:// or https:// scheme in Settings, then retry."
         if isinstance(current, ValueError) and "older ingestion graph checkpoint" in message:
@@ -332,7 +347,12 @@ async def read_current_ingestion_ai_metadata(
         return None
     try:
         content = await storage.read_text(key)
-    except FileNotFoundError:
+    except (FileNotFoundError, infra.minio.service.ClientError) as error:
+        if not _is_missing_storage_object(error):
+            raise
+        # Node replay removes downstream metadata while keeping the book active.
+        # Treat that transiently absent artifact as unavailable so the book
+        # snapshot can fall back to the source manifest title.
         return None
     if hashlib.sha256(content.encode("utf-8")).hexdigest() != expected_sha256:
         return None
@@ -394,7 +414,11 @@ async def read_page_quality(
     try:
         assessment = json.loads(await storage.read_text(artifact["assessment_key"]))
         proposals = json.loads(await storage.read_text(artifact["patch_proposals_key"]))
-    except FileNotFoundError:
+    except (FileNotFoundError, infra.minio.service.ClientError) as error:
+        if not _is_missing_storage_object(error):
+            raise
+        # Replay may have removed the old result artifacts while this page's
+        # replacement result is still being generated.
         return None
     auto_applied = set(proposals.get("auto_applied_issue_ids", []))
     review_required = set(proposals.get("review_required_issue_ids", []))
@@ -475,6 +499,59 @@ async def read_ingestion_ai_run(
     if manifest.book_id != book_id or manifest.agentic_run_id != agentic_run_id:
         raise ValueError("the stored agentic manifest does not match the requested run")
     return manifest.model_dump(mode = "json")
+
+
+async def _ensure_ingestion_ai_worker_stopped(
+    redis: infra.redis.service.Redis,
+    book_id: str,
+    agentic_run_id: str,
+) -> None:
+    if await domains.bd.ingestion.ai.progress.service.run_execution_lock_is_held(
+        redis,
+        book_id,
+        agentic_run_id,
+    ):
+        raise ValueError("the Agentic AI worker is still exiting; wait for it to stop before retrying this run")
+
+
+async def _recover_stale_running_ingestion_ai_run(
+    redis: infra.redis.service.Redis,
+    book_id: str,
+    agentic_run_id: str,
+    manifest: dict[str, Any],
+    *,
+    storage: infra.minio.service.MinIOStorage,
+) -> dict[str, Any]:
+    """Mark an abandoned run failed only after its worker lease and progress have both gone stale."""
+    if manifest.get("status") != domains.bd.ingestion.ai.schemas.AgenticRunStatus.RUNNING.value:
+        return manifest
+    await _ensure_ingestion_ai_worker_stopped(redis, book_id, agentic_run_id)
+    updated_at = manifest.get("updated_at")
+    stale_after = domains.bd.ingestion.ai.progress.params.RUN_EXECUTION_LOCK_STALE_AFTER_S
+    if type(updated_at) not in {int, float} or time.time() - updated_at < stale_after:
+        raise ValueError("the Agentic AI run is still active; wait for the current graph node to finish")
+
+    await mark_ingestion_ai_run_failed(
+        book_id,
+        agentic_run_id,
+        _InterruptedRunError(
+            "The worker stopped before the run finished. Resume to continue from its saved checkpoint."
+        ),
+        storage = storage,
+    )
+    recovered = await read_ingestion_ai_run(book_id, agentic_run_id, storage = storage)
+    if recovered is None:
+        raise FileNotFoundError(f"agentic run {agentic_run_id} was not found for book {book_id}")
+    if recovered["status"] == domains.bd.ingestion.ai.schemas.AgenticRunStatus.FAILED.value:
+        await domains.bd.ingestion.ai.progress.service.emit(
+            book_id,
+            agentic_run_id,
+            "run_failed",
+            status = recovered["status"],
+            error = recovered["error"],
+            progress = recovered["progress"],
+        )
+    return recovered
 
 
 async def read_selection(
@@ -718,7 +795,7 @@ async def find_active_ingestion_ai_run(
 
 
 async def cancel_ingestion_ai_run(book_id: str, agentic_run_id: str) -> dict[str, Any]:
-    """Request a cooperative stop; active graph work drains to the next page or node boundary."""
+    """Request a cooperative stop at a page, node, or cancellable LLM-call boundary."""
     if not _safe_segment(book_id) or not _safe_segment(agentic_run_id):
         raise ValueError("book_id and agentic_run_id must be safe path segments")
     async with (
@@ -809,6 +886,7 @@ async def wipe_ingestion_ai_run(book_id: str, agentic_run_id: str) -> dict[str, 
         manifest = await read_ingestion_ai_run(book_id, agentic_run_id, storage = storage)
         if manifest is None:
             raise FileNotFoundError(f"agentic run {agentic_run_id} was not found for book {book_id}")
+        await _ensure_ingestion_ai_worker_stopped(redis, book_id, agentic_run_id)
         if manifest["status"] in {
             domains.bd.ingestion.ai.schemas.AgenticRunStatus.QUEUED.value,
             domains.bd.ingestion.ai.schemas.AgenticRunStatus.RUNNING.value,
@@ -878,10 +956,16 @@ async def queue_ingestion_ai_resume(
             blocking_timeout = 30,
         ),
     ):
-        return await _queue_ingestion_ai_resume_unlocked(book_id, agentic_run_id, storage = storage)
+        return await _queue_ingestion_ai_resume_unlocked(
+            redis,
+            book_id,
+            agentic_run_id,
+            storage = storage,
+        )
 
 
 async def _queue_ingestion_ai_resume_unlocked(
+    redis: infra.redis.service.Redis,
     book_id: str,
     agentic_run_id: str,
     *,
@@ -891,13 +975,20 @@ async def _queue_ingestion_ai_resume_unlocked(
     manifest = await read_ingestion_ai_run(book_id, agentic_run_id, storage = storage)
     if manifest is None:
         raise FileNotFoundError(f"agentic run {agentic_run_id} was not found for book {book_id}")
+    if storage is None:
+        storage = infra.minio.service.get_storage()
+    manifest = await _recover_stale_running_ingestion_ai_run(
+        redis,
+        book_id,
+        agentic_run_id,
+        manifest,
+        storage = storage,
+    )
     if manifest["status"] not in {
         domains.bd.ingestion.ai.schemas.AgenticRunStatus.FAILED.value,
         domains.bd.ingestion.ai.schemas.AgenticRunStatus.CANCELLED.value,
     }:
         raise ValueError("only failed or cancelled agentic runs can be resumed")
-    if storage is None:
-        storage = infra.minio.service.get_storage()
     active_run = await find_active_ingestion_ai_run(
         book_id,
         storage = storage,
@@ -931,6 +1022,168 @@ async def _queue_ingestion_ai_resume_unlocked(
         manifest["extraction_run_id"],
     )
     return manifest
+
+
+async def queue_ingestion_ai_node_replay(
+    book_id: str,
+    agentic_run_id: str,
+    node_id: str,
+    *,
+    storage: infra.minio.service.MinIOStorage | None = None,
+) -> dict[str, Any]:
+    """Queue a terminal run from a saved checkpoint immediately before one graph node."""
+    if not _safe_segment(book_id) or not _safe_segment(agentic_run_id):
+        raise ValueError("book_id and agentic_run_id must be safe path segments")
+    if node_id not in domains.bd.ingestion.ai.params.GRAPH_NODES:
+        raise ValueError(f"unknown ingestion graph node {node_id!r}")
+    async with (
+        infra.redis.service.client() as redis,
+        redis.lock(
+            domains.bd.ingestion.ai.progress.keys.book_mutation_lock_key(book_id),
+            timeout = 120,
+            blocking_timeout = 30,
+        ),
+        redis.lock(
+            domains.bd.ingestion.ai.progress.keys.run_mutation_lock_key(book_id, agentic_run_id),
+            timeout = 120,
+            blocking_timeout = 30,
+        ),
+    ):
+        manifest = await read_ingestion_ai_run(book_id, agentic_run_id, storage = storage)
+        if manifest is None:
+            raise FileNotFoundError(f"agentic run {agentic_run_id} was not found for book {book_id}")
+        if storage is None:
+            storage = infra.minio.service.get_storage()
+        manifest = await _recover_stale_running_ingestion_ai_run(
+            redis,
+            book_id,
+            agentic_run_id,
+            manifest,
+            storage = storage,
+        )
+        if manifest["status"] not in {
+            domains.bd.ingestion.ai.schemas.AgenticRunStatus.DONE.value,
+            domains.bd.ingestion.ai.schemas.AgenticRunStatus.FAILED.value,
+            domains.bd.ingestion.ai.schemas.AgenticRunStatus.CANCELLED.value,
+        }:
+            raise ValueError("stop the active Agentic AI run before replaying a node")
+        active_run = await find_active_ingestion_ai_run(
+            book_id, storage = storage, exclude_run_id = agentic_run_id,
+        )
+        if active_run is not None:
+            raise ValueError("stop the other active Agentic AI run before replaying a node")
+        _, extraction_id, _, source_manifest_sha256, _ = await _load_run_source(
+            book_id, manifest["extraction_run_id"], storage,
+        )
+        if extraction_id != manifest["extraction_run_id"] or source_manifest_sha256 != manifest["source_manifest_sha256"]:
+            raise ValueError("the agentic run no longer matches the current extraction")
+
+        graph = ai.bd.graphs.ingestion.graphs.ingestion_graph(
+            checkpointer = infra.postgres.service.get_checkpointer(),
+        )
+        graph_config = {"configurable": {
+            "thread_id": f"bd-ingestion-agentic:{book_id}:{extraction_id}:{agentic_run_id}",
+        }}
+        latest_snapshot = await graph.aget_state(graph_config)
+        replay_state = latest_snapshot.values if isinstance(latest_snapshot.values, dict) else {}
+        if node_id == "reconcile_contents":
+            candidate_key = replay_state.get("processed_book_candidate_key")
+            candidate_revision = replay_state.get("processed_book_revision")
+            if (
+                not isinstance(candidate_key, str)
+                or type(candidate_revision) is not int
+                or candidate_revision < 1
+                or not await storage.exists(candidate_key)
+            ):
+                logger.warning(
+                    "[bd-agentic] candidate artifact missing for contents replay; rewinding to materialization "
+                    "book_id=%s run_id=%s candidate_key=%s",
+                    book_id,
+                    agentic_run_id,
+                    candidate_key,
+                )
+                node_id = "materialize_processed_book"
+
+        node_index = domains.bd.ingestion.ai.params.GRAPH_NODES.index(node_id)
+        node_status = (manifest.get("progress") or {}).get("node_status", {})
+        incomplete_predecessors = [
+            predecessor
+            for predecessor in domains.bd.ingestion.ai.params.GRAPH_NODES[:node_index]
+            if node_status.get(predecessor)
+            != domains.bd.ingestion.ai.schemas.AgenticNodeStatus.DONE.value
+        ]
+        if incomplete_predecessors:
+            predecessor = incomplete_predecessors[0]
+            raise ValueError(
+                f"Cannot replay {node_id} yet: {predecessor} has not completed. "
+                f"Resume the run from its saved checkpoint or replay {predecessor}."
+            )
+        await ai.langgraph.service.checkpoint_before_node(graph, graph_config, node_id)
+
+        if node_id == "reconcile_contents":
+            await domains.bd.ingestion.ai.processed_book.service.clear_manifest_for_replay(
+                book_id,
+                agentic_run_id,
+                replay_state["processed_book_revision"],
+                storage,
+            )
+
+        descendants = set(domains.bd.ingestion.ai.params.REPLAY_DESCENDANTS[node_id])
+        progress = manifest.get("progress") or _initial_progress()
+        for node in descendants:
+            progress.setdefault("node_status", {})[node] = (
+                domains.bd.ingestion.ai.schemas.AgenticNodeStatus.PENDING.value
+            )
+        progress["current_node"] = None
+        if "audit_batch" in descendants:
+            progress["audited_pages"] = []
+            progress["audit_warning_pages"] = []
+        if "classify_content" in descendants:
+            progress["classified_pages"] = []
+            progress["selected_page_count"] = 0
+            progress["excluded_page_count"] = 0
+        if "repair_pages" in descendants:
+            progress["processed_pages"] = []
+            progress["repaired_pages"] = []
+        progress["active_audit_pages"] = []
+        progress["active_repair_pages"] = []
+        progress["active_classification_pages"] = []
+        manifest["progress"] = progress
+        manifest["status"] = domains.bd.ingestion.ai.schemas.AgenticRunStatus.QUEUED.value
+        manifest["updated_at"] = max(time.time(), manifest["created_at"])
+        manifest["finished_at"] = None
+        manifest["error"] = None
+        manifest["replay_from_node"] = node_id
+
+        prefix = domains.bd.ingestion.storage.keys.agentic_prefix(book_id, agentic_run_id)
+        artifacts_by_node = {
+            "audit_batch": ("pages/", "assessments/", "patch-proposals/", "book-metadata.json", "quality-report.json", "content-selection/", "processed-book/"),
+            "classify_content": ("pages/", "patch-proposals/", "book-metadata.json", "quality-report.json", "content-selection/", "processed-book/"),
+            "plan_repairs": ("pages/", "patch-proposals/", "book-metadata.json", "quality-report.json", "processed-book/"),
+            "repair_pages": ("pages/", "patch-proposals/", "book-metadata.json", "quality-report.json", "processed-book/"),
+            "normalize_metadata": ("book-metadata.json", "quality-report.json", "processed-book/"),
+            "materialize_processed_book": ("processed-book/",),
+            "reconcile_contents": (),
+            "publish": ("quality-report.json",),
+        }
+        artifact_paths = {
+            path
+            for node in descendants
+            for path in artifacts_by_node[node]
+        }
+        for path in sorted(artifact_paths):
+            await storage.delete_prefix(prefix + path)
+
+        manifest_key = domains.bd.ingestion.storage.keys.agentic_manifest_key(book_id, agentic_run_id)
+        await storage.write(
+            manifest_key,
+            json.dumps(manifest, ensure_ascii = False, separators = (",", ":"), sort_keys = True),
+            content_type = "application/json",
+        )
+        await _write_current_run_pointer(storage, book_id, agentic_run_id, extraction_id)
+        await domains.bd.ingestion.ai.progress.service.clear_cancel(book_id, agentic_run_id)
+        await domains.bd.ingestion.ai.progress.service.clear_events(book_id, agentic_run_id)
+        return manifest
 
 
 async def mark_ingestion_ai_run_failed(
@@ -1093,6 +1346,7 @@ async def run_ingestion_ai(
     checkpointer: Any | None = None,
     resume: bool = False,
     cancel_check: Callable[[], Awaitable[bool]] | None = None,
+    execution_check: Callable[[], Awaitable[None]] | None = None,
 ) -> dict[str, Any]:
     """Run the full versioned AI workflow against the current immutable Docling extraction.
 
@@ -1168,7 +1422,16 @@ async def run_ingestion_ai(
     progress_closed = False
     cancellation_observed = False
 
+    async def check_cancel_requested() -> bool:
+        nonlocal cancellation_observed
+        if cancel_check is not None and await cancel_check():
+            cancellation_observed = True
+            return True
+        return False
+
     async def persist_manifest(status, *, finished_at = None, error = None):
+        if execution_check is not None:
+            await execution_check()
         current_time = max(time.time(), now)
         record = domains.bd.ingestion.ai.schemas.IngestionAIRunManifest(
             **manifest_fields,
@@ -1185,12 +1448,11 @@ async def run_ingestion_ai(
         )
 
     async def report_progress(event: dict[str, Any]) -> None:
-        nonlocal progress_state, cancellation_observed
+        nonlocal progress_state
         kind = event.get("kind")
         if cancel_check is not None and event.get("status") == "running":
             if kind == "node" or kind in {"page_audit", "page_repair", "content_classification"}:
-                if await cancel_check():
-                    cancellation_observed = True
+                if await check_cancel_requested():
                     raise asyncio.CancelledError
         should_persist = False
         async with progress_lock:
@@ -1321,6 +1583,8 @@ async def run_ingestion_ai(
             contents_reconciler = ai.bd.agents.ingestion.contents_reconciler.agent.contents_reconciler()
 
         async def write_artifact(key: str, content: str, content_type: str) -> None:
+            if execution_check is not None:
+                await execution_check()
             if key == output_manifest_key:
                 value = json.loads(content)
                 value["progress"] = progress_state
@@ -1388,6 +1652,7 @@ async def run_ingestion_ai(
             content_classifier = content_classifier,
             contents_reconciler = contents_reconciler,
             progress_callback = report_progress,
+            cancel_check = check_cancel_requested if cancel_check is not None else None,
             finding_verifier = finding_verifier,
             patch_verifier = patch_verifier,
             read_source_page_image = read_source_page_image,
@@ -1395,11 +1660,59 @@ async def run_ingestion_ai(
         config = {"configurable": {
             "thread_id": f"bd-ingestion-agentic:{book_id}:{extraction_id}:{agentic_run_id}",
         }}
+        replay_from_node = manifest_fields.get("replay_from_node")
         if checkpointer is None:
             result = await graph.ainvoke(graph_state, context = dependencies)
         else:
             snapshot = await graph.aget_state(config)
-            if snapshot.next:
+            if replay_from_node is not None:
+                if replay_from_node not in domains.bd.ingestion.ai.params.GRAPH_NODES:
+                    raise ValueError(f"unknown saved ingestion replay node {replay_from_node!r}")
+                replay_config = await ai.langgraph.service.checkpoint_before_node(
+                    graph, config, replay_from_node,
+                )
+                descendants = set(domains.bd.ingestion.ai.params.REPLAY_DESCENDANTS[replay_from_node])
+                reset_state: dict[str, Any] = {}
+                if "audit_batch" in descendants:
+                    reset_state.update(page_refs = [], page_audits = [])
+                if "classify_content" in descendants:
+                    reset_state.update(
+                        content_selection = [],
+                        content_selection_key = "",
+                        content_selection_sha256 = "",
+                        content_selection_revision = 0,
+                        selected_page_count = 0,
+                        excluded_page_count = 0,
+                    )
+                if "plan_repairs" in descendants:
+                    reset_state["work_items"] = []
+                if "repair_pages" in descendants:
+                    reset_state["page_results"] = []
+                if "normalize_metadata" in descendants:
+                    reset_state.update(book_metadata = {}, book_metadata_sha256 = "")
+                if "materialize_processed_book" in descendants:
+                    reset_state.update(
+                        processed_book_candidate_key = "",
+                        processed_page_count = 0,
+                        processed_book_revision = 0,
+                    )
+                if "reconcile_contents" in descendants:
+                    reset_state.update(
+                        processed_book_key = "",
+                        processed_book_sha256 = "",
+                        contents_status = "",
+                    )
+                reset_state["status"] = "running"
+                replay_config = await graph.aupdate_state(replay_config, reset_state)
+                config = replay_config
+                logger.info(
+                    "[bd-agentic] replaying from selected node book_id=%s run_id=%s node=%s",
+                    book_id,
+                    agentic_run_id,
+                    replay_from_node,
+                )
+                graph_input = None
+            elif snapshot.next:
                 if manifest_fields.get("workflow_version") != domains.bd.ingestion.ai.versions.WORKFLOW_VERSION:
                     raise ValueError(
                         "This run uses an older ingestion graph checkpoint. Wipe this run and start a new "
@@ -1434,9 +1747,12 @@ async def run_ingestion_ai(
                 durability = "sync",
             )
         final_manifest = json.loads(await storage.read_text(output_manifest_key))
+        final_manifest["replay_from_node"] = None
         final_manifest["progress"] = domains.bd.ingestion.ai.schemas.AgenticRunProgress.model_validate(
             progress_state,
         ).model_dump(mode = "json")
+        if execution_check is not None:
+            await execution_check()
         await storage.write(
             output_manifest_key,
             json.dumps(final_manifest, ensure_ascii = False, separators = (",", ":"), sort_keys = True),
@@ -1450,6 +1766,10 @@ async def run_ingestion_ai(
             progress = progress_state,
         )
         return result
+    except domains.bd.ingestion.ai.progress.service.RunExecutionLeaseLostError:
+        async with progress_lock:
+            progress_closed = True
+        raise
     except (asyncio.CancelledError, NodeCancelledError) as error:
         # LangGraph 1.2 wraps CancelledError raised by a node in NodeCancelledError.
         # Only treat that wrapper as a cooperative run cancellation when our Redis

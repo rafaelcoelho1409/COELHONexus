@@ -183,7 +183,7 @@ class ContentsEntryProposal(BaseModel):
     level: int = Field(ge = 1, le = 8, strict = True)
     source_page_number: int = Field(gt = 0, strict = True)
     confidence: Confidence
-    rationale: Annotated[str, StringConstraints(strip_whitespace = True, min_length = 1, max_length = 600)]
+    rationale: Annotated[str, StringConstraints(strip_whitespace = True, min_length = 1, max_length = 240)]
 
 
 class ContentsReconciliationProposal(BaseModel):

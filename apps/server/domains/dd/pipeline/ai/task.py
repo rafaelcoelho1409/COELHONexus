@@ -62,6 +62,36 @@ def resume_planner(self, thread_id: str) -> dict:
 
 
 @infra.celery.service.app.task(
+    name = "domains.dd.pipeline.ai.task.replay_planner_from_node",
+    bind = True,
+    acks_late = False,
+    track_started = True,
+)
+def replay_planner_from_node(self, thread_id: str, node_id: str) -> dict:
+    """Replay a Planner checkpoint from one selected graph node."""
+    logger.info(f"[task] replay_planner_from_node thread_id={thread_id} node_id={node_id}")
+    slug = domains.dd.pipeline.runtime.dispatch.domain.slug_from_thread_id(thread_id)
+    try:
+        try:
+            return asyncio.run(service.init_and_run(
+                domains.dd.pipeline.runtime.planner.service.replay_from_node(
+                    service.binding(), thread_id, node_id,
+                ),
+            ))
+        except Exception as error:
+            logger.exception(f"[task] replay_planner_from_node failed: {error}")
+            return {
+                "thread_id": thread_id,
+                "node_id": node_id,
+                "status": "failed",
+                "error": f"{type(error).__name__}: {error}",
+            }
+    finally:
+        if slug:
+            service.release_planner_lock(slug, thread_id)
+
+
+@infra.celery.service.app.task(
     name = "domains.dd.pipeline.ai.task.prune_old_checkpoints",
     bind = True,
     acks_late = False,
@@ -139,6 +169,38 @@ def resume_synth(self, thread_id: str) -> dict:
         except Exception as error:
             logger.exception(f"[task] resume_synth failed: {error}")
             return {"thread_id": thread_id, "status": "failed", "error": f"{type(error).__name__}: {error}"}
+    finally:
+        if slug:
+            synth.service.release_synth_lock(slug, thread_id)
+
+
+@infra.celery.service.app.task(
+    name = "domains.dd.pipeline.ai.task.replay_synth_from_node",
+    bind = True,
+    acks_late = False,
+    track_started = True,
+    soft_time_limit = ai.dd.graphs.pipeline.synth.params.SINGLE_CHAPTER_SOFT_TIME_LIMIT_S,
+    time_limit = ai.dd.graphs.pipeline.synth.params.SINGLE_CHAPTER_HARD_TIME_LIMIT_S,
+)
+def replay_synth_from_node(self, thread_id: str, node_id: str) -> dict:
+    """Replay a Synth chapter checkpoint from one selected graph node."""
+    logger.info(f"[task] replay_synth_from_node thread_id={thread_id} node_id={node_id}")
+    slug = domains.dd.pipeline.runtime.dispatch.domain.slug_from_synth_thread_id(thread_id)
+    try:
+        try:
+            return asyncio.run(service.init_and_run(
+                domains.dd.pipeline.runtime.synth.service.replay_chapter_from_node(
+                    synth.binding(), thread_id, node_id,
+                ),
+            ))
+        except Exception as error:
+            logger.exception(f"[task] replay_synth_from_node failed: {error}")
+            return {
+                "thread_id": thread_id,
+                "node_id": node_id,
+                "status": "failed",
+                "error": f"{type(error).__name__}: {error}",
+            }
     finally:
         if slug:
             synth.service.release_synth_lock(slug, thread_id)

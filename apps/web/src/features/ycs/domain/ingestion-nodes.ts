@@ -8,17 +8,17 @@ export type IngestionNodeResources = {
 
 const NODE_RESOURCES = {
   playwright: {
-    agents: ["None (deterministic LangGraph node)"],
+    agents: ["None (deterministic step)"],
     skills: ["Collect video metadata", "Retrieve transcripts"],
     tools: ["yt-dlp", "Playwright"],
   },
   elasticsearch: {
-    agents: ["None (deterministic LangGraph node)"],
+    agents: ["None (deterministic step)"],
     skills: ["Index transcripts and video metadata", "Bulk document writes"],
     tools: ["Elasticsearch bulk API"],
   },
   qdrant: {
-    agents: ["None (deterministic LangGraph node)"],
+    agents: ["None (deterministic step)"],
     skills: ["Chunk transcripts", "Hybrid dense and BM25 indexing"],
     tools: ["Embedding service", "Qdrant upsert API"],
   },

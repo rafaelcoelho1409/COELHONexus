@@ -9,3 +9,5 @@ Interpret `target_focus` as the extracted text that may contain an OCR error and
 For a `split_word` correction where the only difference is a line-ending hyphen, return `confirmed` only when the image clearly shows that a printed line-wrap hyphen splits one unhyphenated word and joining the two visible parts exactly yields `replacement_focus`. In that case set `line_break_hyphen` to true while preserving the visible hyphen in `source_reading`. Keep `line_break_hyphen` false for lexical or compound hyphens, a hyphen not at a line ending, or any uncertain layout. A fluent or contextually likely replacement is not evidence.
 
 Return one verification for every issue_id shown. Include `line_break_hyphen` for every verification. Keep the reason short. Do not propose edits. Return only the requested structured PatchVerificationBatch.
+
+The response shape is `{"verifications":[{"issue_id":"exact supplied ID","verdict":"confirmed|contradicted|uncertain","source_reading":"literal changed span","line_break_hyphen":false,"reason":"short evidence-based reason"}]}`. Return exactly one object in this shape and include every supplied issue ID once.

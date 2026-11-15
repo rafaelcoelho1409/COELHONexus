@@ -3,8 +3,8 @@
 import { ChartNoAxesColumn, Check, X } from "lucide-react";
 import dynamic from "next/dynamic";
 import { useState } from "react";
-import { MermaidTopology } from "@/shared/markdown/mermaid-topology";
 import type { StreamStatus } from "@/shared/sse";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/shared/ui/tabs";
 import {
   AGENTIC_NODE_DETAILS,
   AGENTIC_NODES,
@@ -23,7 +23,6 @@ import { type AgenticUsageMode, agenticUsageRows, nodeUsageForAgenticStep } from
 import type { BookUnits } from "../domain/books";
 import type { AgenticProgress, AgenticRunStatus, AgenticUsage, ChapterRange } from "../entities";
 import { useAgenticUsage } from "../hooks/use-agentic-run";
-import { useAgenticGraph } from "../hooks/use-bd-data";
 import { useModalDialog } from "../hooks/use-modal-dialog";
 import { ActionButton } from "./action-button";
 import { AgenticNodeDetailsList, AgenticNodeList, AgenticPills, AgenticStatusBadge } from "./agentic-parts";
@@ -38,7 +37,6 @@ const AgenticFlow = dynamic(() => import("./agentic-flow").then((module) => modu
 const MODES = [
   { id: "graph", label: "Graph" },
   { id: "list", label: "List" },
-  { id: "langgraph", label: "LangGraph" },
 ] as const;
 
 const USAGE_MODES: readonly { id: AgenticUsageMode; label: string }[] = [
@@ -277,18 +275,26 @@ export function AgenticPipelineOverview({
   status,
   progress,
   error,
+  replayError = null,
   units,
   chapters,
   onOpenUsage,
+  onPlayNode,
+  replayPending = false,
+  replayPendingNodeId = null,
 }: {
   bookId: string;
   run: AgenticRunStatus | null;
   status: AgenticRunStatus["status"] | null;
   progress: AgenticProgress | null;
   error: string | null;
+  replayError?: string | null;
   units: BookUnits;
   chapters: readonly ChapterRange[];
   onOpenUsage: () => void;
+  onPlayNode?: (nodeId: string) => void;
+  replayPending?: boolean;
+  replayPendingNodeId?: string | null;
 }) {
   const live = status === "queued" || status === "running";
   const usage = useAgenticUsage(bookId, run?.agentic_run_id ?? null, live, run !== null);
@@ -327,7 +333,6 @@ export function AgenticPipelineOverview({
         }
       : null;
   const views = agenticNodeViews(graphProgress, runStatus, total, units.plural, summary);
-  const graphQuery = useAgenticGraph(mode === "langgraph");
   const caption = agenticBoardCaption(
     graphProgress,
     runStatus,
@@ -356,21 +361,30 @@ export function AgenticPipelineOverview({
             Agentic processing failed — {error}
           </p>
         ) : null}
+        {replayError ? (
+          <p role="alert" className="mt-3 break-words text-sm text-destructive-text">
+            {replayError}
+          </p>
+        ) : null}
         <div className="mt-3 grid min-w-0 grid-cols-1 gap-3 xl:grid-cols-[minmax(0,3fr)_minmax(16rem,1fr)]">
           <div className="min-w-0">
             {mode === "graph" ? (
-              <AgenticFlow views={views} onOpenNode={setSelectedNodeId} />
+              <AgenticFlow
+                views={views}
+                onOpenNode={setSelectedNodeId}
+                onPlayNode={onPlayNode}
+                replayPending={replayPending}
+                replayPendingNodeId={replayPendingNodeId}
+              />
             ) : mode === "list" ? (
-              <AgenticNodeList rows={views} onOpen={setSelectedNodeId} />
-            ) : graphQuery.data ? (
-              <MermaidTopology title="Ingestion Agentic AI" source={graphQuery.data.graph_mermaid} />
-            ) : (
-              <p role="status" className="text-xs text-muted-foreground">
-                {graphQuery.isPending
-                  ? "Loading compiled LangGraph topology…"
-                  : "Compiled LangGraph topology is unavailable."}
-              </p>
-            )}
+              <AgenticNodeList
+                rows={views}
+                onOpen={setSelectedNodeId}
+                onPlay={onPlayNode}
+                replayPending={replayPending}
+                replayPendingNodeId={replayPendingNodeId}
+              />
+            ) : null}
           </div>
           <div className="flex min-w-0 flex-col">
             {/* Always available: with no run, or after its data was wiped, the sheet explains that there are no counters. */}
@@ -462,6 +476,7 @@ export function AgenticPipelineOverview({
       />
       {selectedNode ? (
         <AgenticNodeSheet
+          key={selectedNode.id}
           node={selectedNode}
           status={agenticNodeStatus(graphProgress, selectedNode.id, runStatus)}
           caption={agenticNodeCaption(
@@ -548,23 +563,33 @@ function AgenticNodeSheet({
         </ActionButton>
       </header>
       <div className="flex flex-col gap-5 px-5 py-4">
-        <section aria-label="What this node does" className="flex flex-col gap-3">
-          <p className="text-sm">{details.subtitle}</p>
-          <ul className="list-disc space-y-1 pl-5 text-sm text-muted-foreground">
-            {details.actions.map((action) => (
-              <li key={action}>{action}</li>
-            ))}
-          </ul>
-          <AgenticNodeDetailsList resources={details.resources} />
-          <div className="grid grid-cols-[auto_1fr] items-baseline gap-x-3 gap-y-2 text-xs text-muted-foreground">
-            <span>Reads</span>
-            <AgenticPills items={details.reads} />
-            <span>Writes</span>
-            <AgenticPills items={details.writes} />
-            <span>LLM</span>
-            <span className="text-sm">{details.llm}</span>
-          </div>
-        </section>
+        <Tabs defaultValue="overview" className="w-full">
+          <TabsList aria-label="Node details">
+            <TabsTrigger value="overview">Overview</TabsTrigger>
+            <TabsTrigger value="resources">Resources</TabsTrigger>
+          </TabsList>
+          <TabsContent value="overview" className="flex flex-col gap-3 pt-4">
+            <p className="text-sm">{details.subtitle}</p>
+            <ul className="list-disc space-y-1 pl-5 text-sm text-muted-foreground">
+              {details.actions.map((action) => (
+                <li key={action}>{action}</li>
+              ))}
+            </ul>
+            <div className="grid grid-cols-[auto_1fr] items-baseline gap-x-3 gap-y-2 text-xs text-muted-foreground">
+              <span>Reads</span>
+              <AgenticPills items={details.reads} />
+              <span>Writes</span>
+              <AgenticPills items={details.writes} />
+              <span>LLM</span>
+              <span className="text-sm">{details.llm}</span>
+            </div>
+          </TabsContent>
+          <TabsContent value="resources" className="pt-4">
+            <section aria-label="Agent, skills, and tools">
+              <AgenticNodeDetailsList resources={details.resources} />
+            </section>
+          </TabsContent>
+        </Tabs>
         {note ? <p className="text-sm text-muted-foreground">{note}</p> : null}
         <UsageBreakdown usage={usage} nodeId={node.id} loading={loading} failed={failed} hasRun={hasRun} />
       </div>

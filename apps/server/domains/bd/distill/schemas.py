@@ -471,6 +471,7 @@ class DistillRunManifest(BaseModel):
     processed_page_count: int | None = Field(default = None, ge = 1, strict = True)
     status: Literal["queued", "running", "done", "failed", "cancelled"] = "queued"
     resume_from_node: str | None = None
+    replay_from_node: str | None = None
     progress: DistillProgress = Field(default_factory = DistillProgress)
     report_key: NonEmptyText | None = None
     report_sha256: Sha256Hex | None = None

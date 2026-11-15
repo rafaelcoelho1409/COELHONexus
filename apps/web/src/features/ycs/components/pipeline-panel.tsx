@@ -21,7 +21,7 @@ import {
   getYcsAdminTaskTaskIdOptions,
 } from "@/shared/api";
 import { apiErrorMessage } from "@/shared/lib/api-error";
-import { rerunPipeline, stopPipeline, wipePipeline } from "../api";
+import { replayPipelineNode, rerunPipeline, stopPipeline, wipePipeline } from "../api";
 import {
   extractBarState,
   extractSuccessLabel,
@@ -94,19 +94,68 @@ function toSnapshot(query: { data: unknown; isError: boolean; error: unknown }):
   return taskSnapshotSchema.parse(query.data ?? {});
 }
 
-function nodeSnapshot(snapshot: PhaseSnapshot, node: "playwright" | "elasticsearch"): PhaseSnapshot {
-  const progress = snapshot.meta?.node_progress?.[node];
+function terminalProgressState(total: number, failedCount: number): string {
+  if (failedCount === 0) return "SUCCESS";
+  return total > 0 && failedCount >= total ? "FAILURE" : "PARTIAL";
+}
+
+function nodeSnapshot(snapshot: PhaseSnapshot, node: PipelinePrefix): PhaseSnapshot {
+  const progress =
+    snapshot.meta?.node_progress?.[node] ??
+    (isTerminal(snapshot.state) ? snapshot.result?.node_progress?.[node] : null);
   if (!progress) return snapshot;
+  const terminalState =
+    progress.current >= progress.total
+      ? terminalProgressState(progress.total, progress.failed_ids.length)
+      : snapshot.state;
+  const state = progress.state || terminalState;
   return {
     ...snapshot,
+    state,
     meta: {
       ...(snapshot.meta ?? {}),
+      node_state: state,
       phase: progress.phase,
       current: progress.current,
       total: progress.total,
       completed_ids: progress.completed_ids,
       failed_ids: progress.failed_ids,
       no_transcript_ids: progress.no_transcript_ids,
+    },
+  };
+}
+
+function finalStoreSnapshot(
+  snapshot: PhaseSnapshot,
+  extraction: PhaseSnapshot,
+  node: "qdrant" | "neo4j",
+): PhaseSnapshot {
+  const progress = extraction.result?.node_progress?.[node];
+  if (!isTerminal(extraction.state)) return snapshot;
+  if (progress && isTerminal(progress.state)) {
+    return {
+      ...snapshot,
+      state: progress.state,
+      meta: {
+        ...(snapshot.meta ?? {}),
+        node_state: progress.state,
+        phase: progress.phase,
+        current: progress.current,
+        total: progress.total,
+        completed_ids: progress.completed_ids,
+        failed_ids: progress.failed_ids,
+      },
+    };
+  }
+  const meta = snapshot.meta;
+  if (meta?.total == null || meta.current == null || meta.current < meta.total) return snapshot;
+  const state = terminalProgressState(meta.total, meta.failed_ids?.length ?? 0);
+  return {
+    ...snapshot,
+    state,
+    meta: {
+      ...(snapshot.meta ?? {}),
+      node_state: state,
     },
   };
 }
@@ -144,18 +193,19 @@ export function PipelinePanel({
     refetchInterval: (query) => pollInterval(query.state.data, tracking.startedAtMs),
   });
   const extractSnap = toSnapshot(extractQuery);
-  const qdrantSnap = toSnapshot(qdrantQuery);
-  const neo4jSnap = toSnapshot(neo4jQuery);
+  const qdrantSnap = finalStoreSnapshot(toSnapshot(qdrantQuery), extractSnap, "qdrant");
+  const neo4jSnap = finalStoreSnapshot(toSnapshot(neo4jQuery), extractSnap, "neo4j");
   const snapshots: Record<PipelinePrefix, PhaseSnapshot> = {
     playwright: nodeSnapshot(extractSnap, "playwright"),
     elasticsearch: nodeSnapshot(extractSnap, "elasticsearch"),
     qdrant: qdrantSnap,
     neo4j: neo4jSnap,
   };
+  const finalNodeProgress = extractSnap.result?.node_progress;
   const allTerminal =
     !extractQuery.isError &&
-    !qdrantQuery.isError &&
-    !neo4jQuery.isError &&
+    (!qdrantQuery.isError || Boolean(finalNodeProgress?.qdrant)) &&
+    (!neo4jQuery.isError || Boolean(finalNodeProgress?.neo4j)) &&
     PREFIXES.every((p) => isTerminal(snapshots[p].state));
   // Counters follow the run while it works, and are fetched once more whenever the sheet is opened after it has ended.
   const countersQuery = useQuery({
@@ -202,18 +252,15 @@ export function PipelinePanel({
   const allDoneFired = useRef(false);
   useEffect(() => {
     const states: ReadonlyArray<readonly [PipelinePrefix, string]> = [
-      ["playwright", extractSnap.state],
-      ["elasticsearch", extractSnap.state],
-      ["qdrant", qdrantSnap.state],
-      ["neo4j", neo4jSnap.state],
+      ...PREFIXES.map((prefix) => [prefix, snapshots[prefix].state] as const),
     ];
     for (const [prefix, state] of states) {
-      if (state === "SUCCESS" && !phaseDoneFired.current.has(prefix)) {
+      if (isTerminal(state) && !phaseDoneFired.current.has(prefix)) {
         phaseDoneFired.current.add(prefix);
         onPhaseDone();
       }
     }
-  }, [extractSnap, qdrantSnap, neo4jSnap, onPhaseDone]);
+  }, [snapshots, onPhaseDone]);
   useEffect(() => {
     if (!allTerminal || allDoneFired.current) return;
     allDoneFired.current = true;
@@ -238,6 +285,13 @@ export function PipelinePanel({
       else toast("Start/Resume returned no phase ids.");
     },
   });
+  const replay = useMutation({
+    mutationFn: (nodeId: string) => replayPipelineNode(tracking.extract, nodeId),
+    onSuccess: (queued) => {
+      if (queued) router.push(ingestionHref(queued.phases));
+      else toast("Node replay returned no phase ids.");
+    },
+  });
 
   function stepView(prefix: PipelinePrefix): StepView {
     const snap = snapshots[prefix];
@@ -245,7 +299,30 @@ export function PipelinePanel({
     let pct: number;
     let label: string;
     const hint = successHint(snap, prefix);
-    if (snap.state === "SUCCESS") {
+    const nodeState = snap.meta?.node_state;
+    if (nodeState === "SUCCESS") {
+      state = "success";
+      pct = 100;
+      label = "Done";
+    } else if (nodeState === "PARTIAL" || snap.state === "PARTIAL") {
+      state = "partial";
+      pct = 100;
+      label =
+        prefix === "playwright" || prefix === "elasticsearch"
+          ? subPhaseLabel(snap, prefix)
+          : streamLabel(snap, prefix);
+    } else if (nodeState === "FAILURE") {
+      state = "failure";
+      pct = 100;
+      label =
+        prefix === "playwright" || prefix === "elasticsearch"
+          ? subPhaseLabel({ ...snap, state: "FAILURE" }, prefix)
+          : streamLabel({ ...snap, state: "FAILURE" }, prefix);
+    } else if (nodeState === "CANCELLED") {
+      state = "cancelled";
+      pct = 100;
+      label = "Cancelled";
+    } else if (snap.state === "SUCCESS") {
       if (prefix === "qdrant" || prefix === "neo4j") {
         state = streamBarState(snap);
         label = streamLabel(snap, prefix);
@@ -301,6 +378,17 @@ export function PipelinePanel({
     });
     if (!ok) return;
     stop.mutate();
+  }
+
+  async function handleReplay(nodeId: string): Promise<void> {
+    if (running || replay.isPending) return;
+    const ok = await confirm({
+      title: `Replay from ${nodeId}?`,
+      message: "This clears the selected stage's saved output and downstream results, then reruns from this node. Completed upstream stages remain available.",
+      confirmLabel: "Replay",
+      tone: "primary",
+    });
+    if (ok) replay.mutate(nodeId);
   }
 
   async function handleWipe(): Promise<void> {
@@ -376,6 +464,7 @@ export function PipelinePanel({
           },
         }}
         onOpenUsage={() => setSheet("usage")}
+        onPlayNode={allTerminal ? (nodeId) => void handleReplay(nodeId) : undefined}
         ariaLabel="Pipeline progress"
       />
 
@@ -392,6 +481,11 @@ export function PipelinePanel({
       {rerun.isError ? (
         <p role="alert" className="text-sm text-destructive-text">
           Start/Resume failed — {apiErrorMessage(rerun.error)}
+        </p>
+      ) : null}
+      {replay.isError ? (
+        <p role="alert" className="text-sm text-destructive-text">
+          Node replay failed — {apiErrorMessage(replay.error)}
         </p>
       ) : null}
 

@@ -9,6 +9,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/shared/ui/tabs";
 
 import { type ActivityLine, activityLines } from "../domain/activity";
 import { nodeDetails, nodeKpi, nodeMetrics, nodeRawIO } from "../domain/node-details";
+import type { NodeResources } from "../domain/node-resources";
 import { buildOverview } from "../domain/overview";
 import type { StageNodeView } from "../domain/stages";
 import { mergeMetrics, nodeUsageMetrics } from "../domain/usage";
@@ -20,12 +21,12 @@ import { SideSheet } from "./side-sheet";
 import { NodeStatusBadge } from "./stage-parts";
 import { UsageBreakdown } from "./usage-breakdown";
 
-type TabId = "overview" | "activity" | "raw" | "usage";
+type TabId = "overview" | "resources" | "activity" | "raw" | "usage";
 
-const TAB_IDS: readonly TabId[] = ["overview", "activity", "raw", "usage"];
+const TAB_IDS: readonly TabId[] = ["overview", "resources", "activity", "raw", "usage"];
 const isTabId = (value: unknown): value is TabId => TAB_IDS.some((id) => id === value);
 
-/** The tab a number key opens (1 = Overview, 2 = Activity, 3 = Raw I/O, 4 = Usage). */
+/** The tab a number key opens (1 = Overview, 2 = Resources, 3 = Activity, 4 = Raw I/O, 5 = Usage). */
 const tabForKey = (key: string): TabId | undefined => TAB_IDS[Number(key) - 1];
 
 const LINE_TONE: Record<ActivityLine["tone"], string> = {
@@ -45,7 +46,7 @@ const PENDING_NOTE: Record<StageNodeView["status"], string | null> = {
   stopped: "This node was stopped with its run before it finished.",
 };
 
-function Pills({ items }: { items: string[] }) {
+function Pills({ items }: { items: readonly string[] }) {
   return (
     <span className="flex flex-wrap gap-1.5">
       {items.map((item) => (
@@ -59,6 +60,7 @@ function Pills({ items }: { items: string[] }) {
 
 /** How close to the bottom (px) the log must be for new lines to keep it following the tail. */
 const PINNED_SLACK_PX = 24;
+const EMPTY_NODE_RESOURCES: NodeResources = { agents: [], skills: [], tools: [] };
 
 function ActivityLog({ lines }: { lines: ActivityLine[] }) {
   const box = useRef<HTMLOListElement>(null);
@@ -129,6 +131,8 @@ export function NodeDrawer({
   threadId,
   live,
   since = 0,
+  initialTab = "usage",
+  resources = EMPTY_NODE_RESOURCES,
   onClose,
 }: {
   stage: RunStage;
@@ -138,13 +142,15 @@ export function NodeDrawer({
   /** The run thread whose LLM usage this node's numbers come from. */
   threadId: string | null;
   live: boolean;
+  initialTab?: TabId;
+  resources?: NodeResources;
   /** When the reader last had this node open (ms since the epoch, 0 = never): later events are marked new. */
   since?: number;
   onClose: () => void;
 }) {
   // Opening a graph node follows the Ingestion interaction: show its usage first,
   // with the node description and trace one tab away.
-  const [tab, setTab] = useState<TabId>("usage");
+  const [tab, setTab] = useState<TabId>(initialTab);
   const [seen, setSeen] = useState(0);
   const usage = useRunUsageState(stage, threadId, { live });
 
@@ -209,7 +215,10 @@ export function NodeDrawer({
           <TabsTrigger value="overview" aria-keyshortcuts="1">
             Overview
           </TabsTrigger>
-          <TabsTrigger value="activity" aria-keyshortcuts="2">
+          <TabsTrigger value="resources" aria-keyshortcuts="2">
+            Resources
+          </TabsTrigger>
+          <TabsTrigger value="activity" aria-keyshortcuts="3">
             Activity
             {unseen > 0 ? (
               <span className="rounded-sm bg-muted px-1.5 text-xs text-foreground">
@@ -218,10 +227,10 @@ export function NodeDrawer({
               </span>
             ) : null}
           </TabsTrigger>
-          <TabsTrigger value="raw" aria-keyshortcuts="3">
+          <TabsTrigger value="raw" aria-keyshortcuts="4">
             Raw I/O
           </TabsTrigger>
-          <TabsTrigger value="usage" aria-keyshortcuts="4">
+          <TabsTrigger value="usage" aria-keyshortcuts="5">
             Usage
           </TabsTrigger>
         </TabsList>
@@ -261,6 +270,17 @@ export function NodeDrawer({
           ) : (
             <NodeOverviewView overview={buildOverview(stage, node.id, values)} />
           )}
+        </TabsContent>
+
+        <TabsContent value="resources">
+          <section aria-label="Agent, skills, and tools" className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-2 text-xs">
+            <span className="text-muted-foreground">Agent</span>
+            {resources.agents.length > 0 ? <Pills items={resources.agents} /> : <span>None</span>}
+            <span className="text-muted-foreground">Skills</span>
+            {resources.skills.length > 0 ? <Pills items={resources.skills} /> : <span>None</span>}
+            <span className="text-muted-foreground">Tools</span>
+            {resources.tools.length > 0 ? <Pills items={resources.tools} /> : <span>None</span>}
+          </section>
         </TabsContent>
 
         <TabsContent value="activity">

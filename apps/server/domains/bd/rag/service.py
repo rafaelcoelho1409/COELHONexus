@@ -146,6 +146,78 @@ async def queue_index(book_id: str, run_id: str) -> dict[str, Any]:
                 return current or existing
 
 
+async def queue_node_replay(book_id: str, run_id: str, node_id: str) -> dict[str, Any]:
+    """Replay one Agentic RAG stage and its descendants after clearing their durable outputs."""
+    node_order = ("pin_sources", "build_vector_index", "materialize_knowledge_graph", "publish_retrieval_index")
+    if node_id not in node_order:
+        raise ValueError(f"unknown Agentic RAG node {node_id!r}")
+    if not _safe_segment(book_id) or not _safe_segment(run_id):
+        raise ValueError("book_id and run_id must be safe path segments")
+    if not params.RAG_EXECUTION_ENABLED:
+        raise ValueError("Agentic RAG execution is disabled")
+    storage = infra.minio.service.get_storage()
+    run = await domains.bd.distill.service.read_run(book_id, run_id, storage=storage)
+    if run is None:
+        raise FileNotFoundError(f"Distill run {run_id} was not found")
+    if run["status"] != "done" or not run.get("report_key"):
+        raise ValueError("retrieval indexing requires a published Learning Guide")
+    async with infra.redis.service.client() as redis:
+        async with redis.lock(keys.enqueue_lock_key(book_id, run_id), timeout=120, blocking_timeout=30):
+            existing = await read_index(book_id, run_id, storage=storage)
+            if existing is None:
+                raise ValueError("start Agentic RAG once before replaying an individual node")
+            if existing["status"] in {"queued", "running"}:
+                raise ValueError("stop Agentic RAG and wait for it to finish before replaying a node")
+            descendants = node_order[node_order.index(node_id):]
+            if "build_vector_index" in descendants:
+                await delete_run_points(book_id, run_id)
+            if "materialize_knowledge_graph" in descendants:
+                await delete_graph_run(book_id, run_id)
+                await storage.delete_prefix(keys.graph_extractions_prefix(book_id, run_id))
+
+            vector_is_upstream = node_id in {"materialize_knowledge_graph", "publish_retrieval_index"}
+            graph_is_upstream = node_id == "publish_retrieval_index"
+            now = max(time.time(), existing["created_at"])
+            replay = schemas.RagIndexManifest.model_validate({
+                **existing,
+                "status": "queued",
+                "vector_status": "done" if vector_is_upstream else "pending",
+                "graph_status": "done" if graph_is_upstream else "pending",
+                "current_stage": (
+                    "complete" if node_id == "publish_retrieval_index"
+                    else "graph_materialization" if vector_is_upstream
+                    else "vector_index"
+                ),
+                "replay_from_node": node_id,
+                "attempt": existing["attempt"] + 1,
+                "point_count": existing["point_count"] if vector_is_upstream else 0,
+                "graph_node_count": existing["graph_node_count"] if graph_is_upstream else 0,
+                "graph_relationship_count": existing["graph_relationship_count"] if graph_is_upstream else 0,
+                "cancel_requested": False,
+                "updated_at": now,
+                "finished_at": None,
+                "error": None,
+            }).model_dump(mode="json")
+            if not vector_is_upstream:
+                replay.update(collection_name=None, embedding_model=None, embedding_dimensions=None)
+            replay = await _write_manifest(storage, replay)
+            await redis.delete(keys.cancel_key(book_id, run_id))
+            from . import task
+            try:
+                task.index_book.apply_async(args=(book_id, run_id))
+            except Exception as error:
+                replay.update(
+                    status="failed",
+                    current_stage="vector_index" if not vector_is_upstream else "graph_materialization",
+                    vector_status="failed" if not vector_is_upstream else "done",
+                    graph_status="failed" if vector_is_upstream else "pending",
+                    finished_at=max(time.time(), replay["created_at"]),
+                    error=f"Index replay queue failed ({type(error).__name__}).",
+                )
+                return await _write_manifest(storage, replay)
+            return replay
+
+
 async def _dispatch_index_unlocked(
     book_id: str,
     run_id: str,
@@ -906,6 +978,7 @@ async def _run_graph_stage(
         job.update(
             status = "done",
             current_stage = "complete",
+            replay_from_node = None,
             graph_status = "done",
             graph_node_count = graph_nodes,
             graph_relationship_count = graph_relationships,
@@ -951,6 +1024,15 @@ async def run_index(book_id: str, run_id: str) -> dict[str, Any] | None:
         run = await domains.bd.distill.service.read_run(book_id, run_id, storage = storage)
         if run is None or run["status"] != "done" or not run.get("report_key"):
             raise ValueError("retrieval indexing requires a published Learning Guide")
+        if job.get("replay_from_node") == "publish_retrieval_index":
+            job.update(
+                status="done",
+                current_stage="complete",
+                replay_from_node=None,
+                finished_at=max(time.time(), job["created_at"]),
+                error=None,
+            )
+            return await _write_manifest(storage, job)
         if (
             job.get("vector_status") == "done"
             and job.get("point_count", 0) > 0

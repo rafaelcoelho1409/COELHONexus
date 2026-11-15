@@ -19,5 +19,6 @@ async def reconcile_contents(
             runtime.context.write_artifact,
             runtime.context.artifact_exists,
             runtime.context.contents_reconciler,
+            runtime.context.cancel_check,
         ),
     )

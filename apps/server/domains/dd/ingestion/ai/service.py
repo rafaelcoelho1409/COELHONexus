@@ -209,7 +209,13 @@ async def read_page_quality(
     }
 
 
-async def run_ingestion_agentic(store, *, progress=None, checkpointer=None) -> dict:
+async def run_ingestion_agentic(
+    store,
+    *,
+    progress=None,
+    checkpointer=None,
+    replay_from_node: str | None = None,
+) -> dict:
     """Freeze assembled page inputs, run the graph, then update the in-memory manifest."""
     # A worker resolves the LLM endpoint once at import, before the Settings store may answer; the agents below are
     # built from that cached value, so read the Settings-page endpoint again before building them.
@@ -342,7 +348,23 @@ async def run_ingestion_agentic(store, *, progress=None, checkpointer=None) -> d
         "run_id": store.run_id,
         "pages": page_refs,
     }
-    if checkpointer is not None:
+    if checkpointer is not None and replay_from_node is not None:
+        if replay_from_node not in params.GRAPH_NODES:
+            raise ValueError(f"unknown Docs Distiller ingestion node {replay_from_node!r}")
+        replay_config = await ai.langgraph.service.checkpoint_before_node(
+            graph, graph_config, replay_from_node,
+        )
+        reset_state: dict[str, Any] = {}
+        if replay_from_node == "audit_pages":
+            reset_state.update(assessments=[], output_pages=[], quality_summary={}, summary={})
+        elif replay_from_node == "normalize_pages":
+            reset_state.update(output_pages=[], quality_summary={}, summary={})
+        else:
+            reset_state["summary"] = {}
+        replay_config = await graph.aupdate_state(replay_config, reset_state)
+        graph_config = replay_config
+        graph_input = None
+    elif checkpointer is not None:
         snapshot = await graph.aget_state(graph_config)
         if snapshot.next:
             graph_input = None
@@ -382,7 +404,7 @@ async def run_ingestion_agentic(store, *, progress=None, checkpointer=None) -> d
     }
 
 
-async def run_candidate(run_id: str, slug: str) -> dict:
+async def run_candidate(run_id: str, slug: str, replay_from_node: str | None = None) -> dict:
     """Normalize a saved page set without repeating its documentation extraction."""
     minio = infra.minio.service.get_storage()
     redis = infra.redis.service.new_redis(
@@ -460,6 +482,7 @@ async def run_candidate(run_id: str, slug: str) -> dict:
             store,
             progress=progress,
             checkpointer=infra.postgres.service.get_checkpointer(),
+            replay_from_node=replay_from_node,
         )
         try:
             await domains.dd.ingestion.backfill.service.backfill_vaults_for_framework(
@@ -537,6 +560,59 @@ async def resume_candidate(slug: str, run_id: str) -> int:
     ):
         raise ValueError("another ingestion run is active")
     return page_count
+
+
+async def queue_node_replay(slug: str, run_id: str, node_id: str) -> int:
+    """Reserve a terminal candidate and invalidate only outputs from the selected graph node onward."""
+    if not domain.is_valid_run_id(run_id):
+        raise ValueError("invalid Agentic AI run id")
+    if node_id not in params.GRAPH_NODES:
+        raise ValueError(f"unknown Docs Distiller ingestion node {node_id!r}")
+    minio = infra.minio.service.get_storage()
+    candidate_key = domains.dd.ingestion.storage.keys.agentic_manifest_key(slug, run_id)
+    if not await minio.exists(candidate_key):
+        raise FileNotFoundError(f"Agentic AI candidate {run_id!r} was not found")
+    candidate = domains.dd.ingestion.storage.domain.parse_json(await minio.read_text(candidate_key), {})
+    candidate_pages = domain.candidate_pages_by_idx(candidate)
+    async with infra.redis.service.client() as redis:
+        progress_state = await domains.dd.ingestion.runtime.progress.service.read_progress(redis, run_id)
+        if domains.dd.ingestion.runtime.progress.domain.is_active(progress_state):
+            raise ValueError("stop Agentic AI and wait for it to finish before replaying a node")
+        digest = await _candidate_digest(slug, run_id, candidate_pages, redis, minio)
+    if not digest:
+        raise ValueError("the saved Agentic AI inputs are unavailable for node replay")
+
+    thread_id = domain.thread_id(slug, run_id, digest)
+    graph = ai.dd.graphs.ingestion.graphs.ingestion_graph(
+        checkpointer=infra.postgres.service.get_checkpointer(),
+    )
+    config = {"configurable": {"thread_id": thread_id}}
+    await ai.langgraph.service.checkpoint_before_node(graph, config, node_id)
+
+    if not await domains.dd.ingestion.runtime.dispatch.service.reserve_existing_run(slug, run_id):
+        raise ValueError("another ingestion run is active")
+    try:
+        prefix = domains.dd.ingestion.storage.keys.agentic_prefix(slug, run_id)
+        outputs = {
+            "audit_pages": ("audit/", "pages/", "assessments/"),
+            "normalize_pages": ("pages/", "assessments/"),
+            "publish": (),
+        }
+        descendants = params.GRAPH_NODES[params.GRAPH_NODES.index(node_id):]
+        artifact_parts = {part for node in descendants for part in outputs[node]}
+        for part in sorted(artifact_parts):
+            await minio.delete_prefix(prefix + part)
+        await minio.delete(candidate_key)
+        async with infra.redis.service.client() as redis:
+            await domains.dd.ingestion.runtime.cancel.service.clear_cancel(redis, run_id)
+        page_count = len(candidate_pages)
+        progress = domains.dd.ingestion.runtime.progress.service.Progress(run_id)
+        await progress.queue_agentic_replay(page_count, list(descendants))
+        await progress.close()
+        return page_count
+    except Exception:
+        await domains.dd.ingestion.runtime.dispatch.service.release_run(slug, run_id)
+        raise
 
 
 async def wipe_candidate(slug: str, run_id: str) -> dict:

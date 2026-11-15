@@ -52,6 +52,16 @@ export async function resumeDistillRun(bookId: string, runId: string) {
   return distillRunStartSchema.parse(result.data);
 }
 
+export async function replayDistillRunNode(bookId: string, runId: string, nodeId: string) {
+  const result = await client.request({
+    method: "POST",
+    url: "/api/v1/bd/distill/{book_id}/runs/{run_id}/replay/{node_id}",
+    path: { book_id: bookId, run_id: runId, node_id: nodeId },
+    throwOnError: true,
+  });
+  return distillRunStartSchema.parse(result.data);
+}
+
 export async function cancelDistillRun(bookId: string, runId: string) {
   const result = await postBdDistillBookIdRunsRunIdCancel({
     path: { book_id: bookId, run_id: runId },

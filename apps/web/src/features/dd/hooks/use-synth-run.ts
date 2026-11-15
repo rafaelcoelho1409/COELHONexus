@@ -21,6 +21,7 @@ import {
   fetchGraphStateRetried,
   fetchPipelineState,
   fetchStageRecent,
+  replaySynthNode,
   fetchSynthActive,
   fetchSynthChapters,
   stageEventsUrl,
@@ -93,6 +94,7 @@ export type SynthRunController = {
   runChapter: (chapterId: string) => Promise<void>;
   wipeChapter: (chapterId: string) => Promise<void>;
   selectChapter: (chapterId: string) => Promise<void>;
+  replayNode: (nodeId: string) => Promise<void>;
 };
 
 /** The chapter thread the node graph is attached to. */
@@ -690,6 +692,45 @@ export function useSynthRun(slug: string): SynthRunController {
     void hydratePlan();
   }, [slug, overlays, invalidatePipeline, hydratePlan]);
 
+  const replayNode = useCallback(async (nodeId: string) => {
+    const canvas = state.canvas;
+    if (!canvas || state.running || state.starting || !implemented.has(nodeId)) return;
+    const confirmed = await overlays.confirm({
+      title: "Replay Synth from this node?",
+      message: `Clears this chapter’s saved results from “${nodeId}” and later nodes, while keeping earlier checkpointed work. This cannot be undone.`,
+      confirmLabel: "Replay node",
+    });
+    if (!confirmed) return;
+    setState((current) => ({
+      ...current,
+      running: true,
+      starting: true,
+      canvas: { ...canvas, live: true },
+      canvasStartedMs: Date.now(),
+      pill: WORKING_PILL,
+      error: null,
+      values: clearNodeOutputsFrom(synthNodes, current.values, nodeId),
+      next: [nodeId],
+      liveLines: {},
+      events: [],
+    }));
+    try {
+      await replaySynthNode(canvas.threadId, nodeId);
+      invalidatePipeline();
+    } catch (error) {
+      setState((current) => ({
+        ...current,
+        ...DETACHED,
+        running: false,
+        starting: false,
+        pill: terminalPill("failed"),
+        error: apiErrorMessage(error),
+      }));
+    } finally {
+      setState((current) => ({ ...current, starting: false }));
+    }
+  }, [state.canvas, state.running, state.starting, implemented, synthNodes, overlays, invalidatePipeline]);
+
   // ------------------------------------------------------------
   // Derived view
   // ------------------------------------------------------------
@@ -730,5 +771,21 @@ export function useSynthRun(slug: string): SynthRunController {
     runChapter,
     wipeChapter,
     selectChapter,
+    replayNode,
   };
+}
+
+function clearNodeOutputsFrom(
+  nodes: readonly { id: string; field: string; stats: string }[],
+  values: Record<string, unknown>,
+  nodeId: string,
+): Record<string, unknown> {
+  const start = nodes.findIndex((node) => node.id === nodeId);
+  if (start < 0) return values;
+  const next = { ...values };
+  for (const node of nodes.slice(start)) {
+    delete next[node.field];
+    delete next[node.stats];
+  }
+  return next;
 }

@@ -190,8 +190,6 @@ export const agenticRunWipeResponseSchema = z.object({
 });
 export type AgenticRunWipeResponse = z.infer<typeof agenticRunWipeResponseSchema>;
 
-export const agenticGraphSchema = z.looseObject({ graph_mermaid: z.string() });
-export type AgenticGraph = z.infer<typeof agenticGraphSchema>;
 
 export const extractionWipeResponseSchema = z.object({
   book_id: z.string(),

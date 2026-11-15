@@ -32,6 +32,8 @@ class SynthState(TypedDict, total = False):
 
     checklist_path:  Optional[str]
     checklist_stats: Optional[dict]
+    # One-shot carry of the prior checklist feedback when replay starts at sawc_write.
+    sawc_feedback: Optional[dict]
 
     mgsr_path:      Optional[str]
     mgsr_stats:     Optional[dict]

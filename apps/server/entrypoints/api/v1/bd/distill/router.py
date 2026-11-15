@@ -118,6 +118,35 @@ async def resume_run(book_id: SafePathSegment, run_id: SafePathSegment) -> dict:
     }
 
 
+@router.post("/{book_id}/runs/{run_id}/replay/{node_id}", response_model = schemas.RunStart, status_code = 202)
+async def replay_from_node(
+    book_id: SafePathSegment,
+    run_id: SafePathSegment,
+    node_id: SafePathSegment,
+) -> dict:
+    """Replay a Distill checkpoint from one node, clearing only its downstream artifacts."""
+    try:
+        manifest = await domains.bd.distill.service.queue_node_replay(book_id, run_id, node_id)
+    except FileNotFoundError as error:
+        raise HTTPException(status_code = 404, detail = str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code = 409, detail = str(error)) from error
+    try:
+        task = domains.bd.distill.task.run_distill.apply_async(args = (book_id, run_id))
+    except Exception as error:
+        await domains.bd.distill.service.mark_failed(book_id, run_id, error)
+        logger.exception("[bd-distill-api] unable to queue node replay for %s", run_id)
+        raise HTTPException(status_code = 503, detail = "Unable to queue the Distill node replay") from error
+    infra.opentelemetry.service.tag_celery_task(task.id)
+    return {
+        "status": "queued",
+        "book_id": book_id,
+        "extraction_run_id": manifest["extraction_run_id"],
+        "ingestion_ai_run_id": manifest["ingestion_ai_run_id"],
+        "run_id": run_id,
+    }
+
+
 @router.post("/{book_id}/runs/{run_id}/cancel", response_model = schemas.CancelResponse)
 async def cancel_run(book_id: SafePathSegment, run_id: SafePathSegment) -> dict:
     try:

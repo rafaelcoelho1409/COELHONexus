@@ -4,7 +4,7 @@
  * stage graphs do: a glyph for the state, the state also in words, a headline number once the node is done and a
  * monospace line while it runs. */
 
-import { Check, Circle, CircleDot, X } from "lucide-react";
+import { Check, Circle, CircleDot, LoaderCircle, Play, X } from "lucide-react";
 
 import type {
   AgenticNodeProgress,
@@ -22,6 +22,44 @@ export function AgenticStatusGlyph({ status }: { status: AgenticNodeStatus }) {
   }
   if (status === "failed") return <X aria-hidden className={`${GLYPH_CLASS} text-destructive-text`} />;
   return <Circle aria-hidden className={`${GLYPH_CLASS} text-muted-foreground`} />;
+}
+
+/** Shared replay control for graph and list views; pointer events never bubble into the node-details action. */
+export function AgenticReplayButton({
+  label,
+  onPlay,
+  pending = false,
+  disabled = false,
+  className = "",
+}: {
+  label: string;
+  onPlay: () => void;
+  pending?: boolean;
+  disabled?: boolean;
+  className?: string;
+}) {
+  return (
+    <button
+      type="button"
+      onPointerDown={(event) => event.stopPropagation()}
+      onMouseDown={(event) => event.stopPropagation()}
+      onClick={(event) => {
+        event.stopPropagation();
+        onPlay();
+      }}
+      disabled={disabled || pending}
+      aria-busy={pending}
+      aria-label={pending ? `Queueing replay from ${label}` : `Replay from ${label}`}
+      title={pending ? `Queueing replay from ${label}` : `Replay from ${label} and clear downstream results`}
+      className={`nodrag nopan pointer-events-auto inline-flex size-9 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring disabled:pointer-events-none disabled:opacity-60 ${className}`}
+    >
+      {pending ? (
+        <LoaderCircle aria-hidden className="size-4 animate-spin" />
+      ) : (
+        <Play aria-hidden className="size-4" />
+      )}
+    </button>
+  );
 }
 
 export const AGENTIC_STATUS_LABEL: Record<AgenticNodeStatus, string> = {
@@ -45,21 +83,24 @@ export function AgenticStatusBadge({ status }: { status: AgenticNodeStatus }) {
 export function AgenticNodeList({
   rows,
   onOpen,
+  onPlay,
+  replayPending = false,
+  replayPendingNodeId = null,
   label = "Agentic pipeline nodes",
 }: {
   rows: readonly AgenticNodeView[];
   onOpen: (nodeId: string) => void;
+  onPlay?: (nodeId: string) => void;
+  replayPending?: boolean;
+  replayPendingNodeId?: string | null;
   label?: string;
 }) {
   return (
     <ol aria-label={label} className="flex flex-col gap-1.5">
       {rows.map((row) => (
         <li key={row.id} data-status={row.status} data-node={row.id}>
-          <button
-            type="button"
-            onClick={() => onOpen(row.id)}
-            aria-haspopup="dialog"
-            className={`block min-h-9 w-full rounded-sm border bg-card px-3 py-2 text-left hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring ${
+          <div
+            className={`flex min-w-0 items-stretch gap-1.5 rounded-sm border bg-card p-1.5 ${
               row.status === "running"
                 ? "border-running"
                 : row.status === "failed"
@@ -67,25 +108,41 @@ export function AgenticNodeList({
                   : "border-border"
             }`}
           >
-            <span className="flex items-center justify-between gap-3">
-              <span className="flex min-w-0 items-center gap-1.5">
-                <AgenticStatusGlyph status={row.status} />
-                <span className="text-sm">{row.label}</span>
-                <span className="sr-only">— {AGENTIC_STATUS_LABEL[row.status]}</span>
+            <button
+              type="button"
+              onClick={() => onOpen(row.id)}
+              aria-haspopup="dialog"
+              aria-label={`Open ${row.label} node details`}
+              className="min-h-9 min-w-0 flex-1 rounded-sm px-1.5 py-1 text-left hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring"
+            >
+              <span className="flex items-center justify-between gap-3">
+                <span className="flex min-w-0 items-center gap-1.5">
+                  <AgenticStatusGlyph status={row.status} />
+                  <span className="text-sm">{row.label}</span>
+                  <span className="sr-only">— {AGENTIC_STATUS_LABEL[row.status]}</span>
+                </span>
+                {row.kpi ? (
+                  <span className="min-w-0 truncate text-xs text-muted-foreground tabular-nums">{row.kpi}</span>
+                ) : null}
               </span>
-              {row.kpi ? (
-                <span className="min-w-0 truncate text-xs text-muted-foreground tabular-nums">{row.kpi}</span>
+              <span className="mt-0.5 block font-mono text-xs text-muted-foreground">{row.id}</span>
+              {row.liveLine ? (
+                <span className="mt-1 block font-mono text-xs break-all text-muted-foreground">
+                  {row.liveLine}
+                </span>
               ) : null}
-            </span>
-            <span className="mt-0.5 block font-mono text-xs text-muted-foreground">{row.id}</span>
-            {row.liveLine ? (
-              <span className="mt-1 block font-mono text-xs break-all text-muted-foreground">
-                {row.liveLine}
-              </span>
+              {row.progress ? <AgenticNodeProgressBar label={row.label} progress={row.progress} /> : null}
+            </button>
+            {onPlay ? (
+              <AgenticReplayButton
+                label={row.label}
+                onPlay={() => onPlay(row.id)}
+                pending={replayPending && replayPendingNodeId === row.id}
+                disabled={replayPending}
+                className="self-start"
+              />
             ) : null}
-            <AgenticNodeDetailsList resources={row.resources} />
-            {row.progress ? <AgenticNodeProgressBar label={row.label} progress={row.progress} /> : null}
-          </button>
+          </div>
         </li>
       ))}
     </ol>

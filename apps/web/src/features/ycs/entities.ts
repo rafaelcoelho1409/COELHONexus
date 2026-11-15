@@ -71,6 +71,7 @@ export const pipelineStartSchema = z.looseObject({
  * metadata → metadata_done → transcription → es_indexing; `all_items` arrives once yt-dlp metadata is
  * done, seeding the per-video table with titles. */
 const taskNodeProgressSchema = z.looseObject({
+  state: z.string().catch(""),
   phase: z.string().catch(""),
   current: z.number().catch(0),
   total: z.number().catch(0),
@@ -80,6 +81,7 @@ const taskNodeProgressSchema = z.looseObject({
 });
 
 const taskMetaSchema = z.looseObject({
+  node_state: z.string().nullish().catch(null),
   phase: z.string().nullish().catch(null),
   current: z.number().nullish().catch(null),
   total: z.number().nullish().catch(null),
@@ -92,6 +94,8 @@ const taskMetaSchema = z.looseObject({
     .looseObject({
       playwright: taskNodeProgressSchema.nullish().catch(null),
       elasticsearch: taskNodeProgressSchema.nullish().catch(null),
+      qdrant: taskNodeProgressSchema.nullish().catch(null),
+      neo4j: taskNodeProgressSchema.nullish().catch(null),
     })
     .nullish()
     .catch(null),
@@ -116,6 +120,15 @@ export type TaskMeta = z.infer<typeof taskMetaSchema>;
  * defaults to a falsy value, so a Playwright result parses fine even though it lacks Qdrant's keys. */
 const taskResultSchema = z.looseObject({
   total_videos: z.number().catch(0),
+  node_progress: z
+    .looseObject({
+      playwright: taskNodeProgressSchema.nullish().catch(null),
+      elasticsearch: taskNodeProgressSchema.nullish().catch(null),
+      qdrant: taskNodeProgressSchema.nullish().catch(null),
+      neo4j: taskNodeProgressSchema.nullish().catch(null),
+    })
+    .nullish()
+    .catch(null),
   metadata: z
     .looseObject({ indexed: z.number().catch(0) })
     .nullish()

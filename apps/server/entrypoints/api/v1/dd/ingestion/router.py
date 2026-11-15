@@ -212,6 +212,24 @@ async def resume_agentic_run(slug: str, run_id: str) -> dict:
     return domains.dd.ingestion.runtime.dispatch.domain.queued(slug, run_id)
 
 
+@router.post("/{slug}/agentic/runs/{run_id}/replay/{node_id}", status_code=202)
+async def replay_agentic_run_from_node(slug: str, run_id: str, node_id: str) -> dict:
+    """Replay one node and downstream stages while preserving the saved upstream checkpoint."""
+    try:
+        page_count = await domains.dd.ingestion.ai.service.queue_node_replay(slug, run_id, node_id)
+        task = domains.dd.ingestion.ai.task.run_agentic_candidate.delay(run_id, slug, node_id)
+        infra.opentelemetry.service.tag_celery_task(task.id)
+    except FileNotFoundError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except Exception as error:
+        await domains.dd.ingestion.runtime.dispatch.service.release_run(slug, run_id)
+        logger.exception("[dd-agentic] unable to replay node %s for run %s", node_id, run_id)
+        raise HTTPException(status_code=503, detail="Unable to queue the Agentic AI node replay") from error
+    return domains.dd.ingestion.runtime.dispatch.domain.queued(slug, run_id)
+
+
 @router.delete("/{slug}/agentic/runs/{run_id}")
 async def wipe_agentic_run(slug: str, run_id: str) -> dict:
     """Wipe one terminal AI candidate and restore its immutable pre-AI pages."""

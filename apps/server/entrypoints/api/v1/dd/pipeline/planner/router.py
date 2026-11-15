@@ -173,6 +173,58 @@ async def resume_planner(thread_id: str) -> dict:
     }
 
 
+@router.post("/{thread_id:path}/replay/{node_id}")
+async def replay_planner_from_node(thread_id: str, node_id: str) -> dict:
+    """Replay a saved Planner run from the selected node and its downstream graph."""
+    slug = domains.dd.pipeline.runtime.dispatch.domain.slug_from_thread_id(thread_id)
+    if not slug or not thread_id.startswith(f"docs-distiller/{slug}/"):
+        raise HTTPException(status_code = 400, detail = "invalid Planner thread id")
+    if node_id not in domains.dd.pipeline.ai.service.node_order():
+        raise HTTPException(status_code = 422, detail = f"unknown Planner node {node_id!r}")
+    try:
+        gate = await domains.dd.pipeline.runtime.dispatch.service.reserve_start(slug, thread_id)
+        if gate is not None:
+            return gate
+        graph = domains.dd.pipeline.ai.service.planner_graph()
+        snapshot = await graph.aget_state({"configurable": {"thread_id": thread_id}})
+        if not snapshot.values:
+            await domains.dd.pipeline.runtime.dispatch.service.release_start(slug)
+            raise HTTPException(status_code = 404, detail = "Planner checkpoints were not found")
+        if dict(snapshot.values).get("status") in {"running", "queued"}:
+            await domains.dd.pipeline.runtime.dispatch.service.release_start(slug)
+            raise HTTPException(status_code = 409, detail = "stop the active Planner run before replaying a node")
+        await ai.langgraph.service.checkpoint_before_node(
+            graph,
+            {"configurable": {"thread_id": thread_id}},
+            node_id,
+        )
+        async_result = domains.dd.pipeline.ai.task.replay_planner_from_node.delay(thread_id, node_id)
+        infra.opentelemetry.service.tag_celery_task(async_result.id)
+        await domains.dd.pipeline.runtime.dispatch.service.register_active_run(slug, thread_id)
+        await domains.dd.pipeline.runtime.progress.service.emit_progress(
+            thread_id,
+            "planner",
+            "resumed",
+            next_nodes = [node_id],
+        )
+    except HTTPException:
+        raise
+    except ValueError as error:
+        await domains.dd.pipeline.runtime.dispatch.service.release_start(slug)
+        raise HTTPException(status_code = 409, detail = str(error)) from error
+    except Exception as error:
+        await domains.dd.pipeline.runtime.dispatch.service.release_start(slug)
+        logger.exception("[planner] %s: node replay dispatch failed", thread_id)
+        raise HTTPException(status_code = 503, detail = "could not queue Planner node replay") from error
+
+    return {
+        "thread_id": thread_id,
+        "node_id": node_id,
+        "status": "queued",
+        "celery_task_id": async_result.id,
+    }
+
+
 @router.get("/recent")
 async def list_recent_planners() -> dict:
     """Per-slug thread selection prefers the thread with the MOST

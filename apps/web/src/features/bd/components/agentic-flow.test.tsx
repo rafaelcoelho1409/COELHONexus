@@ -38,7 +38,7 @@ describe("AgenticFlow", () => {
   it("opens a node by its button, with the keyboard as well as the mouse", async () => {
     const onOpen = vi.fn();
     render(<AgenticFlow views={views()} onOpenNode={onOpen} />);
-    const button = screen.getByRole("button", { name: /Plan repairs/ });
+    const button = screen.getByRole("button", { name: /Open Plan repairs node details/ });
     await userEvent.click(button);
     expect(onOpen).toHaveBeenCalledWith("plan_repairs");
     button.focus();
@@ -60,7 +60,7 @@ describe("AgenticNodeList", () => {
     render(<AgenticNodeList rows={views()} onOpen={onOpen} />);
     const list = screen.getByRole("list", { name: "Agentic pipeline nodes" });
     expect(within(list).getAllByRole("listitem")).toHaveLength(5);
-    const repair = within(list).getByRole("button", { name: /Repair pages/ });
+    const repair = within(list).getByRole("button", { name: /Open Repair pages node details/ });
     expect(repair).toHaveTextContent("— running");
     expect(repair).toHaveTextContent("2/4 · 1 in flight");
     await userEvent.click(repair);

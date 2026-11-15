@@ -175,6 +175,17 @@ export async function rerunPipeline(extractId: string): Promise<PipelineQueued |
   return parsePipelineStart(result.data);
 }
 
+/** Replay one saved graph stage and its descendants from durable per-chunk LangGraph state. */
+export async function replayPipelineNode(extractId: string, nodeId: string): Promise<PipelineQueued | null> {
+  const result = await client.request({
+    method: "POST",
+    url: "/api/v1/ycs/content/videos/pipeline/{extract_id}/replay/{node_id}",
+    path: { extract_id: extractId, node_id: nodeId },
+    throwOnError: true,
+  });
+  return parsePipelineStart(result.data);
+}
+
 /** Wipes ES + Qdrant + Neo4j for one video (entity nodes are left intact). */
 export async function deleteLibraryVideo(videoId: string): Promise<void> {
   await deleteYcsAdminVideosVideoId({ path: { video_id: videoId }, throwOnError: true });

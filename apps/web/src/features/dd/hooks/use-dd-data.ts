@@ -29,6 +29,7 @@ import {
 import {
   fetchIngestionUsage,
   fetchRunPageBody,
+  replayAgenticRunNode,
   resumeAgenticRun,
   startAgenticRun,
   wipeAgenticRun,
@@ -113,6 +114,20 @@ export function useResumeAgenticRun() {
       void queryClient.invalidateQueries({
         queryKey: getDdIngestionRunsRunIdQueryKey({ path: { run_id: runId } }),
       });
+    },
+  });
+}
+
+export function useReplayAgenticRunNode() {
+  const queryClient = useQueryClient();
+  return useMutation<void, unknown, { slug: string; runId: string; nodeId: string }>({
+    mutationFn: ({ slug, runId, nodeId }) => replayAgenticRunNode(slug, runId, nodeId),
+    onSuccess: (_result, { runId, slug }) => {
+      void queryClient.invalidateQueries({
+        queryKey: getDdIngestionRunsRunIdQueryKey({ path: { run_id: runId } }),
+      });
+      void queryClient.invalidateQueries(getDdIngestionSlugManifestOptions({ path: { slug } }));
+      void queryClient.invalidateQueries({ queryKey: getDdIngestionRunsActiveQueryKey() });
     },
   });
 }

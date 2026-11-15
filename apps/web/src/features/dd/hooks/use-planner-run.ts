@@ -24,6 +24,7 @@ import {
   fetchPlannerActive,
   fetchPlannerTotalMs,
   fetchStageRecent,
+  replayPlannerNode,
   stageEventsUrl,
   startPlanner,
   wipePlanner,
@@ -71,6 +72,7 @@ export type PlannerRunController = {
   start: () => Promise<void>;
   cancel: () => Promise<void>;
   wipe: () => Promise<void>;
+  replayNode: (nodeId: string) => Promise<void>;
 };
 
 type PlannerState = {
@@ -334,6 +336,46 @@ export function usePlannerRun(
     invalidatePipeline();
   }, [slug, overlays, invalidatePipeline, onWipe]);
 
+  const replayNode = useCallback(async (nodeId: string) => {
+    const threadId = state.threadId ?? state.lastThreadId;
+    if (!threadId || state.running || state.starting || !implemented.has(nodeId)) return;
+    const confirmed = await overlays.confirm({
+      title: "Replay Planner from this node?",
+      message: `Clears saved results from “${nodeId}” and later nodes, while keeping earlier checkpointed work. This cannot be undone.`,
+      confirmLabel: "Replay node",
+    });
+    if (!confirmed) return;
+    setState((current) => ({
+      ...current,
+      running: true,
+      starting: true,
+      threadId,
+      lastThreadId: threadId,
+      startedMs: Date.now(),
+      pill: WORKING_PILL,
+      error: null,
+      values: clearNodeOutputsFrom(nodes, current.values, nodeId),
+      next: [nodeId],
+      liveLines: {},
+      events: [],
+    }));
+    try {
+      await replayPlannerNode(threadId, nodeId);
+      invalidatePipeline();
+    } catch (error) {
+      setState((current) => ({
+        ...current,
+        running: false,
+        starting: false,
+        threadId: null,
+        pill: terminalPill("failed"),
+        error: apiErrorMessage(error),
+      }));
+    } finally {
+      setState((current) => ({ ...current, starting: false }));
+    }
+  }, [state.threadId, state.lastThreadId, state.running, state.starting, implemented, nodes, overlays, invalidatePipeline]);
+
   const elapsed = useElapsed(state.running, state.startedMs);
 
   return {
@@ -354,5 +396,21 @@ export function usePlannerRun(
     start,
     cancel,
     wipe,
+    replayNode,
   };
+}
+
+function clearNodeOutputsFrom(
+  nodes: readonly { id: string; field: string; stats: string }[],
+  values: Record<string, unknown>,
+  nodeId: string,
+): Record<string, unknown> {
+  const start = nodes.findIndex((node) => node.id === nodeId);
+  if (start < 0) return values;
+  const next = { ...values };
+  for (const node of nodes.slice(start)) {
+    delete next[node.field];
+    delete next[node.stats];
+  }
+  return next;
 }

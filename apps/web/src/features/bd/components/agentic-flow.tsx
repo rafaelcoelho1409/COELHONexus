@@ -1,8 +1,9 @@
 "use client";
 
 /** The Agentic AI graph, drawn with React Flow the way the Docs Distiller draws a stage: fixed positions (nothing
- * moves when a status changes), one button per node that opens its sheet, a glyph for the state, a headline number
- * once the node is done and a live line while it runs. The edge into the node now running is highlighted. Loaded
+ * moves when a status changes), a button per node that opens its sheet, a separate replay action, a glyph for the
+ * state, a headline number once the node is done and a live line while it runs. The edge into the node now running
+ * is highlighted. Loaded
  * lazily (`next/dynamic`), so the graph library stays out of every other page's JavaScript. */
 
 import "@xyflow/react/dist/style.css";
@@ -13,14 +14,14 @@ import { type Edge, Handle, MarkerType, type Node, type NodeProps, Position, Rea
 import type { AgenticNodeStatus, AgenticNodeView } from "../domain/agentic-progress";
 import {
   AGENTIC_STATUS_LABEL,
-  AgenticNodeDetailsList,
   AgenticNodeProgressBar,
+  AgenticReplayButton,
   AgenticStatusGlyph,
 } from "./agentic-parts";
 
-/** A node keeps room for its id, resource names, reported progress, and optional live counters. */
-const NODE_WIDTH = 232;
-const NODE_HEIGHT = 216;
+/** Compact nodes leave operational resources to the node side view; progress remains in the node. */
+const NODE_WIDTH = 216;
+const NODE_HEIGHT = 136;
 const NODE_GAP = 30;
 const PADDING = 16;
 /** A strip under the last node for React Flow's small credit line, so it never covers a node. */
@@ -32,53 +33,87 @@ type AgenticFlowData = {
   status: AgenticNodeStatus;
   kpi: string | null;
   liveLine: string | null;
-  resources: AgenticNodeView["resources"];
   progress: AgenticNodeView["progress"];
   onOpen: () => void;
+  onPlay?: () => void;
+  playPending: boolean;
+  replayPending: boolean;
 };
 type AgenticFlowNode = Node<AgenticFlowData, "agentic">;
 
-/** A node: a real button, so it is one tab stop with a name that carries its state in words. */
+/** The title and metrics remain clickable; replay has its own header cell with no overlapping hit area. */
 function AgenticNodeCard({ data }: NodeProps<AgenticFlowNode>) {
+  const borderTone =
+    data.status === "running"
+      ? "border-running"
+      : data.status === "failed"
+        ? "border-destructive"
+        : "border-border";
+
   return (
     <>
       <Handle type="target" position={Position.Top} isConnectable={false} />
-      <button
-        type="button"
-        onClick={data.onOpen}
-        aria-haspopup="dialog"
-        data-status={data.status}
-        // React Flow switches pointer events off for nodes that cannot be dragged or selected, and children
-        // inherit that; the button is the one thing here that must stay clickable.
-        style={{ width: NODE_WIDTH, height: NODE_HEIGHT, pointerEvents: "auto" }}
-        // `overflow-hidden` is the guard: whatever a line holds, nothing paints outside the node's shape (every line also truncates).
-        className={`nodrag nopan flex flex-col justify-start overflow-hidden rounded-md border bg-card px-3 py-2.5 text-left transition-colors hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring ${
-          data.status === "running"
-            ? "border-running"
-            : data.status === "failed"
-              ? "border-destructive"
-              : "border-border"
-        }`}
+      <div
+        data-node-id={data.nodeId}
+        className={`flex h-full w-full flex-col overflow-hidden rounded-md border bg-card ${borderTone}`}
+        style={{ width: NODE_WIDTH, height: NODE_HEIGHT }}
       >
-        <span className="flex min-w-0 flex-col gap-y-1">
-          <span className="flex items-center gap-1.5">
-            <AgenticStatusGlyph status={data.status} />
-            <span className="min-w-0 truncate text-sm">{data.label}</span>
-            <span className="sr-only">— {AGENTIC_STATUS_LABEL[data.status]}</span>
+        {data.onPlay ? (
+          <div className="flex min-h-9 items-center gap-1 border-b border-border/60 px-1.5">
+            <button
+              type="button"
+              onClick={data.onOpen}
+              aria-label={`Open ${data.label} node details — ${AGENTIC_STATUS_LABEL[data.status]}`}
+              aria-haspopup="dialog"
+              className="nodrag nopan pointer-events-auto flex min-w-0 flex-1 items-center gap-1.5 rounded-sm px-1 text-left hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring"
+            >
+              <AgenticStatusGlyph status={data.status} />
+              <span className="min-w-0 truncate text-sm">{data.label}</span>
+              <span className="sr-only">— {AGENTIC_STATUS_LABEL[data.status]}</span>
+            </button>
+            <AgenticReplayButton
+              label={data.label}
+              onPlay={data.onPlay}
+              pending={data.playPending}
+              disabled={data.replayPending}
+            />
+          </div>
+        ) : null}
+        <button
+          type="button"
+          data-status={data.status}
+          onClick={data.onOpen}
+          aria-label={
+            data.onPlay
+              ? `Open ${data.label} node progress details`
+              : `Open ${data.label} node details — ${AGENTIC_STATUS_LABEL[data.status]}`
+          }
+          aria-haspopup="dialog"
+          className={`nodrag nopan pointer-events-auto flex min-h-0 min-w-0 flex-1 flex-col justify-start overflow-hidden text-left hover:bg-muted focus-visible:z-10 focus-visible:outline-2 focus-visible:outline-ring ${
+            data.onPlay ? "px-3 py-2" : "h-full rounded-md px-3 py-2.5"
+          }`}
+        >
+          <span className="flex min-w-0 flex-col gap-y-1">
+            {!data.onPlay ? (
+              <span className="flex items-center gap-1.5">
+                <AgenticStatusGlyph status={data.status} />
+                <span className="min-w-0 truncate text-sm">{data.label}</span>
+                <span className="sr-only">— {AGENTIC_STATUS_LABEL[data.status]}</span>
+              </span>
+            ) : null}
+            <span className="truncate font-mono text-xs text-muted-foreground">{data.nodeId}</span>
+            {data.kpi ? <span className="truncate text-xs text-muted-foreground">{data.kpi}</span> : null}
+            {data.liveLine ? (
+              <span className="truncate font-mono text-xs text-muted-foreground">{data.liveLine}</span>
+            ) : null}
+            {data.progress ? (
+              <span className="mt-auto block">
+                <AgenticNodeProgressBar label={data.label} progress={data.progress} />
+              </span>
+            ) : null}
           </span>
-          <span className="truncate font-mono text-xs text-muted-foreground">{data.nodeId}</span>
-          {data.kpi ? <span className="truncate text-xs text-muted-foreground">{data.kpi}</span> : null}
-          {data.liveLine ? (
-            <span className="truncate font-mono text-xs text-muted-foreground">{data.liveLine}</span>
-          ) : null}
-          <AgenticNodeDetailsList resources={data.resources} compact />
-          {data.progress ? (
-            <span className="mt-auto block">
-              <AgenticNodeProgressBar label={data.label} progress={data.progress} />
-            </span>
-          ) : null}
-        </span>
-      </button>
+        </button>
+      </div>
       <Handle type="source" position={Position.Bottom} isConnectable={false} />
     </>
   );
@@ -92,10 +127,16 @@ const ARROW = { type: MarkerType.ArrowClosed, width: 14, height: 14 } as const;
 export function AgenticFlow({
   views,
   onOpenNode,
+  onPlayNode,
+  replayPending = false,
+  replayPendingNodeId = null,
   ariaLabel = "Book Distiller agentic ingestion graph",
 }: {
   views: readonly AgenticNodeView[];
   onOpenNode: (nodeId: string) => void;
+  onPlayNode?: (nodeId: string) => void;
+  replayPending?: boolean;
+  replayPendingNodeId?: string | null;
   ariaLabel?: string;
 }) {
   const nodes: AgenticFlowNode[] = views.map((view, index) => ({
@@ -110,9 +151,11 @@ export function AgenticFlow({
       status: view.status,
       kpi: view.kpi,
       liveLine: view.liveLine,
-      resources: view.resources,
       progress: view.progress,
       onOpen: () => onOpenNode(view.id),
+      ...(onPlayNode ? { onPlay: () => onPlayNode(view.id) } : {}),
+      playPending: replayPending && replayPendingNodeId === view.id,
+      replayPending,
     },
   }));
   const edges: Edge[] = views.slice(0, -1).flatMap((view, index) => {

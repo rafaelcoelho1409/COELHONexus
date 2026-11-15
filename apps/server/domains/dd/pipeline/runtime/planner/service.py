@@ -2,7 +2,9 @@
 
 The worker's composition root (`domains/dd/pipeline/ai`) binds the graph, object storage and run context to COELHO Cloud and hands them in as a `Binding`."""
 from __future__ import annotations
+import ai
 import domains
+import infra
 from . import params
 
 import time
@@ -66,6 +68,81 @@ async def resume(binding: domains.dd.pipeline.runtime.runner.entities.Binding, t
     await progress.emit_progress(thread_id, params.STAGE, "resumed", next_nodes = list(snap.next or []))
     main_task, watcher_task = domains.dd.pipeline.runtime.runner.service.launch(binding, None, config, thread_id)
     return await _finish(binding, config, main_task, watcher_task, thread_id)
+
+
+async def replay_from_node(
+    binding: domains.dd.pipeline.runtime.runner.entities.Binding,
+    thread_id: str,
+    node_id: str,
+) -> dict:
+    """Fork a saved Planner run immediately before ``node_id`` and run forward."""
+    if node_id not in domains.dd.pipeline.ai.service.node_order():
+        raise ValueError(f"unknown Planner node {node_id!r}")
+    base_config = binding.config(thread_id)
+    snapshot = await binding.graph.aget_state(base_config)
+    if not snapshot.values:
+        raise ValueError(f"no checkpoints found for thread_id={thread_id!r}")
+    values = dict(snapshot.values)
+    if values.get("status") in {"running", "queued"}:
+        raise ValueError("stop the active Planner run before replaying a node")
+    replay_config = await ai.langgraph.service.checkpoint_before_node(
+        binding.graph,
+        base_config,
+        node_id,
+    )
+    replay_snapshot = await binding.graph.aget_state(replay_config)
+    replay_values = dict(replay_snapshot.values or {})
+    slug = str(replay_values.get("framework_slug") or "")
+    mode = str(replay_values.get("planner_mode") or "llm")
+    if not slug:
+        raise ValueError("the saved Planner state has no framework slug")
+
+    output_fields = {
+        "corpus_load": ("raw_files", "corpus_stats"),
+        "off_topic": ("relevant_files", "off_topic_stats"),
+        "page_cards": ("page_cards_ref", "page_cards_stats"),
+        "chapter_design": ("chapter_design_stats",),
+        "doc_distill": ("doc_distill_ref", "doc_distill_stats"),
+        "chapter_propose": ("chapter_proposals_ref", "propose_stats"),
+        "chapter_assign": ("chapter_doc_assignments_ref", "assign_stats"),
+        "chapter_select": ("chapter_plan_ref", "select_stats"),
+        "order_chapters": ("chapter_order_ref", "order_chapters_stats"),
+        "plan_write": ("plan_path", "plan_write_stats"),
+    }
+    node_order = domains.dd.pipeline.ai.service.node_order()
+    descendants = node_order[node_order.index(node_id):]
+    reset_state = {
+        field: None
+        for node in descendants
+        for field in output_fields[node]
+    }
+    reset_state.update(status="running", error=None)
+    replay_config = await binding.graph.aupdate_state(replay_config, reset_state)
+
+    await domains.dd.pipeline.runtime.cancel.service.reset(thread_id)
+    await domains.dd.pipeline.runtime.progress.service.emit_progress(
+        thread_id,
+        params.STAGE,
+        "resumed",
+        next_nodes = [node_id],
+    )
+    started = time.monotonic()
+    main_task, watcher_task = domains.dd.pipeline.runtime.runner.service.launch(
+        binding,
+        None,
+        replay_config,
+        thread_id,
+    )
+    return await _finish(
+        binding,
+        base_config,
+        main_task,
+        watcher_task,
+        thread_id,
+        t0 = started,
+        slug = slug,
+        mode = mode,
+    )
 
 
 async def _finish(

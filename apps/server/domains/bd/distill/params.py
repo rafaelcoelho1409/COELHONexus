@@ -37,5 +37,13 @@ TRANSIENT_NODE_RETRY_ATTEMPTS = 3
 TRANSIENT_NODE_RETRY_INITIAL_INTERVAL_S = 5.0
 TRANSIENT_NODE_RETRY_MAX_INTERVAL_S = 30.0
 GRAPH_NODES = ("prepare_units", "extract_unit", "prepare_chapters", "synthesize_chapter", "synthesize_book", "publish_report")
+REPLAY_DESCENDANTS = {
+    "prepare_units": GRAPH_NODES,
+    "extract_unit": GRAPH_NODES[1:],
+    "prepare_chapters": GRAPH_NODES[2:],
+    "synthesize_chapter": GRAPH_NODES[3:],
+    "synthesize_book": GRAPH_NODES[4:],
+    "publish_report": GRAPH_NODES[5:],
+}
 TASK_NAME = "domains.bd.distill.task.run_distill"
 TERMINAL_STATUSES = frozenset({"done", "failed", "cancelled"})

@@ -471,7 +471,14 @@ export type PhaseSnapshot = {
 
 export type PipelinePrefix = "playwright" | "elasticsearch" | "qdrant" | "neo4j";
 
-const TERMINAL_STATES: ReadonlySet<string> = new Set(["SUCCESS", "FAILURE", "REVOKED", "ERROR"]);
+const TERMINAL_STATES: ReadonlySet<string> = new Set([
+  "SUCCESS",
+  "PARTIAL",
+  "FAILURE",
+  "REVOKED",
+  "ERROR",
+  "CANCELLED",
+]);
 
 export function isTerminal(state: string): boolean {
   return TERMINAL_STATES.has(state);
@@ -534,6 +541,13 @@ export function subPhasePct(snapshot: PhaseSnapshot, prefix: "playwright" | "ela
 
 export function subPhaseLabel(snapshot: PhaseSnapshot, prefix: "playwright" | "elasticsearch"): string {
   if (snapshot.state === "SUCCESS") return "Done";
+  if (snapshot.state === "PARTIAL") {
+    const current = snapshot.meta?.current ?? 0;
+    const total = snapshot.meta?.total ?? 0;
+    const failed = snapshot.meta?.failed_ids?.length ?? 0;
+    return `${current}/${total} done · ${failed} failed`;
+  }
+  if (snapshot.state === "CANCELLED") return "Cancelled";
   if (snapshot.state === "FAILURE" || snapshot.state === "ERROR") {
     return `Failed: ${snapshot.error?.slice(0, 60) ?? "see logs"}`;
   }
@@ -621,6 +635,11 @@ export function streamLabel(snapshot: PhaseSnapshot, prefix: "qdrant" | "neo4j")
     if (failed > 0) return `${done}/${done + failed} done · ${failed} failed`;
     return "Done";
   }
+  if (snapshot.state === "PARTIAL") {
+    const { done, failed } = streamCounts(snapshot.meta);
+    return `${done}/${done + failed} done · ${failed} failed`;
+  }
+  if (snapshot.state === "CANCELLED") return "Cancelled";
   if (snapshot.state === "FAILURE" || snapshot.state === "ERROR") {
     return `Failed: ${snapshot.error?.slice(0, 60) ?? "see logs"}`;
   }

@@ -104,7 +104,7 @@ const NODE_DETAIL_ROWS = [
   { label: "Tools", key: "tools" },
 ] as const;
 
-/** Agent, skill, and tool names shown consistently on graph and list nodes. */
+/** Agent, skill, and tool names shown in a node's information view. */
 export function NodeDetailsList({
   details,
   compact = false,
@@ -129,22 +129,23 @@ export function NodeDetailsList({
   );
 }
 
-/** One card per graph node; it opens that node's drawer. */
+/** One compact row per graph node, with separate open and replay actions. */
 export function StageNodes({
   views,
   liveLines,
   kpis,
-  nodeDetails = {},
   onOpen,
+  onPlay,
+  playableNodeIds,
   label = "Stage nodes",
 }: {
   views: readonly NodeView[];
   liveLines: Record<string, string>;
   /** A node's headline number once it has committed ("1,200 files"). */
   kpis: Record<string, string>;
-  /** Agent, skills, and tools associated with each node. */
-  nodeDetails?: Readonly<Record<string, StageNodeDetails>>;
   onOpen: (nodeId: string) => void;
+  onPlay?: (nodeId: string) => void;
+  playableNodeIds?: ReadonlySet<string>;
   /** What the list is called to assistive technology. */
   label?: string;
 }) {
@@ -152,36 +153,54 @@ export function StageNodes({
     // One node per row, top to bottom in run order — the same order as the graph.
     <ul aria-label={label} className="flex flex-col gap-1.5">
       {views.map((view) => {
-        const details = nodeDetails[view.node.id];
         return (
           <li key={view.node.id} data-status={view.status} data-node={view.node.id}>
-            <button
-              type="button"
-              onClick={() => onOpen(view.node.id)}
-              aria-haspopup="dialog"
-              className={`block min-h-9 w-full rounded-sm border bg-card px-3 py-2 text-left hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring ${
+            <div
+              className={`flex min-w-0 items-stretch gap-1.5 rounded-sm border bg-card p-1.5 ${
                 view.status === "running" ? "border-running" : "border-border"
               }`}
             >
-              <span className="flex items-center justify-between gap-3">
-                <span className="flex min-w-0 items-center gap-1.5">
-                  <StatusGlyph status={view.status} />
-                  <span className="text-sm">{view.node.label}</span>
-                  <span className="sr-only">— {NODE_STATUS_LABEL[view.status]}</span>
+              <button
+                type="button"
+                onClick={() => onOpen(view.node.id)}
+                aria-haspopup="dialog"
+                aria-label={`Open ${view.node.label} node details`}
+                className="min-h-9 min-w-0 flex-1 rounded-sm px-1.5 py-1 text-left hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring"
+              >
+                <span className="flex items-center justify-between gap-3">
+                  <span className="flex min-w-0 items-center gap-1.5">
+                    <StatusGlyph status={view.status} />
+                    <span className="text-sm">{view.node.label}</span>
+                    <span className="sr-only">— {NODE_STATUS_LABEL[view.status]}</span>
+                  </span>
+                  {kpis[view.node.id] ? (
+                    <span className="min-w-0 truncate text-xs text-muted-foreground tabular-nums">
+                      {kpis[view.node.id]}
+                    </span>
+                  ) : null}
                 </span>
-                {kpis[view.node.id] ? (
-                  <span className="min-w-0 truncate text-xs text-muted-foreground tabular-nums">
-                    {kpis[view.node.id]}
+                {liveLines[view.node.id] ? (
+                  <span className="mt-1 block font-mono text-xs break-all text-muted-foreground">
+                    {liveLines[view.node.id]}
                   </span>
                 ) : null}
-              </span>
-              {liveLines[view.node.id] ? (
-                <span className="mt-1 block font-mono text-xs break-all text-muted-foreground">
-                  {liveLines[view.node.id]}
-                </span>
+              </button>
+              {onPlay && (!playableNodeIds || playableNodeIds.has(view.node.id)) ? (
+                <button
+                  type="button"
+                  onPointerDown={(event) => event.stopPropagation()}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onPlay(view.node.id);
+                  }}
+                  aria-label={`Replay from ${view.node.label}`}
+                  title={`Replay from ${view.node.label} and clear downstream results`}
+                  className="inline-flex size-9 shrink-0 items-center justify-center self-start rounded-sm text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"
+                >
+                  <Play aria-hidden className="size-4" />
+                </button>
               ) : null}
-              {details ? <NodeDetailsList details={details} /> : null}
-            </button>
+            </div>
           </li>
         );
       })}

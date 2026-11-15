@@ -2,7 +2,14 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { cancelRagIndex, getRagCapabilities, getRagIndex, startRagIndex, wipeRagIndex } from "../index-api";
+import {
+  cancelRagIndex,
+  getRagCapabilities,
+  getRagIndex,
+  replayRagIndexNode,
+  startRagIndex,
+  wipeRagIndex,
+} from "../index-api";
 import { ragIndexStatusSchema } from "../index-entities";
 import { RAG_INDEX_REFRESH_MS } from "../params";
 
@@ -50,6 +57,14 @@ export function useRagIndexActions(bookId: string, runId: string) {
     },
     onError: refresh,
   });
+  const replay = useMutation({
+    mutationFn: (nodeId: string) => replayRagIndexNode(bookId, runId, nodeId),
+    onSuccess: (status) => {
+      queryClient.setQueryData(queryKey, status);
+      refresh();
+    },
+    onError: refresh,
+  });
   const wipe = useMutation({
     mutationFn: () => wipeRagIndex(bookId, runId),
     onSuccess: () => {
@@ -58,5 +73,5 @@ export function useRagIndexActions(bookId: string, runId: string) {
     },
     onError: refresh,
   });
-  return { start, cancel, wipe };
+  return { start, cancel, replay, wipe };
 }

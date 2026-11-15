@@ -347,6 +347,20 @@ function DistillWorkspaceView({
       onError: (error) => notice(apiErrorMessage(error), "error"),
     });
   };
+  const replayRagNode = async (nodeId: string) => {
+    if (!selected || ragIndex.data?.status === "queued" || ragIndex.data?.status === "running") return;
+    const confirmed = await confirm({
+      title: "Replay Agentic RAG from this stage?",
+      message:
+        `Clears retrieval outputs from “${nodeId}” and every later stage, then rebuilds them. Earlier results are kept. This cannot be undone.`,
+      confirmLabel: "Replay stage",
+    });
+    if (!confirmed) return;
+    ragActions.replay.mutate(nodeId, {
+      onSuccess: () => notice(`Agentic RAG replay queued from ${nodeId}.`),
+      onError: (error) => notice(apiErrorMessage(error), "error"),
+    });
+  };
   const stopRag = () => {
     ragActions.cancel.mutate(undefined, {
       onSuccess: (result) => {
@@ -367,6 +381,23 @@ function DistillWorkspaceView({
       onSuccess: () => notice("Agentic RAG index wiped."),
       onError: (error) => notice(apiErrorMessage(error), "error"),
     });
+  };
+  const replayDistillNode = async (nodeId: string) => {
+    if (!controlRun || progressStatus === "queued" || progressStatus === "running") return;
+    const confirmed = await confirm({
+      title: "Replay from this stage?",
+      message:
+        `Clears Distill results from “${nodeId}” and every later stage, then reruns them. Earlier stage results are kept. This cannot be undone.`,
+      confirmLabel: "Replay stage",
+    });
+    if (!confirmed) return;
+    actions.replay.mutate(
+      { runId: controlRun.run_id, nodeId },
+      {
+        onSuccess: () => notice(`Distill replay queued from ${nodeId}.`),
+        onError: (error) => notice(apiErrorMessage(error), "error"),
+      },
+    );
   };
   const progressActions = (
     <>
@@ -574,6 +605,11 @@ function DistillWorkspaceView({
                 runId={controlRun?.run_id ?? null}
                 progressOpen={distillProgressOpen}
                 onProgressOpenChange={setDistillProgressOpen}
+                onPlayNode={
+                  controlRun && progressStatus !== "queued" && progressStatus !== "running"
+                    ? (nodeId) => void replayDistillNode(nodeId)
+                    : undefined
+                }
               />
             </div>
             <div className="min-w-0">
@@ -583,6 +619,11 @@ function DistillWorkspaceView({
                 executionEnabled={ragCapabilities.data?.execution_enabled === true}
                 infoOpen={ragInfoOpen}
                 onInfoOpenChange={setRagInfoOpen}
+                onPlayNode={
+                  ragIndex.data && ["done", "failed", "cancelled"].includes(ragIndex.data.status)
+                    ? (nodeId) => void replayRagNode(nodeId)
+                    : undefined
+                }
               />
             </div>
             <div className="min-w-0 space-y-3">

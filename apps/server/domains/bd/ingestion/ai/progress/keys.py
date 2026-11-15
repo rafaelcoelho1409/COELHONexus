@@ -19,3 +19,7 @@ def book_mutation_lock_key(book_id: str) -> str:
 
 def run_mutation_lock_key(book_id: str, agentic_run_id: str) -> str:
     return f"coelhonexus:bd:lock:agentic-mutation:{book_id}:{agentic_run_id}"
+
+
+def run_execution_lock_key(book_id: str, agentic_run_id: str) -> str:
+    return f"coelhonexus:bd:lock:agentic-execution:{book_id}:{agentic_run_id}"

@@ -1,13 +1,14 @@
 # DD Ingestion convergence plan
 
-**Updated:** 2026-11-14  
+**Updated:** 2026-11-15
+
 **Scope:** Docs Distiller ingestion tiers 1–4. Tier 5 (GitHub) is out of scope.
 
 ## Recommendation
 
 Keep full tier benchmarks as end-to-end release checks, but stop using them as the inner loop for every code or prompt change. The latest full-tier pass took about 42 minutes across the four representative sources and surfaced useful defects, but repeating all of that work for every fix spends time on stable extraction and makes code changes harder to separate from upstream source and provider variation.
 
-Use fixed-input replay evaluations for development, then run one fresh full ingestion per affected tier after the replay gates pass. A full all-tier run remains appropriate after shared normalizer/auditor changes. The v25 r4 targeted replay set surfaced two fixture mismatches and two generic audit false-positive classes despite preserving every source page. Local fixes now cover those cases. After redeployment, replay the curated pages first; proceed to the fresh full Tier 1–4 acceptance pass only when the gates and source-preservation checks pass.
+Use fixed-input replay evaluations for development, then run one fresh full ingestion per affected tier after the replay gates pass. A full all-tier run remains appropriate after shared normalizer/auditor changes. Round r11 replayed 19 frozen pages across Tiers 1–4. Tiers 2 and 4 passed their snapshot gates; Tier 3 exposed a valid-table false positive and a possible extracted-diagram omission; Tier 1 remains under-sampled. Generic table safeguards and four additional Tier 1 fixtures are local and pending redeployment. Replay those cases before deciding whether a fresh full Tier 1–4 acceptance pass is needed.
 
 This is consistent with current agent-evaluation practice: use curated regression cases, combine deterministic, model-based and human graders, and repeat trials selectively where model output varies. See [Anthropic's agent evaluation guide](https://www.anthropic.com/research/demystifying-evals-for-ai-agents), [LangChain's evaluation types](https://docs.langchain.com/langsmith/evaluation-types), and [OpenAI's evaluation best practices](https://developers.openai.com/api/docs/guides/evaluation-best-practices).
 
@@ -49,7 +50,7 @@ Do not require two full live rounds merely to demonstrate repeatability. A clean
 
 ## Current checkpoint
 
-The latest full Tier 1–4 baseline is `dd-refine-2026-11-14-r3`; the deployed follow-up build `e763efb0555ebec32ef3604694821bd894edcee14fff055de893c570d434e30d` has now completed the fixed-input replay round `dd-replay-2026-11-14-r4` across all four tiers. Every sampled source/input/output hash matched and no replay published. Tier 2's only gate failure was a stale expectation for a duplicate that the auditor correctly did not report. Tier 3's two gate failures were a stale category expectation and an uncertain source-wording expectation. Tier 4 still reported seven unsupported escaped-underscore claims on page 96, and Tier 1 reported repeated instructions across separate `uv` and `conda/mamba` workflows. No tier is converged yet. Generic auditor and fixture corrections are now local but postdate fingerprint `e763efb…`; redeploy and rerun the fixed page sets before deciding on full-tier acceptance. Tier 5 remains excluded.
+The latest full Tier 1–4 baseline remains `dd-refine-2026-11-14-r3`. Deployed fingerprint `b687198b630768f7263a8947434e9e364f3a7dec7518208109ee4d7dc3287021` completed the non-publishing r12 fixture replays across all four tiers. Tiers 2 and 4 passed under their source-preserving dispositions. Tier 3's table and link false positives cleared, while its possible missing-diagram and heading-structure observations still need authoritative-source review. Tier 1 exposed contextual-duplicate false positives across numeric model-size tutorials; a generic size-aware scope fix and stronger fixtures are now local but need redeployment. Tier 1 remains open pending this replay and broader disposition of the full run's 47 issue-bearing pages. Tier 5 remains excluded.
 
 ## Claude Code ingestion incident
 
@@ -178,4 +179,67 @@ The varying outcomes on page 104 (nine duplicate findings in r5, miscategorized 
 
 **R8 result:** fingerprint `b43ac0dbdd719ed89bdf744170d7cef51c673c38ea0d0ff29201c4ea1f7040fb`; replay `15106eb776c44b9dbf797b3b35ee1667`; page 104 completed in 7.5 seconds with one successful call and no provider errors. It returned zero findings, so the expected `duplicate_section` check failed. No repair ran, and source/input/output SHA-256 remained `78b58b1f…`. The `N/A` false positive did not recur. The local deterministic safeguard now addresses the remaining nondeterminism directly and is pending redeploy.
 
-**Current convergence:** Tiers 2 and 4 remain converged for the frozen r3 snapshots under the documented acceptance bar. Tier 3 is not converged until page 104 passes with the deterministic duplicate finding and unchanged output; Tier 1 remains open pending broader assessment of the full-run findings. After redeploy, verify the new auditor code hash and replay only DeepAgents page 104 under `dd-replay-2026-11-14-r9`. Require the expected duplicate category, no forbidden short-row claim, zero accepted repairs, and identical source/input/output hashes. Tier 5 remains excluded.
+**Current convergence at r8:** Tiers 2 and 4 remain converged for the frozen r3 snapshots under the documented acceptance bar. Tier 3 is not converged until page 104 passes with the deterministic duplicate finding and unchanged output; Tier 1 remains open pending broader assessment of the full-run findings. After redeploy, verify the new auditor code hash and replay only DeepAgents page 104 under `dd-replay-2026-11-14-r9`. Require the expected duplicate category, no forbidden short-row claim, zero accepted repairs, and identical source/input/output hashes. Tier 5 remains excluded.
+
+## Latest checkpoint — DeepAgents page-104 replay r9 passed
+
+The user redeployed the deterministic same-table duplicate safeguard. Provenance matched the local build: fingerprint `c57bfe5f601648799540bf5dfa67b632d652ff19e142d073a46bdbb515a69c08`, auditor `cd9e759d4078e2067cf56983bcbad2845705635e4d59ad93a0f49a9b7caf254a`, evaluator `9cc4f395e97a7a738e87476a4cea4235e0864797e0babeb04aae8eb0f4d6212a`, and page-auditor prompt `fde5d62e553593fc59ce1b3f8c2dba19fde8742454ee516a61bdbbafff1612b54`. Non-publishing replay `981cc41a05b0489f98e36f8dd81d8038` completed on frozen DeepAgents r3 page 104 in 40.4s. It reported all nine verified repeated body rows as medium `duplicate_section` findings; emitted neither forbidden N/A/table-shape claim; had one successful model call and no provider errors; required no repair and accepted no patches. Source, input, normalized-input and output hashes matched (`78b58b1f2d3a5168f7ba776b9b3ba5257e4fcfd413cee439715409d0c329d930`). The deterministic gate passed and nothing was published.
+
+Record the source disposition as preservation-only: the duplicates are present upstream, but whether the source owner intends to remove them is an editorial decision. Do not auto-delete rows. The replay report keeps its fixture-level `human_review_required` marker; this is distinct from a failed deterministic gate. At r9, Tier 3 met the documented acceptance bar for the frozen r3 snapshot; this conclusion is superseded by r10 below. Tiers 2 and 4 remain converged for their r3 snapshots. Tier 1 remains open because the full run had findings across 47 pages and only two targeted pages had been assessed. Tier 5 remains excluded.
+
+## All-tier replay round `dd-replay-2026-11-14-r10`
+
+The manually redeployed build reported fingerprint `c57bfe5f601648799540bf5dfa67b632d652ff19e142d073a46bdbb515a69c08`, matching the auditor and evaluator hashes in the workspace. The run used immutable pages from `dd-refine-2026-11-14-r3`; all replay reports have `publishes: false` and all selected source, normalized-input and output hashes match. Across 19 page audits there were no provider errors, unavailable audits/repairs, or accepted/rejected patches.
+
+| Tier | Replay | Pages | Result |
+|---|---|---:|---|
+| 2 — Optimum | `04f5c6d63aa2442e986dd88d290de6f2` | 1 | Passed in 7.8s; no findings or provider errors; source/input/output hash `601c5e67d752f1cfc67b857606e59633e5e2dc97a79c2d67ecf128286fb53211`. |
+| 4 — Asyncio | `44a8d57c3e27488a94f6ae3fe6e136bd` | 7 | Passed in 32.1s; seven audits, no findings, repairs, provider errors or unavailable stages; all hashes match. |
+| 3 — DeepAgents | `985a8e51aa1c411ca3193c3283e23df4` | 9 | Completed in 120.0s; nine low findings on page 104 for verified repeated table rows and one unsupported broken-link claim on page 80. Page 27's minor upstream typos were not reported, failing its then-current hard category expectation. No patches; all hashes match. |
+| 1 — Unsloth | `b5bb268028244a90ade16464169399fb` | 2 | Passed in 7.1s; page 22 correctly needed no repair; page 197 retained one low within-workflow repeated environment reminder. No provider errors or patches; hashes match. |
+
+### Assessment and next step
+
+The page-80 finding claimed a broken Markdown link but cited only prose (`Omit `provider` on `search.web` to use your project's default search provider:`), which contains no Markdown bracket syntax. The existing safeguard discarded complete inline links when those links were cited, but did not reject a link-defect claim with no link evidence. A narrow generic sanitizer now drops that unsupported claim only when neither evidence field contains an unescaped Markdown bracket; valid or genuinely malformed bracketed evidence remains assessable. The page-80 fixture now forbids the false description.
+
+Page 27's captured misspellings are low-impact upstream editorial issues, and automatic repair remains prohibited. The r10 auditor missed them; because a model's advisory spelling detection is stochastic, the fixture now gates successful audit completion and source preservation rather than requiring one category on every run. This does not claim spelling-audit recall or change the source. The human disposition is to preserve the text and leave any correction to the documentation owner.
+
+**Current status:** Tier 2 and Tier 4 remain converged for the frozen r3 snapshots. Tier 3 is open pending an all-tier replay after the generic link-evidence fix. Tier 1 remains open: its full run had issues on 47 pages, while only pages 22 and 197 have curated replay coverage. After redeployment, verify provenance and run all four curated sets as `dd-replay-2026-11-14-r11`; then expand Tier 1's replay cases across its distinct duplicate-content and Markdown finding classes before considering a fresh full Tier 1–4 acceptance run. Tier 5 remains excluded.
+
+## All-tier replay round `dd-replay-2026-11-15-r11`
+
+The manually deployed fingerprint was `62eade5940e4a3719a3b4a94531f7b1f91658d8ebed52204b279e1e11fe95f37` (auditor `036bf978b4b7a728103f0331b6132c51062d5a5c03e6dc16386ee0a228d353a8`, evaluator `0dffa25f1a27529dc711ba12fde5895a2f8fb59a413f0764b1dad444a1cdbcd7`). Four sequential fixed-input replays covered 19 pages from `dd-refine-2026-11-14-r3`; every report set `publishes: false`, and source, normalized-input and output hashes matched. No repairs or patches were accepted or rejected, and no audit/repair stage was unavailable.
+
+| Tier | Replay | Pages | Result |
+|---|---|---:|---|
+| 2 — Optimum | `d7721d86734343d9a50c60b4a66298e6` | 1 | Gate passed in 6.5s. Two low duplicate-section findings are preserved as upstream API text; no provider errors. |
+| 4 — Asyncio | `9467325305d2439b932ced2203231b93` | 7 | Gate passed in 6.9s with no findings, provider errors or unavailable stages. |
+| 3 — DeepAgents | `37a2c6cc251a49b098eff27508d510dc` | 9 | Gate passed in 418.1s; nine verified repeated table rows on page 104 remain review-only source findings. Page 70 repeated a valid-GFM empty-cell false positive; page 71 noted caption text whose referenced diagram is absent from the extracted page. The latter is a possible extraction omission and needs comparison with the authoritative page. Three provider errors were recorded across 11 calls; all audits completed and no page was unavailable. |
+| 1 — Unsloth | `00185b6a982d4169afa39258ad7cb122` | 2 | Gate passed in 15.7s. Page 22 had no actionable finding; page 197's within-workflow repeated environment reminder was retained. No provider errors. |
+
+Tier 2 and Tier 4 remain converged for the frozen r3 snapshots. Tier 3 is not converged: the page-70 false positive needs a generic table sanitizer replay, and the page-71 diagram reference needs a source-completeness disposition. Tier 1 remains open because r11 only replayed pages 22 and 197 despite 47 issue-bearing pages in its full run.
+
+### Generic table follow-up and next replay
+
+Source review confirmed two reusable false-positive patterns: empty or optional GFM cells described as malformed formatting (DeepAgents page 70 and Unsloth page 162), and valid rows with optional trailing delimiters described as missing closing pipes (Unsloth page 116). The local auditor now suppresses speculative empty-cell formatting claims only when the cited row is in valid GFM context, and discards a missing-closing-pipe claim only when the cited source row itself ends with an unescaped pipe. These checks leave malformed rows eligible for audit. Fixtures also add Unsloth pages 127 and 129 to assess contextual repetition under separate model-size tutorials without permitting source edits.
+
+These changes postdate the r11 fingerprint. After manual redeployment, confirm provenance, then replay the curated fixtures sequentially as `dd-replay-2026-11-15-r12`: Optimum `[0]`; Asyncio `[0, 4, 42, 49, 54, 96, 99]`; DeepAgents `[27, 41, 70, 71, 74, 80, 90, 104, 105]`; Unsloth `[22, 116, 127, 129, 162, 197]`. Tier 1 will then have six reviewed pages across distinct issue classes, but remains open until the broader 47-page distribution has representative disposition. Tier 5 remains excluded.
+
+## All-tier targeted replay round `dd-replay-2026-11-15-r12`
+
+The manual redeploy matched fingerprint `b687198b630768f7263a8947434e9e364f3a7dec7518208109ee4d7dc3287021` (auditor `848701931b9d85cf91da0d2b2dc514b9a1e4dd0b7649d50d3be24b2ca77726f7`; evaluator `76c23580dd649de969f03b7b4060a6ba2c42ab19a3e456e70e820a32a423d11b`). Four fixed-input jobs ran sequentially against the frozen `dd-refine-2026-11-14-r3` snapshots. Every replay had `publishes: false`; all selected source, normalized-input, and output hashes matched. No repairs or patches were accepted or rejected, and no audit or repair stage was unavailable. Provider errors were recovered: Asyncio had one HTTP 504, DeepAgents five, and Unsloth four.
+
+| Tier | Replay | Pages | Result |
+|---|---|---:|---|
+| 2 — Optimum | `8f9b11697f4e45bc94a08e89e1623876` | 1 | Gate passed in 14.3s. One medium `duplicate_section` finding reflects repeated source-backed `library_name` text; preserve it for source-owner review. No provider errors or patches. |
+| 4 — Asyncio | `e53d91d8a70b4995b143d795660ee945` | 7 | Gate passed in 154.2s with no findings or unavailable stages. One recovered HTTP 504 across seven audits. |
+| 3 — DeepAgents | `54ecec963bdf4de0a38b3b2a2d1a145d` | 9 | Gate passed in 357.1s. Nine low `duplicate_section` findings on page 104 correspond to exact source rows; preserve them. Page 74 had one medium observation about a referenced diagram absent from extracted Markdown; page 105 had one medium heading-structure observation. The page-70 empty-cell and page-71 link-style false positives did not recur. Five HTTP 504 attempts were recovered across ten audit calls. |
+| 1 — Unsloth | `e569e9fb5d76467bafd9828dff72cc4b` | 6 | Gate passed in 538.8s with no unavailable audits. Pages 127 and 129 returned 23 duplicate-content findings across separate model-size tutorials; no patches were applied, and source hashes remained identical. Four HTTP 504 attempts were recovered across six audit calls. This is an auditor false-positive class, not evidence that those tutorials should be shortened. |
+
+### Assessment and next checkpoint
+
+The valid-GFM safeguards now pass on DeepAgents pages 70/71 and Unsloth pages 116/162. Tier 2 and Tier 4 remain converged for the frozen r3 snapshots under the documented preserve-source disposition. Tier 3 remains open: verify the missing-diagram observation against the authoritative rendered source and decide whether page 105's consecutive empty headings reflect an extraction omission or source outline. Page 104's exact repeated rows are source-backed and must not be removed automatically.
+
+Tier 1 remains open. The six-page sample confirms that repeated text under separate model-size tutorials is still reported as duplication. The local generic scope recognizer now includes parameter-size variants such as `4B`, `30B-A3B`, `20B`, and `120B`; it suppresses a repeat only when exact repeated evidence falls under distinct headings with the same normalized model-family context and distinct size labels. The page-127 and page-129 fixtures now require these duplicate descriptions to be absent, while retaining the zero-patch source-preservation requirement. This code postdates the r12 fingerprint and is not yet deployed.
+
+After the user manually redeploys, verify the new fingerprint, then run all four curated fixture sets sequentially as `dd-replay-2026-11-15-r13`. Keep Tier 5 excluded. Tier 1 still needs representative coverage of the full-run 47-page issue distribution before any convergence claim; do not start another full ingestion just to validate this targeted duplicate-scope fix.

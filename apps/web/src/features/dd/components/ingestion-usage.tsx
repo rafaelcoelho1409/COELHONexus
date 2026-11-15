@@ -3,6 +3,8 @@
 import { X } from "lucide-react";
 import { type ReactNode, useId } from "react";
 
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/shared/ui/tabs";
+
 import { fmtInt } from "../domain/format";
 import {
   type INGESTION_NODES,
@@ -14,6 +16,7 @@ import { ingestionUsageRows, nodeUsageForIngestionStep } from "../domain/ingesti
 import type { UsagePayload } from "../entities";
 import { useModalDialog } from "../hooks/use-modal-dialog";
 import { ActionButton } from "./action-button";
+import { NodeDetailsList, type StageNodeDetails } from "./stage-parts";
 import { type UsageBreakdownModeOption, UsageBreakdownView } from "./usage-breakdown";
 
 export function PipelineUsageTotal({
@@ -104,6 +107,7 @@ function UsageDialog({
 
 export function IngestionNodeSheet({
   node,
+  resources,
   status,
   caption,
   usage,
@@ -113,6 +117,7 @@ export function IngestionNodeSheet({
   onClose,
 }: {
   node: (typeof INGESTION_NODES)[number];
+  resources?: StageNodeDetails;
   status: IngestionNodeStatus;
   caption: string | null;
   usage: UsagePayload | undefined;
@@ -123,7 +128,7 @@ export function IngestionNodeSheet({
 }) {
   return (
     <UsageDialog
-      title="Ingestion LLM usage"
+      title={node.label}
       subtitle={
         <p className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
           <span>{node.label}</span>
@@ -132,10 +137,28 @@ export function IngestionNodeSheet({
           {caption ? <span>{caption}</span> : null}
         </p>
       }
-      closeLabel="Close node usage"
+      closeLabel="Close node details"
       onClose={onClose}
     >
-      <UsageBreakdown usage={usage} nodeId={node.id} loading={loading} failed={failed} hasRun={hasRun} />
+      <Tabs defaultValue="resources" className="w-full">
+        <TabsList aria-label="Node details">
+          <TabsTrigger value="resources">Resources</TabsTrigger>
+          <TabsTrigger value="usage">LLM usage</TabsTrigger>
+        </TabsList>
+        <TabsContent value="resources">
+          {resources ? (
+            <section aria-label="Agent, skills, and tools" className="rounded-sm border border-border bg-card p-3">
+              <NodeDetailsList details={resources} />
+            </section>
+          ) : (
+            <p className="text-sm text-muted-foreground">No agent, skill, or tool is assigned to this node.</p>
+          )}
+        </TabsContent>
+        <TabsContent value="usage" className="flex flex-col gap-3">
+          <h3 className="text-sm font-medium">LLM usage</h3>
+          <UsageBreakdown usage={usage} nodeId={node.id} loading={loading} failed={failed} hasRun={hasRun} />
+        </TabsContent>
+      </Tabs>
     </UsageDialog>
   );
 }

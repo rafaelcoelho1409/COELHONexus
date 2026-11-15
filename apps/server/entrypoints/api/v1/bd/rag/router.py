@@ -66,6 +66,20 @@ async def cancel_index(book_id: SafePathSegment, run_id: SafePathSegment) -> dic
         raise HTTPException(status_code = 409, detail = str(error)) from error
 
 
+@router.post(
+    "/{book_id}/runs/{run_id}/index/replay/{node_id}",
+    response_model = schemas.RagIndexStatus,
+    status_code = status.HTTP_202_ACCEPTED,
+)
+async def replay_index_node(book_id: SafePathSegment, run_id: SafePathSegment, node_id: str) -> dict:
+    try:
+        return await domains.bd.rag.service.queue_node_replay(book_id, run_id, node_id)
+    except FileNotFoundError as error:
+        raise HTTPException(status_code = 404, detail = str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code = 409, detail = str(error)) from error
+
+
 @router.delete(
     "/{book_id}/runs/{run_id}/index",
     response_model = schemas.RagWipeResponse,

@@ -258,7 +258,7 @@ describe("IngestionStage — the Pipeline tab", () => {
     await userEvent.click(within(pipeline).getByRole("button", { name: "List" }));
     const nodes = within(pipeline).getByRole("list", { name: "Agentic pipeline nodes" });
     expect(within(nodes).getAllByRole("listitem")).toHaveLength(3);
-    expect(within(nodes).getByRole("button", { name: /Audit pages/ })).toBeInTheDocument();
+    expect(within(nodes).getByRole("button", { name: /Open Audit pages node details/ })).toBeInTheDocument();
     expect(within(pipeline).getByRole("region", { name: "Page progress" })).toBeInTheDocument();
   });
 

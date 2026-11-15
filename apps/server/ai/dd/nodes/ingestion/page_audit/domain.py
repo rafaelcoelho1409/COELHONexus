@@ -95,6 +95,14 @@ def contains_only_complete_inline_links(evidence: str) -> bool:
     return link_count > 0
 
 
+def contains_unescaped_markdown_bracket(evidence: str) -> bool:
+    """Whether the evidence contains bracket syntax that can support a broken-link claim."""
+    return any(
+        char in "[]" and not is_escaped_markdown_character(evidence, index)
+        for index, char in enumerate(evidence)
+    )
+
+
 def is_escaped_markdown_character(text: str, index: int) -> bool:
     """Whether a Markdown punctuation character is escaped by an odd run of backslashes."""
     backslashes = 0
@@ -189,6 +197,32 @@ def is_table_cell_count_claim_contradicted(markdown: str, evidence: str, descrip
         header_width = table_cells(strip_blockquote_prefix(lines[table_start]))
         delimiter_width = table_cells(strip_blockquote_prefix(lines[delimiter_index]))
         return header_width == delimiter_width == table_cells(normalized_line)
+    return False
+
+
+def is_table_closing_pipe_claim_contradicted(markdown: str, evidence: str, description: str) -> bool:
+    """Whether a cited valid table row visibly has the closing pipe it was said to lack."""
+    normalized = description.casefold()
+    claims_missing_closing_pipe = (
+        "closing pipe" in normalized
+        and any(term in normalized for term in ("missing", "lacks", "without", "no closing"))
+    ) or (
+        "closing pipe delimiter" in normalized
+        and any(term in normalized for term in ("missing", "lacks", "without"))
+    )
+    cited = strip_blockquote_prefix(evidence.strip()).strip()
+    if not claims_missing_closing_pipe or not cited or "\n" in cited:
+        return False
+
+    for line in markdown.splitlines():
+        normalized_line = strip_blockquote_prefix(line).strip()
+        if cited not in normalized_line or not is_valid_table_row_context(markdown, cited):
+            continue
+        if (
+            normalized_line.endswith("|")
+            and not is_escaped_markdown_character(normalized_line, len(normalized_line) - 1)
+        ):
+            return True
     return False
 
 
@@ -817,12 +851,20 @@ def _repeat_context_at(markdown: str, offset: int, kind: str) -> tuple | None:
 
     if kind == "model_variant":
         variant_re = re.compile(r"\b(?:instruct(?:ion)?|thinking|reasoning|base|chat|coder|vision|multimodal)\b", re.IGNORECASE)
+        model_size_re = re.compile(
+            r"(?<![a-z0-9])\d+(?:\.\d+)?\s*[kmb](?:\s*-\s*a?\s*\d+(?:\.\d+)?\s*[kmb])?(?![a-z0-9])",
+            re.IGNORECASE,
+        )
         for heading in reversed(headings):
             title = heading.group("title").casefold()
-            variants = tuple(sorted(set(variant_re.findall(title))))
+            variants = tuple(sorted(
+                {value.casefold() for value in variant_re.findall(title)}
+                | {re.sub(r"\s+", "", match.group()).casefold() for match in model_size_re.finditer(title)}
+            ))
             if not variants:
                 continue
             base = variant_re.sub(" ", title)
+            base = model_size_re.sub(" ", base)
             base = re.sub(r"\b(?:guide|run|model|models|tutorial)\b", " ", base)
             base = " ".join(re.findall(r"[a-z0-9]+", base))
             if base:
@@ -954,9 +996,19 @@ def is_repeat_across_distinct_installation_choices(markdown: str, evidence: str,
 def is_table_presentation_only_finding(description: str) -> bool:
     """Whether a table complaint is about optional values or link styling, not Markdown structure."""
     normalized = description.casefold()
-    if "empty cell" in normalized and any(term in normalized for term in (
-        "valid markdown", "may indicate", "inconsistent table structure", "visual inconsistency",
-    )):
+    describes_empty_cells = re.search(
+        r"\bempty\s+(?:[a-z-]+\s+){0,2}(?:cells?|columns?)\b"
+        r"|\b(?:trailing\s+)?empty\s+(?:[a-z-]+\s+){0,2}(?:cells?|columns?)\b"
+        r"|\bpipes?\s+with\s+no\s+content\b"
+        r"|\bno\s+content\s+between\s+(?:the\s+)?pipes?\b",
+        normalized,
+    ) is not None
+    describes_speculative_presentation = any(term in normalized for term in (
+        "valid markdown", "valid gfm", "while valid", "may indicate", "could indicate",
+        "inconsistent table structure", "inconsistent table formatting", "formatting inconsistency",
+        "visual inconsistency", "rendering consistency",
+    ))
+    if describes_empty_cells and describes_speculative_presentation:
         return True
     if re.search(r"\bn/?a\b", normalized) and "download" in normalized and any(term in normalized for term in (
         "badge", "instead of", "downloads column", "download count",
@@ -1242,12 +1294,18 @@ def sanitize_assessment(
         if (
             issue.category == "markdown_formatting"
             and any(term in description for term in ("broken link", "missing closing bracket", "unclosed link"))
-            and contains_only_complete_inline_links(issue.evidence)
         ):
-            warnings.append(
-                f"Discarded finding {issue.issue_id}: every cited bracketed label forms a complete inline Markdown link."
-            )
-            continue
+            link_evidence = "\n".join((issue.evidence, issue.other_evidence or ""))
+            if not contains_unescaped_markdown_bracket(link_evidence):
+                warnings.append(
+                    f"Discarded finding {issue.issue_id}: the cited evidence contains no unescaped Markdown bracket syntax to support the broken-link claim."
+                )
+                continue
+            if contains_only_complete_inline_links(link_evidence):
+                warnings.append(
+                    f"Discarded finding {issue.issue_id}: every cited bracketed label forms a complete inline Markdown link."
+                )
+                continue
         if (
             issue.category in {"markdown_formatting", "malformed_heading", "encoding_artifact"}
             and is_sphinx_definition_list_fragment(markdown, issue.evidence)
@@ -1305,6 +1363,14 @@ def sanitize_assessment(
         ):
             warnings.append(
                 f"Discarded finding {issue.issue_id}: the cited table row has the same cell count as its header."
+            )
+            continue
+        if (
+            issue.category == "markdown_formatting"
+            and is_table_closing_pipe_claim_contradicted(markdown, issue.evidence, issue.description)
+        ):
+            warnings.append(
+                f"Discarded finding {issue.issue_id}: the cited valid GFM row has an unescaped closing pipe."
             )
             continue
         if (

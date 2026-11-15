@@ -5,10 +5,16 @@ import domains, infra
 import domains.ycs.ingestion.extract.task
 from . import service
 
+import asyncio
+import logging
+import uuid
+from typing import Any
+
 from fastapi import APIRouter, HTTPException, Request
 
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 @router.post("/search", response_model = domains.ycs.source.content.schemas.SearchResponse)
@@ -125,6 +131,93 @@ async def rerun_videos_pipeline(extract_id: str, request: Request) -> dict:
         "phases":    phases,
         "video_ids": state["video_ids"],
         "rerun_of":  extract_id,
+    }
+
+
+@router.post("/videos/pipeline/{extract_id}/replay/{node_id}", status_code=202)
+async def replay_videos_pipeline_node(extract_id: str, node_id: str, request: Request) -> dict:
+    """Replay the selected YCS graph node using its durable per-chunk LangGraph checkpoint."""
+    redis = getattr(request.app.state, "redis_aio", None)
+    state = await domains.ycs.ingestion.pipeline_task.service.load_pipeline_state(redis, extract_id)
+    if not state or not state.get("video_ids"):
+        raise HTTPException(status_code=404, detail="Saved pipeline inputs are unavailable for this run")
+    if node_id not in {"playwright", "elasticsearch", "qdrant", "neo4j"}:
+        raise HTTPException(status_code=404, detail="Unknown YCS ingestion node")
+    checkpoint_extract_id = state.get("checkpoint_extract_id") or extract_id
+    try:
+        def read_previous_task() -> tuple[str, Any]:
+            previous = infra.celery.service.get_result(extract_id)
+            return previous.state, previous.result if previous.state == "SUCCESS" else None
+
+        task_state, previous_result = await asyncio.to_thread(read_previous_task)
+        if task_state not in {"SUCCESS", "FAILURE", "REVOKED"}:
+            raise ValueError("wait for the active YCS ingestion task to finish before replaying a node")
+        if redis is not None:
+            current_phases = await asyncio.gather(*(
+                domains.ycs.ingestion.pipeline_task.service.get_phase_progress(redis, extract_id, phase)
+                for phase in ("qdrant", "neo4j")
+            ))
+            if any(phase.get("state") == "PROGRESS" for phase in current_phases):
+                raise ValueError("stop the active YCS ingestion run before replaying a node")
+        await domains.ycs.ingestion.ai.service.validate_replay_checkpoints(
+            state["video_ids"],
+            checkpoint_extract_id,
+            node_id,
+            infra.postgres.service.get_checkpointer(),
+        )
+        await service._raise_if_embedding_migration_needed(state.get("include_transcription", True))
+        replay_extract_id = str(uuid.uuid4())
+        preserved_node_progress = (
+            previous_result.get("node_progress")
+            if isinstance(previous_result, dict) and isinstance(previous_result.get("node_progress"), dict)
+            else None
+        )
+        if node_id == "qdrant":
+            await domains.ycs.ingestion.pipeline_task.service.copy_phase_progress(
+                redis, extract_id, replay_extract_id, "neo4j",
+            )
+        elif node_id == "neo4j":
+            await domains.ycs.ingestion.pipeline_task.service.copy_phase_progress(
+                redis, extract_id, replay_extract_id, "qdrant",
+            )
+        await domains.ycs.ingestion.pipeline_task.service.wipe_video_stage_outputs(
+            state["video_ids"],
+            node_id,
+            getattr(request.app.state, "neo4j_graph", None),
+        )
+        task = domains.ycs.ingestion.extract.task.extract_videos.apply_async(
+            task_id=replay_extract_id,
+            args=(
+                state["video_ids"],
+                state.get("include_transcription", True),
+                state.get("languages"),
+                node_id,
+                checkpoint_extract_id,
+                preserved_node_progress,
+            ),
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except Exception as error:
+        logger.exception("[ycs:pipeline] unable to replay node %s for %s", node_id, extract_id)
+        raise HTTPException(status_code=503, detail="Unable to queue the pipeline node replay") from error
+    phases = {"extract": replay_extract_id, "qdrant": replay_extract_id, "neo4j": replay_extract_id, "invalidate": ""}
+    await domains.ycs.ingestion.pipeline_task.service.persist_pipeline_state(
+        redis,
+        extract_id=replay_extract_id,
+        video_ids=state["video_ids"],
+        include_transcription=state.get("include_transcription", True),
+        languages=state.get("languages"),
+        phases=phases,
+        checkpoint_extract_id=checkpoint_extract_id,
+    )
+    infra.opentelemetry.service.tag_celery_task(task.id)
+    return {
+        "status": "queued",
+        "phases": phases,
+        "video_ids": state["video_ids"],
+        "replay_of": extract_id,
+        "replay_from_node": node_id,
     }
 
 

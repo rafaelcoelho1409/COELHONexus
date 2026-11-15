@@ -143,6 +143,8 @@ async def verify_source_patches(
 
     async def verify_batch(
         batch_candidates: list[agents.schemas.PatchProposal],
+        *,
+        format_retry: bool = False,
     ) -> dict[str, agents.schemas.PatchVerification]:
         def verification_item(proposal: agents.schemas.PatchProposal) -> dict[str, str]:
             target_focus, replacement_focus = domain.patch_verification_focus(proposal)
@@ -163,12 +165,22 @@ async def verify_source_patches(
             "source_sha256": hashlib.sha256(markdown.encode("utf-8")).hexdigest(),
             "patches": [verification_item(proposal) for proposal in batch_candidates],
         }
+        request_text = json.dumps(payload, ensure_ascii = False)
+        if format_retry:
+            expected_ids = [proposal.issue_id for proposal in batch_candidates]
+            request_text += (
+                "\n\nFORMAT RETRY: The previous reply was not machine-readable. Re-check the same attached image and "
+                "return exactly one JSON object with a `verifications` array. Each item must contain `issue_id`, "
+                "`verdict` (`confirmed`, `contradicted`, or `uncertain`), `source_reading`, `line_break_hyphen` "
+                "(boolean), and `reason`. Include these exact issue IDs once each: "
+                f"{json.dumps(expected_ids, ensure_ascii = False)}. Do not add prose or omit any field."
+            )
         with domains.settings.llm_counter.service.llm_context(
             ns = "bd", run_id = run_id, node_id = "text_patch_verifier",
         ):
             # The Rotator receives text and the source image together and routes the multimodal request.
             response = await verifier.ainvoke({"messages": [HumanMessage(content = [
-                {"type": "text", "text": json.dumps(payload, ensure_ascii = False)},
+                {"type": "text", "text": request_text},
                 {"type": "image_url", "image_url": {"url": image_url, "detail": "high"}},
             ])]}, config = {
                 "callbacks": [domains.settings.llm_counter.service.LLMCounterCallback()],
@@ -189,20 +201,39 @@ async def verify_source_patches(
     failed_checks: dict[str, str] = {}
 
     async def verify_with_recovery(batch_candidates: list[agents.schemas.PatchProposal]) -> None:
+        format_error: ValidationError | InvalidVerifierResponse | None = None
         try:
-            checks.update(await verify_batch(batch_candidates))
-        except (ValidationError, InvalidVerifierResponse) as error:
+            for attempt in range(agents.ingestion.text_patch_verifier.params.FORMAT_RETRIES + 1):
+                try:
+                    checks.update(await verify_batch(batch_candidates, format_retry = attempt > 0))
+                    return
+                except (ValidationError, InvalidVerifierResponse) as error:
+                    format_error = error
+                    if attempt < agents.ingestion.text_patch_verifier.params.FORMAT_RETRIES:
+                        logger.warning(
+                            "[bd-page-repair] retrying malformed visual verifier response page=%d batch_size=%d reason=%s",
+                            page_number,
+                            len(batch_candidates),
+                            validation_reason(error) if isinstance(error, ValidationError) else str(error),
+                        )
+        except Exception as error:
+            reason = f"visual verifier failed ({type(error).__name__})"
+            failed_checks.update({proposal.issue_id: reason for proposal in batch_candidates})
+            return
+
+        if format_error is not None:
             # Isolate malformed records so one response cannot discard valid sibling checks.
             if len(batch_candidates) > 1:
                 midpoint = len(batch_candidates) // 2
                 await verify_with_recovery(batch_candidates[:midpoint])
                 await verify_with_recovery(batch_candidates[midpoint:])
                 return
-            reason = validation_reason(error) if isinstance(error, ValidationError) else str(error)
+            reason = (
+                validation_reason(format_error)
+                if isinstance(format_error, ValidationError)
+                else str(format_error)
+            )
             failed_checks[batch_candidates[0].issue_id] = reason
-        except Exception as error:
-            reason = f"visual verifier failed ({type(error).__name__})"
-            failed_checks.update({proposal.issue_id: reason for proposal in batch_candidates})
 
     await verify_with_recovery(candidates)
 

@@ -217,6 +217,31 @@ class Progress:
         )
         await self._flush(force=True)
 
+    async def queue_agentic_replay(self, total: int, node_ids: list[str]) -> None:
+        """Queue a node replay while retaining upstream node status and progress."""
+        await self._restore_state()
+        self._active_stage = "agentic"
+        page_count = max(0, int(total))
+        self._state.update(
+            tier="agentic_normalization",
+            current=0,
+            total=page_count,
+            last_url="",
+            status=params.STATUS_QUEUED,
+        )
+        stages = self._state.setdefault("stages", {})
+        extraction = stages.setdefault("extraction", {})
+        extraction.update(status="done", current=page_count, total=page_count, error=None)
+        agentic = stages.setdefault("agentic", {})
+        agentic.update(status=params.STATUS_QUEUED, current=0, total=page_count, current_node=None, error=None)
+        statuses = agentic.setdefault("node_status", {})
+        node_progress = agentic.setdefault("node_progress", {})
+        for node in node_ids:
+            statuses[node] = "pending"
+            existing = node_progress.setdefault(node, {})
+            existing.update(current=0, total=page_count)
+        await self._flush(force=True)
+
     async def update_total(self, total: int) -> None:
         self._state["total"] = max(0, int(total))
         if self._active_stage is not None:

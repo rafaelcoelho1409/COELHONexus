@@ -25,6 +25,7 @@ class RagIndexManifest(BaseModel):
     vector_status: Literal["pending", "running", "done", "failed", "cancelled"] = "pending"
     graph_status: Literal["pending", "running", "done", "failed", "cancelled"] = "pending"
     current_stage: Literal["preparing", "vector_index", "graph_materialization", "complete"] | None = None
+    replay_from_node: str | None = None
     cancel_requested: bool = False
     attempt: int = Field(ge = 1, strict = True)
     collection_name: NonEmptyText | None = None

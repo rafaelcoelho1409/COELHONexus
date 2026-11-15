@@ -789,7 +789,7 @@ describe("A book being extracted", () => {
     );
     const pipeline = screen.getByRole("region", { name: "Agentic pipeline stages" });
     await userEvent.click(within(pipeline).getByRole("button", { name: "List" }));
-    await userEvent.click(within(pipeline).getByRole("button", { name: /Audit pages/ }));
+    await userEvent.click(within(pipeline).getByRole("button", { name: /Open Audit pages node details/ }));
     const nodeDetails = await screen.findByRole("dialog", { name: "Audit pages" });
     expect(within(nodeDetails).getByRole("region", { name: "What this node does" })).toHaveTextContent(
       "page-auditor agent",
@@ -998,10 +998,10 @@ describe("A book being extracted", () => {
     const pipeline = screen.getByRole("region", { name: "Agentic pipeline stages" });
     expect(within(pipeline).getByRole("button", { name: "Graph" })).toBeInTheDocument();
     await userEvent.click(within(pipeline).getByRole("button", { name: "List" }));
-    const auditNode = within(pipeline).getByRole("button", { name: /Audit pages/ });
+    const auditNode = within(pipeline).getByRole("button", { name: /Open Audit pages node details/ });
     expect(auditNode).toHaveTextContent("pending");
     await userEvent.click(within(pipeline).getByRole("button", { name: "Graph" }));
-    expect(within(pipeline).getByRole("button", { name: /Audit pages/ })).toBeInTheDocument();
+    expect(within(pipeline).getByRole("button", { name: /Open Audit pages node details/ })).toBeInTheDocument();
   });
 
   it("offers LLM usage beside Graph and List even with no Agentic AI run, and says there is none", async () => {

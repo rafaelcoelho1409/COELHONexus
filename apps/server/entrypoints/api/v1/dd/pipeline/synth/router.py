@@ -524,6 +524,54 @@ async def resume_synth(thread_id: str) -> dict:
     }
 
 
+@router.post("/{thread_id:path}/replay/{node_id}")
+async def replay_synth_from_node(thread_id: str, node_id: str) -> dict:
+    """Replay a saved Synth chapter from the selected node and its downstream graph."""
+    slug = domains.dd.pipeline.runtime.dispatch.domain.slug_from_synth_thread_id(thread_id)
+    if not slug or not thread_id.startswith(f"docs-distiller/synth/{slug}/"):
+        raise HTTPException(status_code = 400, detail = "invalid Synth chapter thread id")
+    if node_id not in domains.dd.pipeline.ai.synth.service.node_order():
+        raise HTTPException(status_code = 422, detail = f"unknown Synth node {node_id!r}")
+    try:
+        gate = await domains.dd.pipeline.runtime.dispatch.service.reserve_synth_start(slug, thread_id)
+        if gate is not None:
+            return gate
+        graph = domains.dd.pipeline.ai.synth.service.synth_graph()
+        config = {"configurable": {"thread_id": thread_id}}
+        snapshot = await graph.aget_state(config)
+        if not snapshot.values:
+            await domains.dd.pipeline.runtime.dispatch.service.release_synth_start(slug)
+            raise HTTPException(status_code = 404, detail = "Synth checkpoints were not found")
+        if dict(snapshot.values).get("status") in {"running", "queued"}:
+            await domains.dd.pipeline.runtime.dispatch.service.release_synth_start(slug)
+            raise HTTPException(status_code = 409, detail = "stop the active Synth run before replaying a node")
+        await ai.langgraph.service.checkpoint_before_node(graph, config, node_id)
+        async_result = domains.dd.pipeline.ai.task.replay_synth_from_node.delay(thread_id, node_id)
+        infra.opentelemetry.service.tag_celery_task(async_result.id)
+        await domains.dd.pipeline.runtime.progress.service.emit_progress(
+            thread_id,
+            "synth",
+            "resumed",
+            next_nodes = [node_id],
+        )
+    except HTTPException:
+        raise
+    except ValueError as error:
+        await domains.dd.pipeline.runtime.dispatch.service.release_synth_start(slug)
+        raise HTTPException(status_code = 409, detail = str(error)) from error
+    except Exception as error:
+        await domains.dd.pipeline.runtime.dispatch.service.release_synth_start(slug)
+        logger.exception("[synth] %s: node replay dispatch failed", thread_id)
+        raise HTTPException(status_code = 503, detail = "could not queue Synth node replay") from error
+
+    return {
+        "thread_id": thread_id,
+        "node_id": node_id,
+        "status": "queued",
+        "celery_task_id": async_result.id,
+    }
+
+
 @router.post("/{thread_id:path}/cancel")
 async def cancel_synth(thread_id: str) -> dict:
     """A STUDY thread cancel must propagate to each in-flight per-chapter

@@ -51,6 +51,7 @@ export function PlannerBoard({
             threadId={planner.threadId}
             live={planner.running}
             embedded
+            onPlayNode={planner.replayNode}
             caption={
               planner.views.length > 0
                 ? stageCaption(planner.views, planner.progress, planner.next)
@@ -143,6 +144,7 @@ export function PlannerGraphPanel({ planner }: { planner: PlannerRunController }
         threadId={planner.threadId}
         live={planner.running}
         embedded
+        onPlayNode={planner.replayNode}
         caption={
           planner.views.length > 0
             ? stageCaption(planner.views, planner.progress, planner.next)

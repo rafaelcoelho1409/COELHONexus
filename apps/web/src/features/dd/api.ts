@@ -238,6 +238,34 @@ export async function resumeAgenticRun(slug: string, runId: string): Promise<Sta
   return startRunResponseSchema.parse(result.data);
 }
 
+/** Replay one saved graph node and its descendants from the latest completed checkpoint. */
+export async function replayAgenticRunNode(slug: string, runId: string, nodeId: string): Promise<void> {
+  await client.request({
+    method: "POST",
+    url: "/api/v1/dd/ingestion/{slug}/agentic/runs/{run_id}/replay/{node_id}",
+    path: { slug, run_id: runId, node_id: nodeId },
+    throwOnError: true,
+  });
+}
+
+export async function replayPlannerNode(threadId: string, nodeId: string): Promise<void> {
+  await client.request({
+    method: "POST",
+    url: "/api/v1/dd/pipeline/planner/{thread_id}/replay/{node_id}",
+    path: { thread_id: threadId, node_id: nodeId },
+    throwOnError: true,
+  });
+}
+
+export async function replaySynthNode(threadId: string, nodeId: string): Promise<void> {
+  await client.request({
+    method: "POST",
+    url: "/api/v1/dd/pipeline/synth/{thread_id}/replay/{node_id}",
+    path: { thread_id: threadId, node_id: nodeId },
+    throwOnError: true,
+  });
+}
+
 /** Wipe AI artifacts while preserving the extracted page set. */
 export async function wipeAgenticRun(slug: string, runId: string): Promise<AgenticWipeResponse> {
   const result = await deleteDdIngestionSlugAgenticRunsRunId({

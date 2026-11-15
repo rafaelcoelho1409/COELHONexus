@@ -11,6 +11,7 @@ PageReader = Callable[[str], str | None | Awaitable[str | None]]
 SourcePageImageReader = Callable[[int], bytes | None | Awaitable[bytes | None]]
 ArtifactWriter = Callable[[str, str, str], Any]
 ArtifactExists = Callable[[str], Awaitable[bool]]
+CancelCheck = Callable[[], Awaitable[bool]]
 
 
 class PageReference(TypedDict):
@@ -94,6 +95,7 @@ class IngestionDependencies:
     content_classifier: nodes.ingestion.content_classification.service.ContentClassifier
     contents_reconciler: nodes.ingestion.reconcile_contents.service.ContentsReconciler
     progress_callback: graphs.service.ProgressReporter | None = None
+    cancel_check: CancelCheck | None = None
     finding_verifier: Any | None = None
     patch_verifier: Any | None = None
     read_source_page_image: SourcePageImageReader | None = None

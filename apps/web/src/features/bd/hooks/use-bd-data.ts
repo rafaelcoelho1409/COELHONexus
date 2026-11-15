@@ -21,8 +21,8 @@ import {
 
 import {
   cancelAgenticRun,
-  fetchAgenticGraph,
   fetchProcessedBook,
+  replayAgenticRunNode,
   resumeAgenticRun,
   startAgenticRun,
   uploadBook,
@@ -45,17 +45,6 @@ import {
 } from "../entities";
 import { LIBRARY_REFRESH_MS, SNAPSHOT_REFRESH_MS } from "../params";
 
-/** GET /bd/ingestion/agentic-graph — Mermaid source from the compiled LangGraph. */
-export function useAgenticGraph(enabled: boolean) {
-  return useQuery({
-    queryKey: ["bd", "ingestion", "agentic-graph"],
-    queryFn: fetchAgenticGraph,
-    enabled,
-    retry: false,
-    staleTime: 0,
-  });
-}
-
 /** GET /bd/ingestion — the library, re-read while any book is being extracted. */
 export function useLibrary() {
   return useQuery({
@@ -70,7 +59,8 @@ export function useLibrary() {
 export function useSnapshot(bookId: string) {
   return useQuery({
     ...getBdIngestionBookIdOptions({ path: { book_id: bookId } }),
-    retry: false,
+    // A transient object-store/database 5xx must not strand the whole book view on its error screen.
+    retry: 2,
     select: (data): BookSnapshot => ({
       ...data,
       agentic: zAgenticStatus(data),
@@ -240,6 +230,16 @@ export function useResumeAgenticRun() {
   return useMutation({
     mutationFn: ({ bookId, agenticRunId }: { bookId: string; agenticRunId: string }) =>
       resumeAgenticRun(bookId, agenticRunId),
+    onSuccess: (_result, { bookId }) => refresh(bookId),
+    onError: (_error, { bookId }) => refresh(bookId),
+  });
+}
+
+export function useReplayAgenticRunNode() {
+  const refresh = useRefreshBook();
+  return useMutation({
+    mutationFn: ({ bookId, agenticRunId, nodeId }: { bookId: string; agenticRunId: string; nodeId: string }) =>
+      replayAgenticRunNode(bookId, agenticRunId, nodeId),
     onSuccess: (_result, { bookId }) => refresh(bookId),
     onError: (_error, { bookId }) => refresh(bookId),
   });

@@ -55,7 +55,11 @@ export const AGENTIC_NODE_DETAILS: Record<AgenticNodeId, AgenticNodeDetails> = {
     reads: ["extracted pages"],
     writes: ["page assessments"],
     llm: "Page auditor agent, one call per page, retried before a page is marked unverified.",
-    resources: { agents: ["page_auditor", "finding_verifier"], skills: [], tools: [] },
+    resources: {
+      agents: ["page_auditor", "finding_verifier"],
+      skills: ["audit-docling-page"],
+      tools: ["read_file"],
+    },
   },
   plan_repairs: {
     title: "Plan repairs",
@@ -85,7 +89,11 @@ export const AGENTIC_NODE_DETAILS: Record<AgenticNodeId, AgenticNodeDetails> = {
     reads: ["selected extracted pages", "page assessments", "repair work items", "original PDF page images"],
     writes: ["AI-processed pages", "patch proposals"],
     llm: "Text-repair and structure-repair agents propose changes; a source-page verifier checks eligible text proposals against the original PDF.",
-    resources: { agents: ["text_repair", "structure_repair", "text_patch_verifier"], skills: [], tools: [] },
+    resources: {
+      agents: ["text_repair", "structure_repair", "text_patch_verifier"],
+      skills: ["propose-conservative-text-repair", "repair-markdown-structure"],
+      tools: ["read_file", "check_patches", "book_term_frequency", "adjacent_page_edges"],
+    },
   },
   normalize_metadata: {
     title: "Normalize metadata",
@@ -98,7 +106,11 @@ export const AGENTIC_NODE_DETAILS: Record<AgenticNodeId, AgenticNodeDetails> = {
     reads: ["first extracted pages", "file name"],
     writes: ["book metadata"],
     llm: "Metadata normalizer agent, one call.",
-    resources: { agents: ["metadata_normalizer"], skills: [], tools: [] },
+    resources: {
+      agents: ["metadata_normalizer"],
+      skills: ["normalize-book-metadata"],
+      tools: ["read_file"],
+    },
   },
   classify_content: {
     title: "Select Distill pages",

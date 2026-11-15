@@ -92,6 +92,9 @@ def dispatch_to_stores(
     extract_id = state.get("extract_id")
     if not video_ids or not extract_id:
         return "done"
+    replay_node = state.get("replay_node")
+    if replay_node in {"qdrant", "neo4j"}:
+        return replay_node
     return ["qdrant", "neo4j"]
 
 

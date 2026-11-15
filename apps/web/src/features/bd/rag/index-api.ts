@@ -1,4 +1,5 @@
 import {
+  client,
   deleteBdRagBookIdRunsRunIdIndex,
   getBdRagBookIdRunsRunIdIndex,
   getBdRagCapabilities,
@@ -19,6 +20,16 @@ export async function getRagIndex(bookId: string, runId: string) {
 export async function startRagIndex(bookId: string, runId: string) {
   const result = await postBdRagBookIdRunsRunIdIndex({
     path: { book_id: bookId, run_id: runId },
+    throwOnError: true,
+  });
+  return ragIndexStatusSchema.parse(result.data);
+}
+
+export async function replayRagIndexNode(bookId: string, runId: string, nodeId: string) {
+  const result = await client.request({
+    method: "POST",
+    url: "/api/v1/bd/rag/{book_id}/runs/{run_id}/index/replay/{node_id}",
+    path: { book_id: bookId, run_id: runId, node_id: nodeId },
     throwOnError: true,
   });
   return ragIndexStatusSchema.parse(result.data);

@@ -70,6 +70,7 @@ export function SynthRunPanel({
             threadId={synth.canvasThreadId}
             live={synth.running}
             embedded
+            onPlayNode={synth.replayNode}
             caption={nodeBoardCaption(synth)}
           />
           {synth.error ? (
@@ -161,6 +162,7 @@ export function SynthGraphPanel({ synth }: { synth: SynthRunController }) {
         threadId={synth.canvasThreadId}
         live={synth.running}
         embedded
+        onPlayNode={synth.replayNode}
         caption={nodeBoardCaption(synth)}
       />
     </section>

@@ -186,6 +186,34 @@ async def write_current_pointer(
     )
 
 
+async def clear_manifest_for_replay(
+    book_id: str,
+    agentic_run_id: str,
+    revision: int,
+    storage: infra.minio.service.MinIOStorage,
+) -> None:
+    """Remove only the reconciled manifest for a replay, preserving its candidate input."""
+    if type(revision) is not int or revision < 1:
+        raise ValueError("processed-book revision must be a positive integer")
+
+    manifest_key = domains.bd.ingestion.storage.keys.agentic_processed_book_manifest_key(
+        book_id,
+        agentic_run_id,
+        revision,
+    )
+    pointer_key = domains.bd.ingestion.storage.keys.agentic_processed_book_current_key(
+        book_id,
+        agentic_run_id,
+    )
+    await storage.delete(manifest_key)
+
+    if not await storage.exists(pointer_key):
+        return
+    pointer = json.loads(await storage.read_text(pointer_key))
+    if isinstance(pointer, dict) and pointer.get("key") == manifest_key:
+        await storage.delete(pointer_key)
+
+
 async def publish_manifest(
     candidate: schemas.ProcessedBookCandidate,
     contents: list[dict[str, Any]],

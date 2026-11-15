@@ -10,8 +10,9 @@ import time
 import uuid
 from typing import Any
 
-import domains
+import ai, domains
 import infra
+from langgraph.types import Overwrite
 
 from . import keys, params, progress, schemas, versions
 
@@ -297,6 +298,7 @@ async def queue_resume(book_id: str, run_id: str) -> dict[str, Any]:
                 or (unfinished_nodes[0] if unfinished_nodes else "prepare_units")
             )
         manifest["status"] = "queued"
+        manifest["replay_from_node"] = None
         manifest["workflow_version"] = versions.WORKFLOW_VERSION
         manifest["prompt_version"] = versions.PROMPT_VERSION
         manifest["finished_at"] = None
@@ -307,6 +309,94 @@ async def queue_resume(book_id: str, run_id: str) -> dict[str, Any]:
             if status in {"running", "failed"}:
                 manifest["progress"]["node_status"][node] = "pending"
         return await _write_manifest(infra.minio.service.get_storage(), manifest)
+
+
+async def queue_node_replay(book_id: str, run_id: str, node_id: str) -> dict[str, Any]:
+    """Queue a replay from ``node_id``, deleting only that node's saved outputs and later outputs."""
+    if node_id not in params.GRAPH_NODES:
+        raise ValueError(f"unknown Distill node {node_id!r}")
+    storage = infra.minio.service.get_storage()
+    async with (
+        infra.redis.service.client() as redis,
+        redis.lock(
+            domains.bd.ingestion.ai.progress.keys.book_mutation_lock_key(book_id),
+            timeout = 120,
+            blocking_timeout = 30,
+        ),
+    ):
+        manifest = await read_run(book_id, run_id, storage = storage)
+        if manifest is None:
+            raise FileNotFoundError(f"Distill run {run_id} was not found")
+        if manifest["status"] in {"queued", "running"}:
+            raise ValueError("stop the Distill run before replaying a node")
+        active_runs = [run for run in await list_runs(book_id, storage = storage) if run["status"] in {"queued", "running"}]
+        if active_runs:
+            raise ValueError("stop the active Distill run before replaying a node")
+        rag_index = await domains.bd.rag.service.read_index(book_id, run_id, storage = storage)
+        if rag_index is not None and rag_index.get("status") in {"queued", "running"}:
+            raise ValueError("stop Agentic RAG before replaying Distill")
+
+        checkpointer = infra.postgres.service.get_checkpointer()
+        dependencies = ai.bd.graphs.distill.entities.DistillDependencies(
+            storage = storage,
+            extractor = ai.bd.agents.distill.learning_extractor.agent.learning_extractor(),
+            controls = ai.bd.graphs.distill.entities.DistillRunControls(
+                chapter_synthesis_semaphore = asyncio.Semaphore(params.CHAPTER_SYNTHESIS_CONCURRENCY),
+            ),
+        )
+        graph = ai.bd.graphs.distill.graphs.distill_graph(dependencies, checkpointer = checkpointer)
+        graph_config = {"configurable": {
+            "thread_id": f"bd-distill:{book_id}:{manifest['extraction_run_id']}:{run_id}",
+        }}
+        await ai.langgraph.service.checkpoint_before_node(graph, graph_config, node_id)
+        await progress.service.clear_cancel(book_id, run_id)
+
+        prefix = keys.run_prefix(book_id, run_id)
+        if node_id in {"prepare_units", "extract_unit"}:
+            await storage.delete_prefix(prefix + "learning-units/")
+        if node_id in {"prepare_units", "extract_unit", "prepare_chapters", "synthesize_chapter"}:
+            await storage.delete_prefix(prefix + "chapters/")
+        if node_id in {"prepare_units", "extract_unit", "prepare_chapters", "synthesize_chapter", "synthesize_book"}:
+            await storage.delete_prefix(prefix + "synthesis/")
+        await storage.delete_prefix(prefix + "report.json")
+        await storage.delete_prefix(prefix + "report.html")
+        await storage.delete_prefix(prefix + "report.pdf")
+
+        downstream = set(params.REPLAY_DESCENDANTS[node_id])
+        progress_state = manifest["progress"]
+        for downstream_node in downstream:
+            progress_state["node_status"][downstream_node] = "pending"
+        progress_state["current_node"] = None
+        progress_state["completed_units"] = len(await storage.list(prefix + "learning-units/"))
+        progress_state["completed_chapters"] = len(await storage.list(prefix + "chapters/"))
+        manifest.update(
+            status = "queued",
+            resume_from_node = None,
+            replay_from_node = node_id,
+            finished_at = None,
+            error = None,
+            report_key = None,
+            report_sha256 = None,
+            html_key = None,
+            html_sha256 = None,
+            pdf_key = None,
+            pdf_sha256 = None,
+            covered_page_count = 0,
+            uncovered_pages = [],
+            review_required = True,
+            structural_quality = None,
+        )
+        manifest = await _write_manifest(storage, manifest)
+        await progress.service.clear(book_id, run_id)
+        await progress.service.emit(
+            book_id,
+            run_id,
+            "run_queued",
+            status = "queued",
+            progress = manifest["progress"],
+            replay_from_node = node_id,
+        )
+        return manifest
 
 
 async def request_cancel(book_id: str, run_id: str) -> dict[str, Any]:
@@ -758,39 +848,87 @@ async def run_distill(
             "configurable": {"thread_id": f"bd-distill:{book_id}:{manifest['extraction_run_id']}:{run_id}"},
             "max_concurrency": params.GRAPH_CONCURRENCY,
         }
+        replay_from_node = manifest.get("replay_from_node")
         completed_checkpoint_state = None
         if checkpointer is not None:
-            snapshot = await graph.aget_state(graph_config)
-            if snapshot.next:
+            if replay_from_node in params.GRAPH_NODES:
+                replay_config = await ai.langgraph.service.checkpoint_before_node(
+                    graph,
+                    graph_config,
+                    replay_from_node,
+                )
+                reset_patch: dict[str, Any] = {
+                    "report_key": None,
+                    "report_sha256": None,
+                    "html_key": None,
+                    "html_sha256": None,
+                    "covered_page_count": 0,
+                    "uncovered_pages": [],
+                    "review_required": True,
+                    "structural_quality": None,
+                }
+                if replay_from_node != "publish_report":
+                    reset_patch["book_synthesis_key"] = None
+                if replay_from_node == "prepare_units":
+                    reset_patch.update(
+                        unit_refs = [],
+                        completed_units = Overwrite([]),
+                        chapter_refs = [],
+                        completed_chapters = Overwrite([]),
+                    )
+                elif replay_from_node == "extract_unit":
+                    reset_patch.update(
+                        completed_units = Overwrite([]),
+                        chapter_refs = [],
+                        completed_chapters = Overwrite([]),
+                    )
+                elif replay_from_node == "prepare_chapters":
+                    reset_patch.update(chapter_refs = [], completed_chapters = Overwrite([]))
+                elif replay_from_node == "synthesize_chapter":
+                    reset_patch["completed_chapters"] = Overwrite([])
+                replay_config = await graph.aupdate_state(replay_config, reset_patch)
+                graph_config = {
+                    **graph_config,
+                    "configurable": replay_config["configurable"],
+                }
                 graph_input = None
                 logger.info(
-                    "[bd-distill] resuming LangGraph checkpoint run=%s pending_nodes=%s",
-                    run_id,
-                    snapshot.next,
-                )
-            elif manifest.get("resume_from_node") == "publish_report":
-                required_resume_fields = (
-                    "book_id",
-                    "run_id",
-                    "extraction_run_id",
-                    "ingestion_ai_run_id",
-                    "book_synthesis_key",
-                    "source_pages",
-                    "completed_units",
-                    "completed_chapters",
-                )
-                if not isinstance(snapshot.values, dict) or any(
-                    field not in snapshot.values for field in required_resume_fields
-                ):
-                    raise ValueError("the completed Distill checkpoint cannot resume report publication")
-                completed_checkpoint_state = snapshot.values
-                graph_input = None
-                logger.info(
-                    "[bd-distill] rerunning report publication from completed checkpoint run=%s",
+                    "[bd-distill] replaying graph from node=%s run=%s",
+                    replay_from_node,
                     run_id,
                 )
             else:
-                graph_input = initial_state
+                snapshot = await graph.aget_state(graph_config)
+                if snapshot.next:
+                    graph_input = None
+                    logger.info(
+                        "[bd-distill] resuming LangGraph checkpoint run=%s pending_nodes=%s",
+                        run_id,
+                        snapshot.next,
+                    )
+                elif manifest.get("resume_from_node") == "publish_report":
+                    required_resume_fields = (
+                        "book_id",
+                        "run_id",
+                        "extraction_run_id",
+                        "ingestion_ai_run_id",
+                        "book_synthesis_key",
+                        "source_pages",
+                        "completed_units",
+                        "completed_chapters",
+                    )
+                    if not isinstance(snapshot.values, dict) or any(
+                        field not in snapshot.values for field in required_resume_fields
+                    ):
+                        raise ValueError("the completed Distill checkpoint cannot resume report publication")
+                    completed_checkpoint_state = snapshot.values
+                    graph_input = None
+                    logger.info(
+                        "[bd-distill] rerunning report publication from completed checkpoint run=%s",
+                        run_id,
+                    )
+                else:
+                    graph_input = initial_state
         else:
             graph_input = initial_state
         resume_from_node = manifest.get("resume_from_node")
@@ -839,6 +977,7 @@ async def run_distill(
                 raise ValueError(f"the {key_field} artifact failed its publication integrity check")
         manifest.update(
             status = "done",
+            replay_from_node = None,
             finished_at = max(time.time(), manifest["created_at"]),
             error = None,
             report_key = result["report_key"],

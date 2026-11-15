@@ -5,7 +5,7 @@ import { ChartNoAxesColumn, X } from "lucide-react";
 import dynamic from "next/dynamic";
 import { useState } from "react";
 import { apiErrorMessage } from "@/shared/lib/api-error";
-import { MermaidTopology } from "@/shared/markdown/mermaid-topology";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/shared/ui/tabs";
 import { ActionButton } from "../../components/action-button";
 import {
   AgenticNodeDetailsList,
@@ -20,7 +20,6 @@ import { fetchPipelineUsage } from "../../rag/api";
 import { PipelineUsageBreakdown, PipelineUsageSheet } from "../../rag/components/pipeline-usage-sheet";
 import { SideSheet } from "../../rag/components/side-sheet";
 import {
-  DISTILL_LANGGRAPH_TOPOLOGY,
   DISTILL_NODES,
   DISTILL_USAGE_COUNTERS,
   distillBoardCaption,
@@ -44,7 +43,6 @@ const AgenticFlow = dynamic(
 const MODES = [
   { id: "graph", label: "Graph" },
   { id: "list", label: "List" },
-  { id: "langgraph", label: "LangGraph" },
 ] as const;
 
 /** Distill's Agents view uses the same graph/list and node-detail pattern as BD's other agent pipelines. */
@@ -56,6 +54,7 @@ export function DistillNodeBoard({
   runId,
   progressOpen,
   onProgressOpenChange,
+  onPlayNode,
 }: {
   bookId: string;
   status: DistillRun["status"] | null;
@@ -64,6 +63,7 @@ export function DistillNodeBoard({
   runId: string | null;
   progressOpen: boolean;
   onProgressOpenChange: (open: boolean) => void;
+  onPlayNode?: (nodeId: string) => void;
 }) {
   const [mode, setMode] = useState<(typeof MODES)[number]["id"]>("graph");
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
@@ -113,20 +113,29 @@ export function DistillNodeBoard({
 
           <div className="min-w-0 overflow-hidden rounded-sm border border-border bg-background">
             {mode === "graph" ? (
-              <AgenticFlow views={views} onOpenNode={setSelectedNodeId} ariaLabel="Distill pipeline graph" />
+              <AgenticFlow
+                views={views}
+                onOpenNode={setSelectedNodeId}
+                onPlayNode={onPlayNode}
+                ariaLabel="Distill pipeline graph"
+              />
             ) : mode === "list" ? (
               <div className="p-3">
-                <AgenticNodeList rows={views} onOpen={setSelectedNodeId} label="Distill pipeline nodes" />
+                <AgenticNodeList
+                  rows={views}
+                  onOpen={setSelectedNodeId}
+                  onPlay={onPlayNode}
+                  label="Distill pipeline nodes"
+                />
               </div>
-            ) : (
-              <MermaidTopology title="Distill pipeline" source={DISTILL_LANGGRAPH_TOPOLOGY} />
-            )}
+            ) : null}
           </div>
         </div>
       </section>
 
       {selectedNode ? (
         <DistillNodeSheet
+          key={selectedNode.id}
           bookId={bookId}
           node={selectedNode}
           runId={runId}
@@ -320,17 +329,27 @@ function DistillNodeSheet({
       onClose={onClose}
     >
       <div className="flex flex-col gap-5">
-        <section aria-label="What this stage does" className="flex flex-col gap-3">
-          <p className="text-sm">{node.detail}</p>
-          <p className="text-sm text-muted-foreground">{detail}</p>
-          <AgenticNodeDetailsList resources={node.resources} />
-          <div className="grid grid-cols-[auto_1fr] items-baseline gap-x-3 gap-y-2 text-xs text-muted-foreground">
-            <span>Reads</span>
-            <AgenticPills items={node.reads} />
-            <span>Writes</span>
-            <AgenticPills items={node.writes} />
-          </div>
-        </section>
+        <Tabs defaultValue="overview" className="w-full">
+          <TabsList aria-label="Node details">
+            <TabsTrigger value="overview">Overview</TabsTrigger>
+            <TabsTrigger value="resources">Resources</TabsTrigger>
+          </TabsList>
+          <TabsContent value="overview" className="flex flex-col gap-3 pt-4">
+            <p className="text-sm">{node.detail}</p>
+            <p className="text-sm text-muted-foreground">{detail}</p>
+            <div className="grid grid-cols-[auto_1fr] items-baseline gap-x-3 gap-y-2 text-xs text-muted-foreground">
+              <span>Reads</span>
+              <AgenticPills items={node.reads} />
+              <span>Writes</span>
+              <AgenticPills items={node.writes} />
+            </div>
+          </TabsContent>
+          <TabsContent value="resources" className="pt-4">
+            <section aria-label="Agent, skills, and tools">
+              <AgenticNodeDetailsList resources={node.resources} />
+            </section>
+          </TabsContent>
+        </Tabs>
         <section aria-label="Node LLM usage" className="flex flex-col gap-3">
           <div>
             <h3 className="text-sm font-medium">LLM usage</h3>

@@ -5,10 +5,10 @@
  * bars are `progressbar`s with a name and a value; they are not live regions, so a poll every 0.7 s says nothing to a screen
  * reader — the panel's one status line announces the transitions. */
 
+import { Play } from "lucide-react";
 import type { JSX } from "react";
 
 import { STATUS_WORD_LABEL, statusWord } from "../domain";
-import { IngestionNodeResources } from "./ingestion-node-resources";
 import { IngestionStatusGlyph } from "./ingestion-status-glyph";
 import { StatusBadge } from "./status-badge";
 
@@ -59,9 +59,11 @@ export function StepProgress({ step }: { step: Step }): JSX.Element {
 export function PipelineSteps({
   steps,
   onOpen,
+  onPlay,
 }: {
   steps: ReadonlyArray<Step>;
   onOpen: (step: Step) => void;
+  onPlay?: (step: Step) => void;
 }): JSX.Element {
   return (
     <ol aria-label="Pipeline phases" className="flex flex-col gap-1.5">
@@ -70,11 +72,8 @@ export function PipelineSteps({
         const wordLabel = STATUS_WORD_LABEL[word];
         return (
           <li key={step.key} data-node={step.key} data-status={word}>
-            <button
-              type="button"
-              onClick={() => onOpen(step)}
-              aria-haspopup="dialog"
-              className={`block min-h-9 w-full rounded-sm border bg-card px-3 py-2 text-left hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring ${
+            <div
+              className={`flex min-w-0 items-stretch gap-1.5 rounded-sm border bg-card p-1.5 ${
                 word === "running"
                   ? "border-running"
                   : word === "failed"
@@ -84,24 +83,45 @@ export function PipelineSteps({
                       : "border-border"
               }`}
             >
-              <span className="flex items-center justify-between gap-3">
-                <span className="flex min-w-0 items-center gap-1.5">
-                  <IngestionStatusGlyph status={word} />
-                  <span className="min-w-0 text-sm">{step.title}</span>
+              <button
+                type="button"
+                onClick={() => onOpen(step)}
+                aria-haspopup="dialog"
+                aria-label={`Open ${step.title} node details`}
+                className="min-h-9 min-w-0 flex-1 rounded-sm px-1.5 py-1 text-left hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring"
+              >
+                <span className="flex items-center justify-between gap-3">
+                  <span className="flex min-w-0 items-center gap-1.5">
+                    <IngestionStatusGlyph status={word} />
+                    <span className="min-w-0 text-sm">{step.title}</span>
+                  </span>
+                  <StatusBadge tone={word} label={wordLabel} className="shrink-0" />
                 </span>
-                <StatusBadge tone={word} label={wordLabel} className="shrink-0" />
-              </span>
-              <StepProgress step={step} />
-              {step.view.label !== wordLabel ? (
-                <span className="mt-1 block font-mono text-xs break-words text-muted-foreground">
-                  {step.view.label}
+                <StepProgress step={step} />
+                {step.view.label !== wordLabel ? (
+                  <span className="mt-1 block font-mono text-xs break-words text-muted-foreground">
+                    {step.view.label}
+                  </span>
+                ) : null}
+                <span className="mt-1 block text-xs break-words text-muted-foreground">
+                  {step.view.hint ?? step.defaultHint}
                 </span>
+              </button>
+              {onPlay ? (
+                <button
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onPlay(step);
+                  }}
+                  aria-label={`Replay from ${step.title}`}
+                  title={`Replay from ${step.title} and clear downstream results`}
+                  className="inline-flex size-9 shrink-0 items-center justify-center self-start rounded-sm text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"
+                >
+                  <Play aria-hidden className="size-4" />
+                </button>
               ) : null}
-              <span className="mt-1 block text-xs break-words text-muted-foreground">
-                {step.view.hint ?? step.defaultHint}
-              </span>
-              <IngestionNodeResources nodeId={step.key} />
-            </button>
+            </div>
           </li>
         );
       })}

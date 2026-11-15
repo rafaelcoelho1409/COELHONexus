@@ -478,3 +478,72 @@ The replay completed in 7.5 seconds with one successful auditor response and no 
 The candidate-only adjustment was insufficient, so the local pipeline now deterministically records an exact same-table duplicate as a low-severity, review-only `duplicate_section`. It does not infer a formatting defect, change the source, or make duplicates eligible for repair. The page-agent verification script passes with checks for this behavior and candidate boundaries. This change postdates r8 and requires manual redeploy.
 
 Tier 2 and Tier 4 remain converged for the frozen r3 snapshots. Tier 3 remains open until page 104 passes under the deterministic behavior with identical source/input/output hashes and zero accepted patches; Tier 1 remains open pending the broader full-run assessment. After redeployment, verify the auditor fingerprint and replay page 104 only as `dd-replay-2026-11-14-r9`. Tier 5 remains excluded.
+
+## DeepAgents targeted replay `dd-replay-2026-11-14-r9` — 2026-11-14
+
+After redeployment, live provenance matched local auditor/evaluator code: fingerprint `c57bfe5f601648799540bf5dfa67b632d652ff19e142d073a46bdbb515a69c08`; auditor `cd9e759d4078e2067cf56983bcbad2845705635e4d59ad93a0f49a9b7caf254a`; evaluator `9cc4f395e97a7a738e87476a4cea4235e0864797e0babeb04aae8eb0f4d6212a`; page-auditor prompt `fde5d62e553593fc59ce1b3f8c2dba19fde8742454ee516a61bdbbafff1612b54`. Replay `981cc41a05b0489f98e36f8dd81d8038` used the frozen DeepAgents r3 source run `3324037265224d729cc08baf0355a013`, page 104, and `publishes: false`.
+
+| Pages | Duration | Audit | Findings | Repairs | Result |
+|---:|---:|---|---|---|---|
+| 1 | 40.4s | Completed; 1 successful auditor call, 0 provider errors | 9 medium `duplicate_section`; no forbidden N/A or short-row claims | Not needed; 0 accepted patches | Deterministic gate passed; no publication |
+
+All nine findings correspond to exact repeated body rows inside one valid GFM table. Source, normalized input and output SHA-256 all match: `78b58b1f2d3a5168f7ba776b9b3ba5257e4fcfd413cee439715409d0c329d930`. The source snapshot hash is `bfdb9fea01d56946037e759f655b65879f13aa60b75e3f3f28e62adf0bc7d036`. No content was changed. The fixture evaluator retains `human_review_required: true` and `disposition: needs_human_review` as its rubric-level status; the documented review disposition is to preserve the upstream rows and leave possible editorial cleanup to the source owner. Duplicate findings remain ineligible for automatic repair.
+
+**Convergence status at r9 (superseded by r10 below):** together with the r3 full DeepAgents run and r6 passing replays for its other flagged pages, Tier 3 met the acceptance bar for that frozen r3 snapshot. Tiers 2 and 4 also remained converged for their r3 snapshots. Tier 1 remained open because its full run found issues on 47 pages and only two targeted pages had been assessed. This did not establish convergence for newer source snapshots or replace fresh extraction checks when the source changes. Tier 5 remains excluded.
+
+## All-tier targeted replay round `dd-replay-2026-11-14-r10` — 2026-11-14
+
+The deployed fingerprint was `c57bfe5f601648799540bf5dfa67b632d652ff19e142d073a46bdbb515a69c08`; its auditor and evaluator hashes matched local code. Four sequential fixed-input jobs replayed 19 pages from `dd-refine-2026-11-14-r3`. All reports set `publishes: false`; source, normalized-input and output hashes matched for every selected page. The 19 audits completed without provider errors or unavailable audit/repair stages. No patches were accepted or rejected.
+
+| Tier | Replay | Pages | Result |
+|---|---|---:|---|
+| 2 — Optimum | `04f5c6d63aa2442e986dd88d290de6f2` | 1 | Passed in 7.8s, zero findings. Source/input/output SHA-256: `601c5e67d752f1cfc67b857606e59633e5e2dc97a79c2d67ecf128286fb53211`. |
+| 4 — Asyncio | `44a8d57c3e27488a94f6ae3fe6e136bd` | 7 | Passed in 32.1s; zero findings and seven successful audits. |
+| 3 — DeepAgents | `985a8e51aa1c411ca3193c3283e23df4` | 9 | Completed in 120.0s; 10 low findings on pages 80 and 104. Page 104's nine exact duplicate table rows are preserved and reported as review-only `duplicate_section` findings. Page 80's one `markdown_formatting` claim said its blockquote contained broken link syntax, but the cited evidence was plain prose with no Markdown brackets. The gate also failed because page 27's model audit omitted minor source typos required by an overly strict category expectation. |
+| 1 — Unsloth | `b5bb268028244a90ade16464169399fb` | 2 | Passed in 7.1s; page 22 correctly had `repair_status: not_needed`; page 197 reported one low duplicate within the same conda/mamba environment workflow, with no patch. |
+
+### R10 assessment and next checkpoint
+
+I added a generic evidence check for broken-link findings: the sanitizer now discards the claim when both cited evidence fields lack unescaped Markdown brackets, while retaining the existing check for complete inline links and leaving malformed bracket evidence eligible for review. The DeepAgents page-80 fixture now forbids the observed description. The page-27 fixture no longer requires a stochastic low-impact typo finding on every audit; it still requires a completed audit and zero accepted repairs, and its rubric records the preserve-and-refer-to-source-owner disposition. This is not a claim of perfect typo recall.
+
+Tier 2 and Tier 4 remain converged for the frozen r3 snapshots. Tier 3 is open until the generic evidence fix passes its replay. Tier 1 remains open because the full r3 run had 47 issue-bearing pages and only two have targeted replay fixtures. After redeployment, confirm component and prompt hashes and rerun the four tier sets as r11; broaden Tier 1's fixture coverage across distinct failure classes before fresh full-tier acceptance. Tier 5 remains out of scope.
+
+## All-tier replay `dd-replay-2026-11-15-r11`
+
+The deployed fingerprint was `62eade5940e4a3719a3b4a94531f7b1f91658d8ebed52204b279e1e11fe95f37`. Four sequential non-publishing replays covered 19 frozen pages from `dd-refine-2026-11-14-r3`; source, normalized-input and output hashes matched, no repairs were accepted or rejected, and no audit or repair stage was unavailable.
+
+| Tier | Replay | Pages | Outcome |
+|---|---|---:|---|
+| 2 — Optimum | `d7721d86734343d9a50c60b4a66298e6` | 1 | Passed in 6.5s. Two low duplicate findings reflect repeated API text; preserve the upstream source. |
+| 4 — Asyncio | `9467325305d2439b932ced2203231b93` | 7 | Passed in 6.9s with no findings or provider errors. |
+| 3 — DeepAgents | `37a2c6cc251a49b098eff27508d510dc` | 9 | Passed the deterministic gate in 418.1s. Page 104 had nine exact repeated rows; page 70 had one speculative empty-cell formatting claim; page 71 had one finding for a diagram referenced by extracted caption text but absent from the extracted page. Three provider errors occurred across 11 calls, but all audits completed. |
+| 1 — Unsloth | `00185b6a982d4169afa39258ad7cb122` | 2 | Passed in 15.7s. Page 22 needed no repair; page 197 retained a low repeated environment reminder. No provider errors. |
+
+Manual source review confirmed page 70 is a valid GFM table. Page 71 contains “Arrows show a typical retrieval flow” and “The highlighted component is the one this page covers,” but no corresponding diagram or image markup. Treat it as a possible extraction completeness issue; it cannot be safely repaired from the extracted text and needs comparison with the authoritative rendered page.
+
+Tiers 2 and 4 remain converged for the frozen r3 snapshots. Tier 3 remains open pending a generic page-70 safeguard replay and a page-71 completeness disposition. Tier 1 remains open because the full run had 47 issue-bearing pages and only pages 22 and 197 were replayed.
+
+### Local follow-up pending deployment
+
+The local auditor recognizes empty optional GFM cells described as speculative formatting defects only when the cited row is in valid table context. It also drops a missing-closing-pipe claim only when the source row has an unescaped closing pipe. New Unsloth fixtures add page 116 (valid trailing pipes), pages 127 and 129 (contextual repeats across model-size tutorials), and page 162 (valid empty cells and edge pipes). The fixtures require zero automatic repairs where source content is valid or contextually repeated. These changes postdate the r11 fingerprint.
+
+After redeployment, confirm provenance and run the curated fixtures sequentially as `dd-replay-2026-11-15-r12`: Optimum `[0]`; Asyncio `[0, 4, 42, 49, 54, 96, 99]`; DeepAgents `[27, 41, 70, 71, 74, 80, 90, 104, 105]`; Unsloth `[22, 116, 127, 129, 162, 197]`. Tier 1 would then have six sampled pages across more failure classes but still needs broader disposition before convergence. Tier 5 remains excluded.
+
+## All-tier targeted replay `dd-replay-2026-11-15-r12`
+
+The deployed fingerprint was `b687198b630768f7263a8947434e9e364f3a7dec7518208109ee4d7dc3287021` (auditor `848701931b9d85cf91da0d2b2dc514b9a1e4dd0b7649d50d3be24b2ca77726f7`, evaluator `76c23580dd649de969f03b7b4060a6ba2c42ab19a3e456e70e820a32a423d11b`). Four sequential, non-publishing replays sampled immutable pages from `dd-refine-2026-11-14-r3`. All source, normalized-input, and output hashes matched. No patches were accepted or rejected, and no audit or repair stage was unavailable. Asyncio recorded one recovered HTTP 504; DeepAgents five; Unsloth four.
+
+| Tier | Replay | Pages | Outcome |
+|---|---|---:|---|
+| 2 — Optimum | `8f9b11697f4e45bc94a08e89e1623876` | 1 | Passed in 14.3s. One medium source-backed `duplicate_section` finding for repeated `library_name` text; preserve it. No provider errors. |
+| 4 — Asyncio | `e53d91d8a70b4995b143d795660ee945` | 7 | Passed in 154.2s with zero findings and no unavailable stages. One recovered 504. |
+| 3 — DeepAgents | `54ecec963bdf4de0a38b3b2a2d1a145d` | 9 | Passed in 357.1s. Page 104 had nine low exact repeated-row findings; page 74 had one medium missing-diagram observation; page 105 had one medium consecutive-empty-heading observation. The page-70 table and page-71 link false positives were absent. Five recovered 504s across ten calls. |
+| 1 — Unsloth | `e569e9fb5d76467bafd9828dff72cc4b` | 6 | Passed in 538.8s. Pages 127 and 129 had 23 repeated-content findings across distinct model-size tutorials. No edits were accepted; all page hashes matched. Four recovered 504s across six calls. |
+
+The r12 report's `human_review_required` fixture flags are rubric metadata, not failed deterministic checks. Dispositions: preserve Optimum's upstream parameter repetition and DeepAgents' exact table rows; do not auto-edit any sampled page. DeepAgents' missing-diagram and heading observations still require comparison with the authoritative source. The Unsloth contextual-repeat findings are false positives for independently usable model-variant tutorials.
+
+### Local follow-up after r12 — pending manual redeploy
+
+The shared contextual-repeat recognizer now treats numeric parameter sizes (`4B`, `30B-A3B`, `20B`, `120B`) as model-variant labels when repeated evidence appears under separate headings with a shared normalized model-family name. This general rule addresses the Unsloth r12 misses and leaves same-section repetition reviewable. Fixtures for pages 127 and 129 now forbid the observed duplicate description and retain the zero-patch budget. The change has not been replayed.
+
+After manual redeployment, verify the new fingerprint and replay the four curated sets sequentially under `dd-replay-2026-11-15-r13`; this checks that the generic duplicate-scope change preserves the already passing Tier 2–4 cases as well. Tier 2 and Tier 4 remain converged for the frozen r3 snapshots. Tier 3 remains open for source-completeness review. Tier 1 remains open pending the r13 page-127/129 results and representative review of its broader 47-page issue distribution. Tier 5 stays excluded.

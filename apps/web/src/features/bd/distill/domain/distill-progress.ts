@@ -16,7 +16,11 @@ export const DISTILL_NODES = [
     detail: "Find the book’s central claims, methods, evidence, and useful examples in each learning unit.",
     reads: ["Learning units", "Source page references"],
     writes: ["Candidate lessons", "Evidence quotes"],
-    resources: { agents: ["learning_extractor", "evidence_verifier"], skills: [], tools: [] },
+    resources: {
+      agents: ["learning_extractor", "evidence_verifier"],
+      skills: [],
+      tools: ["read_file"],
+    },
   },
   {
     id: "prepare_chapters",
@@ -52,17 +56,6 @@ export const DISTILL_NODES = [
     resources: { agents: [], skills: [], tools: [] },
   },
 ] as const;
-
-export const DISTILL_LANGGRAPH_TOPOLOGY = `flowchart TD
-  __start__([__start__]) --> resume_route{"resume_route"}
-  resume_route --> prepare_units["prepare_units"]
-  resume_route --> prepare_chapters["prepare_chapters"]
-  prepare_units --> extract_unit["extract_unit"]
-  extract_unit --> prepare_chapters["prepare_chapters"]
-  prepare_chapters --> synthesize_chapter["synthesize_chapter"]
-  synthesize_chapter --> synthesize_book["synthesize_book"]
-  synthesize_book --> publish_report["publish_report"]
-  publish_report --> __end__([__end__])`;
 
 export type DistillNode = (typeof DISTILL_NODES)[number];
 

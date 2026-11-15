@@ -31,6 +31,7 @@ import {
   useContentSelection,
   useProcessedBook,
   useResumeAgenticRun,
+  useReplayAgenticRunNode,
   useRunBook,
   useSnapshot,
   useStartAgenticRun,
@@ -78,33 +79,61 @@ export function BookView({
   activeView: BookViewId;
 }) {
   const snapshot = useSnapshot(bookId);
-  if (snapshot.isPending) {
+  if (snapshot.isPending && !snapshot.data) {
     return (
       <p role="status" className="text-sm text-muted-foreground">
         Opening the book…
       </p>
     );
   }
-  if (snapshot.isError) {
+  if (!snapshot.data) {
     return (
-      <section role="alert" className="rounded-md border border-border bg-card p-4 text-sm">
-        <p className="text-destructive-text">
-          This book could not be opened — {apiErrorMessage(snapshot.error)}
+      <section role="status" aria-live="polite" className="rounded-md border border-border bg-card p-4 text-sm">
+        <p className="font-medium text-foreground">The book could not be loaded right now.</p>
+        <p className="mt-1 text-muted-foreground">
+          Its saved data may be temporarily unavailable while an Agentic AI run rebuilds it. The run can continue;
+          retry to load the latest book state.
         </p>
+        <p className="mt-1 text-muted-foreground">{apiErrorMessage(snapshot.error)}</p>
         <div className="mt-3">
-          <ActionButton onClick={() => void snapshot.refetch()}>Try again</ActionButton>
+          <ActionButton
+            onClick={() => void snapshot.refetch()}
+            disabled={snapshot.isFetching}
+            aria-busy={snapshot.isFetching}
+          >
+            {snapshot.isFetching ? "Retrying…" : "Try again"}
+          </ActionButton>
         </div>
       </section>
     );
   }
   return (
-    <BookDetail
-      bookId={bookId}
-      initialPage={initialPage}
-      snapshot={snapshot.data}
-      autoChain={autoChain}
-      activeView={activeView}
-    />
+    <>
+      {snapshot.isError ? (
+        <div
+          role="status"
+          className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-md border border-border bg-card px-3 py-2 text-sm"
+        >
+          <span className="text-muted-foreground">
+            Could not refresh this book. Showing the last loaded state. {apiErrorMessage(snapshot.error)}
+          </span>
+          <ActionButton
+            onClick={() => void snapshot.refetch()}
+            disabled={snapshot.isFetching}
+            aria-busy={snapshot.isFetching}
+          >
+            {snapshot.isFetching ? "Retrying…" : "Try again"}
+          </ActionButton>
+        </div>
+      ) : null}
+      <BookDetail
+        bookId={bookId}
+        initialPage={initialPage}
+        snapshot={snapshot.data}
+        autoChain={autoChain}
+        activeView={activeView}
+      />
+    </>
   );
 }
 
@@ -137,6 +166,7 @@ function BookDetail({
   const cancelAgentic = useCancelAgenticRun();
   const startAgentic = useStartAgenticRun();
   const resumeAgentic = useResumeAgenticRun();
+  const replayAgenticNode = useReplayAgenticRunNode();
   const wipeAgentic = useWipeAgenticRun();
   const wipeExtraction = useWipeExtraction();
   const { confirm, notice } = useBdOverlays();
@@ -210,6 +240,8 @@ function BookDetail({
   const [reading, setReading] = useState<{ startId: string | null } | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
   const [usageOpen, setUsageOpen] = useState(false);
+  const [replayPendingNodeId, setReplayPendingNodeId] = useState<string | null>(null);
+  const [replayError, setReplayError] = useState<string | null>(null);
   const currentIndex = rows.findIndex((candidate) => candidate.page === page);
   const previousPage = currentIndex > 0 ? (rows[currentIndex - 1]?.page ?? null) : null;
   const nextPage = currentIndex >= 0 ? (rows[currentIndex + 1]?.page ?? null) : null;
@@ -298,6 +330,35 @@ function BookDetail({
           notice("Agentic ingestion retry queued.");
         },
         onError: (error) => notice(apiErrorMessage(error), "error"),
+      },
+    );
+  };
+  const replayAgenticFromNode = (nodeId: string) => {
+    const agenticRunId = agentic.run?.agentic_run_id;
+    if (
+      !agenticRunId ||
+      replayAgenticNode.isPending ||
+      agentic.status === "queued" ||
+      agentic.status === "running"
+    ) {
+      return;
+    }
+    setReplayError(null);
+    setReplayPendingNodeId(nodeId);
+    replayAgenticNode.mutate(
+      { bookId, agenticRunId, nodeId },
+      {
+        onSuccess: () => {
+          setReplayPendingNodeId(null);
+          agentic.restart();
+          notice(`Replay queued from ${nodeId}.`);
+        },
+        onError: (error) => {
+          setReplayPendingNodeId(null);
+          const message = apiErrorMessage(error);
+          setReplayError(`Replay from ${nodeId} failed — ${message}`);
+          notice(message, "error");
+        },
       },
     );
   };
@@ -679,9 +740,17 @@ function BookDetail({
           status={agentic.status}
           progress={agentic.progress}
           error={agentic.error}
+          replayError={replayError}
           units={units}
           chapters={state.chapters.length > 0 ? state.chapters : manifest.chapters}
           onOpenUsage={() => setUsageOpen(true)}
+          replayPending={replayAgenticNode.isPending}
+          replayPendingNodeId={replayPendingNodeId}
+          onPlayNode={
+            agentic.run && ["done", "failed", "cancelled"].includes(agentic.status ?? "")
+              ? (nodeId) => void replayAgenticFromNode(nodeId)
+              : undefined
+          }
         />
       </section>
       <section aria-label="Pages" hidden={activeView !== "materials"} className="mt-4">
