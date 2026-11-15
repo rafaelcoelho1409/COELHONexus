@@ -1478,7 +1478,41 @@ def sanitize_assessment(
                 continue
         accepted[(issue.category, issue.evidence)] = issue
 
-    return assessment.model_copy(update = {"issues": list(accepted.values())}), warnings
+    issues = list(accepted.values())
+    existing_duplicate_rows = {
+        " ".join(issue.evidence.split())
+        for issue in issues
+        if issue.category in params.DUPLICATE_CATEGORIES
+    }
+    for occurrence, lead in enumerate(repeated_table_rows(markdown), start = 1):
+        evidence = lead["evidence"]
+        if " ".join(evidence.split()) in existing_duplicate_rows:
+            continue
+        if len(issues) >= params.MAX_ISSUES_PER_PAGE:
+            warnings.append("Additional exact repeated table rows were omitted because the page issue limit was reached.")
+            break
+        issue_id = f"table-duplicate-row-{occurrence}"
+        used_ids = {issue.issue_id for issue in issues}
+        suffix = 2
+        while issue_id in used_ids:
+            issue_id = f"table-duplicate-row-{occurrence}-{suffix}"
+            suffix += 1
+        issue = agents.schemas.PageIssue(
+            issue_id = issue_id,
+            category = agents.schemas.IssueCategory.DUPLICATE_SECTION,
+            severity = agents.schemas.IssueSeverity.LOW,
+            description = (
+                "This exact valid GFM table row occurs more than once in the same table. "
+                "The source was preserved; review whether the repeated entry is intentional."
+            ),
+            evidence = evidence,
+            other_evidence = lead["other_evidence"],
+            confidence = 0.95,
+        )
+        issues.append(issue)
+        existing_duplicate_rows.add(" ".join(evidence.split()))
+
+    return assessment.model_copy(update = {"issues": issues}), warnings
 
 
 # ---- the page scans: places that may be defects, so the auditor judges leads instead of searching for them -------------------------------------
@@ -1552,6 +1586,56 @@ def repeated_blocks(markdown: str) -> list[dict[str, Any]]:
     ]
 
 
+def repeated_table_rows(markdown: str) -> list[dict[str, Any]]:
+    """Find exact repeated body rows inside one well-formed GFM table as review leads."""
+    rows = prose_lines(markdown)
+    leads: list[dict[str, Any]] = []
+    index = 0
+    while index + 1 < len(rows):
+        header = strip_blockquote_prefix(rows[index][1]).strip()
+        delimiter = strip_blockquote_prefix(rows[index + 1][1]).strip()
+        delimiter_width = table_cells(delimiter)
+        if (
+            not header.startswith("|")
+            or not patterns.TABLE_DELIMITER_RE.fullmatch(delimiter)
+            or table_cells(header) != delimiter_width
+        ):
+            index += 1
+            continue
+
+        table_end = index + 2
+        row_occurrences: dict[str, list[str]] = {}
+        while table_end < len(rows):
+            previous_start, previous_line = rows[table_end - 1]
+            current_start, current_line = rows[table_end]
+            adjacent = current_start in {
+                previous_start + len(previous_line) + 1,
+                previous_start + len(previous_line) + 2,
+            }
+            normalized = strip_blockquote_prefix(current_line).strip()
+            if not adjacent or not normalized.startswith("|"):
+                break
+            if (
+                table_cells(normalized) <= delimiter_width
+                and len(current_line) <= params.MAX_EVIDENCE_CHARS
+            ):
+                row_occurrences.setdefault(normalized, []).append(current_line)
+            table_end += 1
+
+        for occurrences in row_occurrences.values():
+            if len(occurrences) < 2:
+                continue
+            leads.append({
+                "kind": "repeated_table_row",
+                "evidence": occurrences[0],
+                "other_evidence": occurrences[1],
+                "note": "this exact valid body row occurs more than once in the same table; assess as a possible duplicate, not a table-format defect",
+            })
+        index = max(index + 1, table_end)
+
+    return leads
+
+
 def heading_markers(markdown: str) -> list[dict[str, Any]]:
     """A heading marker with no space after it (`##Install`) and a heading with no text."""
     leads = []
@@ -1581,7 +1665,12 @@ def damaged_characters(markdown: str) -> list[dict[str, Any]]:
 
 def candidates(markdown: str) -> list[dict[str, Any]]:
     """Every lead on the page, first in reading order, at most `params.MAX_CANDIDATES`."""
-    leads = [*heading_markers(markdown), *damaged_characters(markdown), *repeated_blocks(markdown)]
+    leads = [
+        *heading_markers(markdown),
+        *damaged_characters(markdown),
+        *repeated_blocks(markdown),
+        *repeated_table_rows(markdown),
+    ]
     return [
         {"candidate_id": f"c{number}", **lead}
         for number, lead in enumerate(

@@ -20,6 +20,7 @@ from ai.dd.agents.ingestion.page_auditor import params as auditor_params
 from ai.dd.agents.ingestion.page_auditor import patterns as auditor_patterns
 from ai.dd.agents.ingestion.page_repair import config as repair_config
 from ai.dd.nodes.ingestion import audit_batch, page_audit, page_repair
+from ai.dd.nodes.ingestion.page_audit import domain as page_audit_domain
 from domains.settings.chat import service as chat_service
 
 
@@ -63,7 +64,7 @@ markdown = "# Kubernetes Operator\n\nRuns Locust on a cluster."
 assessment = schemas.PageAssessment(page_kind = schemas.PageKind.DOCUMENTATION, confidence = 0.9)
 batch = schemas.PagePatchBatch()
 attempts = page_audit.params.MAX_ATTEMPTS
-repair_attempts = page_repair.params.MAX_ATTEMPTS  # an optional step: fewer tries than the audit
+repair_attempts = page_repair.params.MAX_ATTEMPTS  # one bounded schema/provider retry for an optional step
 
 check("both page agents use a bounded 120-second request with SDK retries disabled",
       (auditor_config.MODEL.timeout_s, repair_config.MODEL.timeout_s,
@@ -144,6 +145,42 @@ async def audit_batch_order() -> tuple[list[int], list[int]]:
     return order, [item["idx"] for item in result["assessments"]]
 
 
+def test_repeated_table_row_candidates() -> None:
+    source = (
+        "# Integrations\n\n"
+        "| Name | Status |\n| --- | --- |\n"
+        "| Alpha | Ready |\n| Beta | Ready |\n| Alpha | Ready |\n\n"
+        "| Name | Status |\n| --- | --- |\n| Alpha | Ready |\n\n"
+        "```markdown\n| Name | Status |\n| --- | --- |\n"
+        "| Alpha | Ready |\n| Alpha | Ready |\n```\n"
+    )
+    candidates = page_audit_domain.candidates(source)
+    repeated_rows = [item for item in candidates if item["kind"] == "repeated_table_row"]
+    check("an exact duplicate body row in one valid table is supplied as one review lead",
+          [(item["evidence"], item["other_evidence"]) for item in repeated_rows],
+          [("| Alpha | Ready |", "| Alpha | Ready |")])
+    check("the table lead has two source-backed occurrences",
+          page_audit_domain.is_repeated_valid_table_row(
+              source, repeated_rows[0]["evidence"], repeated_rows[0]["other_evidence"],
+          ),
+          True)
+    clean = schemas.PageAssessment(page_kind = schemas.PageKind.DOCUMENTATION)
+    reviewed, _ = page_audit_domain.sanitize_assessment(clean, markdown = source)
+    check("an exact repeated row is surfaced as a low-severity review-only duplicate",
+          [(issue.category.value, issue.severity.value, issue.evidence, issue.other_evidence)
+           for issue in reviewed.issues],
+          [("duplicate_section", "low", "| Alpha | Ready |", "| Alpha | Ready |")])
+
+    malformed = "| A | B |\n| --- |\n| x | y |\n| x | y |\n"
+    check("rows from a malformed table are not promoted to duplicate findings",
+          [item for item in page_audit_domain.candidates(malformed)
+           if item["kind"] == "repeated_table_row"],
+          [])
+
+
+test_repeated_table_row_candidates()
+
+
 # --- page auditor
 good = FakeAgent({"structured_response": assessment})
 result, warnings = asyncio.run(audit(good))
@@ -184,13 +221,8 @@ try:
     waits.clear()
     timeout_error = APITimeoutError(request = httpx.Request("POST", "https://rotator.test"))
     repairs = FakeAgent(timeout_error, {"structured_response": batch})
-    try:
-        asyncio.run(repair(repairs))
-    except APITimeoutError:
-        pass
-    else:
-        raise AssertionError("the optional repair timeout should be surfaced after its one attempt")
-    check("an optional repair does not spend a second call after timeout", (repairs.calls, waits), (1, []))
+    asyncio.run(repair(repairs))
+    check("the optional repair recovers from one transient timeout within its bound", (repairs.calls, waits), (2, [3.0]))
 
     waits.clear()
     bad_request = FakeAgent(FakeProviderError(400), {"structured_response": assessment})
@@ -233,14 +265,14 @@ good = FakeAgent({"structured_response": batch})
 asyncio.run(repair(good))
 check("a repairer that answers first time is asked once", good.calls, 1)
 
-slips = FakeAgent({"structured_response": None})
-rejects("an optional repair with invalid output ends after one attempt", lambda: asyncio.run(repair(slips)))
-check("the optional repair attempt budget is one", slips.calls, 1)
+slips = FakeAgent({"structured_response": None}, {"structured_response": batch})
+asyncio.run(repair(slips))
+check("an optional repair gets one schema-feedback retry after invalid output", slips.calls, repair_attempts)
 
 never = FakeAgent({"structured_response": None})
 rejects("a repairer that never answers fails", lambda: asyncio.run(repair(never)))
 check("it is asked as many times as allowed, no more", never.calls, repair_attempts)
-check("an optional repair is allowed fewer tries than an audit", repair_attempts < attempts, True)
+check("optional repair retries stay within the auditor's attempt budget", repair_attempts <= attempts, True)
 
 # --- repair eligibility, finding dedupe, and a repairer that cannot be reached
 from ai.dd.nodes.ingestion import normalize_pages

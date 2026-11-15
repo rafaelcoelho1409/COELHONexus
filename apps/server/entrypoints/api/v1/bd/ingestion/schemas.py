@@ -115,10 +115,13 @@ class AgenticProgress(BaseModel):
     node_status: dict[str, str]
     audited_pages: list[int]
     processed_pages: list[int]
+    repaired_pages: list[int] = Field(default_factory = list)
     active_audit_pages: list[int]
     active_repair_pages: list[int]
     classified_pages: list[int] = Field(default_factory = list)
     active_classification_pages: list[int] = Field(default_factory = list)
+    selected_page_count: int = 0
+    excluded_page_count: int = 0
 
 
 class ContentSelectionPage(BaseModel):

@@ -122,10 +122,13 @@ def _initial_progress() -> dict[str, Any]:
         "audited_pages": [],
         "audit_warning_pages": [],
         "processed_pages": [],
+        "repaired_pages": [],
         "active_audit_pages": [],
         "active_repair_pages": [],
         "classified_pages": [],
         "active_classification_pages": [],
+        "selected_page_count": 0,
+        "excluded_page_count": 0,
     }
 
 
@@ -1220,7 +1223,12 @@ async def run_ingestion_ai(
                     }[kind]
                     active_pages = set(progress_state[active_key])
                     if status == "running":
-                        active_pages.add(page)
+                        if kind != "page_repair" or event.get("repair_skipped") is not True:
+                            active_pages.add(page)
+                        if kind == "page_repair":
+                            repaired_pages = set(progress_state["repaired_pages"])
+                            repaired_pages.discard(page)
+                            progress_state["repaired_pages"] = sorted(repaired_pages)
                         if kind == "page_audit":
                             progress_state["audit_warning_pages"] = [
                                 current for current in progress_state["audit_warning_pages"]
@@ -1229,6 +1237,13 @@ async def run_ingestion_ai(
                     else:
                         active_pages.discard(page)
                         progress_state[completed_key] = sorted(set(progress_state[completed_key]) | {page})
+                        if kind == "page_repair":
+                            repaired_pages = set(progress_state["repaired_pages"])
+                            if event.get("repair_skipped") is True:
+                                repaired_pages.discard(page)
+                            else:
+                                repaired_pages.add(page)
+                            progress_state["repaired_pages"] = sorted(repaired_pages)
                         if kind == "page_audit":
                             warning_pages = set(progress_state["audit_warning_pages"])
                             if event.get("warning") is True:
@@ -1236,6 +1251,25 @@ async def run_ingestion_ai(
                             progress_state["audit_warning_pages"] = sorted(warning_pages)
                         should_persist = True
                     progress_state[active_key] = sorted(active_pages)
+            elif kind == "content_selection":
+                classified_pages = event.get("classified_pages")
+                if isinstance(classified_pages, list) and all(type(page) is int for page in classified_pages):
+                    progress_state["classified_pages"] = sorted(
+                        set(progress_state["classified_pages"]) | set(classified_pages),
+                    )
+                selected_count = event.get("selected_page_count")
+                excluded_count = event.get("excluded_page_count")
+                if (
+                    type(selected_count) is int
+                    and selected_count >= 0
+                    and type(excluded_count) is int
+                    and excluded_count >= 0
+                ):
+                    progress_state["selected_page_count"] = selected_count
+                    progress_state["excluded_page_count"] = excluded_count
+                    manifest_fields["selected_page_count"] = selected_count
+                    manifest_fields["excluded_page_count"] = excluded_count
+                    should_persist = True
             progress_state = domains.bd.ingestion.ai.schemas.AgenticRunProgress.model_validate(
                 progress_state,
             ).model_dump(mode = "json")
@@ -1275,7 +1309,7 @@ async def run_ingestion_ai(
             except Exception as error:
                 logger.warning(
                     f"[bd-page-evidence] visual verifier unavailable for {book_id}/{agentic_run_id}: "
-                    f"{type(error).__name__}"
+                    f"{type(error).__name__}: {error}"
                 )
         if structure_repair is None:
             structure_repair = ai.bd.agents.ingestion.structure_repair.agent.structure_repair()

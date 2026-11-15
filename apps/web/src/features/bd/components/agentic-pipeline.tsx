@@ -298,8 +298,26 @@ export function AgenticPipelineOverview({
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const selectedNode = AGENTIC_NODES.find((node) => node.id === selectedNodeId);
   const runStatus = status ?? run?.status ?? "pending";
-  const graphProgress = progress ?? EMPTY_AGENTIC_PROGRESS;
   const total = run?.expected_page_count ?? 0;
+  const persistedSelectionCount = (run?.selected_page_count ?? 0) + (run?.excluded_page_count ?? 0);
+  const liveSelectionCount = (progress?.selected_page_count ?? 0) + (progress?.excluded_page_count ?? 0);
+  const graphProgress = progress
+    ? {
+        ...progress,
+        selected_page_count:
+          liveSelectionCount === total
+            ? progress.selected_page_count
+            : persistedSelectionCount === total
+              ? run?.selected_page_count
+              : progress.selected_page_count,
+        excluded_page_count:
+          liveSelectionCount === total
+            ? progress.excluded_page_count
+            : persistedSelectionCount === total
+              ? run?.excluded_page_count
+              : progress.excluded_page_count,
+      }
+    : EMPTY_AGENTIC_PROGRESS;
   const summary: AgenticRunSummary | null =
     run?.status === "done"
       ? {
@@ -446,7 +464,13 @@ export function AgenticPipelineOverview({
         <AgenticNodeSheet
           node={selectedNode}
           status={agenticNodeStatus(graphProgress, selectedNode.id, runStatus)}
-          caption={agenticNodeCaption(graphProgress, selectedNode.id, total, units.plural)}
+          caption={agenticNodeCaption(
+            graphProgress,
+            selectedNode.id,
+            total,
+            units.plural,
+            agenticNodeStatus(graphProgress, selectedNode.id, runStatus),
+          )}
           kpi={views.find((view) => view.id === selectedNode.id)?.kpi ?? null}
           usage={usage.data}
           loading={run !== null && usage.isPending}

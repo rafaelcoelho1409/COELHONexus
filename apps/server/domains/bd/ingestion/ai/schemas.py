@@ -44,10 +44,13 @@ class AgenticRunProgress(BaseModel):
     audited_pages: list[int] = Field(default_factory = list)
     audit_warning_pages: list[int] = Field(default_factory = list)
     processed_pages: list[int] = Field(default_factory = list)
+    repaired_pages: list[int] = Field(default_factory = list)
     active_audit_pages: list[int] = Field(default_factory = list)
     active_repair_pages: list[int] = Field(default_factory = list)
     classified_pages: list[int] = Field(default_factory = list)
     active_classification_pages: list[int] = Field(default_factory = list)
+    selected_page_count: int = Field(default = 0, ge = 0, strict = True)
+    excluded_page_count: int = Field(default = 0, ge = 0, strict = True)
 
 
 class ContentSelectionPage(BaseModel):

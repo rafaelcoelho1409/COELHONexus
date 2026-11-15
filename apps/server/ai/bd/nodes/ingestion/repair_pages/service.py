@@ -12,6 +12,9 @@ import json
 from collections.abc import Awaitable, Callable, Coroutine, Iterable
 from typing import Any, Protocol
 
+from langchain_core.messages import HumanMessage
+from pydantic import ValidationError
+
 
 PageReader = Callable[[str], str | None | Awaitable[str | None]]
 ArtifactWriter = Callable[[str, str, str], Any]
@@ -121,72 +124,152 @@ async def verify_source_patches(
         return unavailable("original page image could not be rendered")
 
     image_sha256 = hashlib.sha256(image_result).hexdigest()
-    payload = {
-        "page_number": page_number,
-        "source_sha256": hashlib.sha256(markdown.encode("utf-8")).hexdigest(),
-        "patches": [{
-            "issue_id": proposal.issue_id,
-            "issue_code": proposal.issue_code.value,
-            "target_text": proposal.target_text,
-            "context_before": proposal.context_before,
-            "context_after": proposal.context_after,
-            "proposed_replacement": proposal.replacement,
-            "rationale": proposal.rationale,
-        } for proposal in candidates],
-    }
     image_url = "data:image/jpeg;base64," + base64.b64encode(image_result).decode("ascii")
-    try:
+
+    class InvalidVerifierResponse(ValueError):
+        """The verifier returned a structurally valid but mismatched batch."""
+
+    def validation_reason(error: ValidationError) -> str:
+        """Expose schema locations without putting book text or model input in artifacts."""
+        try:
+            locations = sorted({
+                ".".join(str(part) for part in item.get("loc", ())) or "response"
+                for item in error.errors(include_input = False)
+            })
+        except TypeError:
+            locations = []
+        suffix = f" at {', '.join(locations[:4])}" if locations else ""
+        return f"visual verifier response failed schema validation{suffix}"
+
+    async def verify_batch(
+        batch_candidates: list[agents.schemas.PatchProposal],
+    ) -> dict[str, agents.schemas.PatchVerification]:
+        def verification_item(proposal: agents.schemas.PatchProposal) -> dict[str, str]:
+            target_focus, replacement_focus = domain.patch_verification_focus(proposal)
+            return {
+                "issue_id": proposal.issue_id,
+                "issue_code": proposal.issue_code.value,
+                "target_text": proposal.target_text,
+                "context_before": proposal.context_before,
+                "context_after": proposal.context_after,
+                "proposed_replacement": proposal.replacement,
+                "target_focus": target_focus,
+                "replacement_focus": replacement_focus,
+                "rationale": proposal.rationale,
+            }
+
+        payload = {
+            "page_number": page_number,
+            "source_sha256": hashlib.sha256(markdown.encode("utf-8")).hexdigest(),
+            "patches": [verification_item(proposal) for proposal in batch_candidates],
+        }
         with domains.settings.llm_counter.service.llm_context(
             ns = "bd", run_id = run_id, node_id = "text_patch_verifier",
         ):
-            response = await verifier.ainvoke({"messages": [{
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": json.dumps(payload, ensure_ascii = False)},
-                    {"type": "image_url", "image_url": {"url": image_url, "detail": "high"}},
-                ],
-            }]}, config = {
+            # The Rotator receives text and the source image together and routes the multimodal request.
+            response = await verifier.ainvoke({"messages": [HumanMessage(content = [
+                {"type": "text", "text": json.dumps(payload, ensure_ascii = False)},
+                {"type": "image_url", "image_url": {"url": image_url, "detail": "high"}},
+            ])]}, config = {
                 "callbacks": [domains.settings.llm_counter.service.LLMCounterCallback()],
             })
-        structured = response.get("structured_response") if isinstance(response, dict) else None
-        batch = agents.schemas.PatchVerificationBatch.model_validate(structured)
+        try:
+            batch = domain.extract_patch_verification_response(response)
+        except ValidationError:
+            raise
+        except ValueError as error:
+            raise InvalidVerifierResponse(str(error)) from error
         checks = {check.issue_id: check for check in batch.verifications}
-        expected_ids = {proposal.issue_id for proposal in candidates}
+        expected_ids = {proposal.issue_id for proposal in batch_candidates}
         if len(checks) != len(batch.verifications) or set(checks) != expected_ids:
-            return unavailable("visual verifier returned an incomplete or mismatched result")
-    except Exception as error:
-        return unavailable(f"visual verifier failed ({type(error).__name__})")
+            raise InvalidVerifierResponse("visual verifier returned an incomplete or mismatched result")
+        return checks
+
+    checks: dict[str, agents.schemas.PatchVerification] = {}
+    failed_checks: dict[str, str] = {}
+
+    async def verify_with_recovery(batch_candidates: list[agents.schemas.PatchProposal]) -> None:
+        try:
+            checks.update(await verify_batch(batch_candidates))
+        except (ValidationError, InvalidVerifierResponse) as error:
+            # Isolate malformed records so one response cannot discard valid sibling checks.
+            if len(batch_candidates) > 1:
+                midpoint = len(batch_candidates) // 2
+                await verify_with_recovery(batch_candidates[:midpoint])
+                await verify_with_recovery(batch_candidates[midpoint:])
+                return
+            reason = validation_reason(error) if isinstance(error, ValidationError) else str(error)
+            failed_checks[batch_candidates[0].issue_id] = reason
+        except Exception as error:
+            reason = f"visual verifier failed ({type(error).__name__})"
+            failed_checks.update({proposal.issue_id: reason for proposal in batch_candidates})
+
+    await verify_with_recovery(candidates)
 
     verified_issue_ids = set()
     results = []
     for proposal in candidates:
+        if proposal.issue_id in failed_checks:
+            results.append({
+                "issue_id": proposal.issue_id,
+                "status": "unavailable",
+                "reason": failed_checks[proposal.issue_id],
+            })
+            continue
         check = checks[proposal.issue_id]
-        confirmed = (
-            check.verdict == agents.schemas.PatchVerificationVerdict.CONFIRMED
-            and check.source_reading == proposal.replacement
-        )
+        target_focus, replacement_focus = domain.patch_verification_focus(proposal)
+        source_reading = " ".join(check.source_reading.split())
+        target_focus = " ".join(target_focus.split())
+        replacement_focus = " ".join(replacement_focus.split())
+        confirmed = domain.source_reading_confirms_patch(proposal, check)
         if confirmed:
             verified_issue_ids.add(proposal.issue_id)
             status = "confirmed"
+            reason = (
+                "The literal source reading matches the proposed correction; the verifier's verdict conflicted with its reading."
+                if check.verdict != agents.schemas.PatchVerificationVerdict.CONFIRMED
+                else check.reason
+            )
+        elif (
+            source_reading
+            and source_reading == target_focus
+            and target_focus != replacement_focus
+        ):
+            status = "source_mismatch"
+            reason = "The literal source reading matches the extracted text, so the proposed correction was not applied."
         elif check.verdict == agents.schemas.PatchVerificationVerdict.CONTRADICTED:
             status = "source_mismatch"
+            reason = check.reason
         elif check.verdict == agents.schemas.PatchVerificationVerdict.CONFIRMED:
             status = "reading_mismatch"
+            reason = check.reason
         else:
             status = "uncertain"
+            reason = check.reason
         results.append({
             "issue_id": proposal.issue_id,
             "status": status,
             "source_reading": check.source_reading,
-            "reason": check.reason,
+            "source_verdict": check.verdict.value,
+            "target_focus": target_focus,
+            "replacement_focus": replacement_focus,
+            "reason": reason,
             "source_image_sha256": image_sha256,
         })
 
+    unavailable_count = len(failed_checks)
     not_confirmed = len(candidates) - len(verified_issue_ids)
-    warnings = [
-        f"{not_confirmed} text patch candidate(s) were left unchanged because the source image did not confirm them."
-    ] if not_confirmed else []
-    return verified_issue_ids, results, warnings, 0
+    warnings = []
+    if unavailable_count:
+        warnings.append(
+            f"{unavailable_count} text patch candidate(s) were left unchanged because source verification was unavailable."
+        )
+    rejected_count = not_confirmed - unavailable_count
+    if rejected_count:
+        warnings.append(
+            f"{rejected_count} text patch candidate(s) were left unchanged because the source image did not confirm them."
+        )
+    return verified_issue_ids, results, warnings, unavailable_count
 
 
 async def repair_pages(
@@ -301,7 +384,6 @@ async def repair_pages(
     async def process(page_ref: graphs.ingestion.entities.IngestionPageReference) -> dict:
         async with semaphore:
             page_number = page_ref["page"]
-            await graphs.service.report(progress_callback, kind = "page_repair", page = page_number, status = "running")
             markdown = read_page(page_ref["source_key"])
             if inspect.isawaitable(markdown):
                 markdown = await markdown
@@ -314,6 +396,13 @@ async def repair_pages(
             if selected is None:
                 raise ValueError(f"source page {page_number} has no early content-selection result")
             repair_skipped = selected.get("disposition") == "exclude"
+            await graphs.service.report(
+                progress_callback,
+                kind = "page_repair",
+                page = page_number,
+                status = "running",
+                repair_skipped = repair_skipped,
+            )
             oversized = (
                 domains.bd.ingestion.ai.inventory.domain.effective_length(markdown)
                 > domains.bd.ingestion.ai.params.MAX_PAGE_MARKDOWN_CHARS
@@ -455,7 +544,13 @@ async def repair_pages(
                 "source_verification_results": source_verification_results,
                 "source_verification_unavailable_count": source_verification_unavailable_count,
             }
-            await graphs.service.report(progress_callback, kind = "page_repair", page = page_number, status = "done")
+            await graphs.service.report(
+                progress_callback,
+                kind = "page_repair",
+                page = page_number,
+                status = "done",
+                repair_skipped = repair_skipped,
+            )
             return result
 
     page_results = await _gather_cancel_on_failure(process(page_ref) for page_ref in page_refs)

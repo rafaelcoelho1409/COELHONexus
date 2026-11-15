@@ -126,10 +126,13 @@ const agenticProgressSchema = z.looseObject({
   audited_pages: z.array(z.number()).catch([]),
   audit_warning_pages: z.array(z.number()).catch([]),
   processed_pages: z.array(z.number()).catch([]),
+  repaired_pages: z.array(z.number()).catch([]).optional(),
   active_audit_pages: z.array(z.number()).catch([]),
   active_repair_pages: z.array(z.number()).catch([]),
   classified_pages: z.array(z.number()).catch([]).optional(),
   active_classification_pages: z.array(z.number()).catch([]).optional(),
+  selected_page_count: z.number().int().nonnegative().catch(0).optional(),
+  excluded_page_count: z.number().int().nonnegative().catch(0).optional(),
 });
 
 export const agenticRunStatusSchema = z.looseObject({
@@ -205,6 +208,7 @@ export const agenticEventSchema = z.looseObject({
     "page_audit",
     "page_repair",
     "content_classification",
+    "content_selection",
     "run_done",
     "run_failed",
     "run_cancelled",

@@ -8,18 +8,19 @@ import "./ingestion-agentic-flow.css";
 import { type Edge, Handle, MarkerType, type Node, type NodeProps, Position, ReactFlow } from "@xyflow/react";
 
 import { STATUS_WORD_LABEL, type StatusWord, statusWord } from "../domain";
+import { IngestionNodeResources } from "./ingestion-node-resources";
 import { type Step, StepProgress } from "./pipeline-steps";
 import { StatusBadge } from "./status-badge";
 
 const NODE_WIDTH = 168;
-const NODE_HEIGHT = 96;
+const NODE_HEIGHT = 192;
 const FLOW_WIDTH = 368;
-const FLOW_HEIGHT = 388;
+const FLOW_HEIGHT = 648;
 const POSITIONS: Record<string, { x: number; y: number }> = {
   playwright: { x: 100, y: 8 },
-  elasticsearch: { x: 100, y: 132 },
-  qdrant: { x: 8, y: 260 },
-  neo4j: { x: 192, y: 260 },
+  elasticsearch: { x: 100, y: 216 },
+  qdrant: { x: 8, y: 424 },
+  neo4j: { x: 192, y: 424 },
 };
 
 type IngestionFlowNodeData = {
@@ -33,16 +34,15 @@ type IngestionFlowNode = Node<IngestionFlowNodeData, "ingestion">;
 
 function IngestionNodeCard({ data }: NodeProps<IngestionFlowNode>) {
   const status = STATUS_WORD_LABEL[data.status];
+  const detailsId = `ycs-ingestion-node-${data.step.key}-details`;
   return (
     <>
       <Handle type="target" position={Position.Top} isConnectable={false} />
-      <button
-        type="button"
-        onClick={data.onOpen}
-        aria-haspopup="dialog"
+      <fieldset
+        aria-label={`${data.label} — ${status}`}
         data-status={data.status}
-        style={{ width: NODE_WIDTH, height: NODE_HEIGHT, pointerEvents: "auto" }}
-        className={`nodrag nopan flex flex-col justify-between overflow-hidden rounded-md border bg-card px-3 py-2 text-left transition-colors hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring ${
+        style={{ width: NODE_WIDTH, height: NODE_HEIGHT, pointerEvents: "none" }}
+        className={`relative m-0 flex min-w-0 flex-col overflow-hidden rounded-md border bg-card p-0 hover:bg-muted ${
           data.status === "running"
             ? "border-running"
             : data.status === "failed"
@@ -52,18 +52,36 @@ function IngestionNodeCard({ data }: NodeProps<IngestionFlowNode>) {
                 : "border-border"
         }`}
       >
-        <span className="flex min-w-0 items-center justify-between gap-1.5">
-          <span className="flex min-w-0 items-center gap-1.5">
-            <span className="min-w-0 truncate text-sm font-medium">{data.label}</span>
+        <legend className="sr-only">{`${data.label} — ${status}`}</legend>
+        <div id={detailsId} className="pointer-events-none flex min-h-0 flex-1 flex-col">
+          <span className="flex min-h-10 flex-col px-3 pt-2">
+            <span className="truncate text-sm leading-4">{data.label}</span>
+            <span className="flex min-w-0 items-center justify-between gap-2">
+              <span className="truncate font-mono text-xs text-muted-foreground">{data.step.key}</span>
+              <StatusBadge tone={data.status} label={status} className="shrink-0" />
+            </span>
           </span>
-          <StatusBadge tone={data.status} label={status} className="shrink-0" />
-        </span>
-        <span className="block truncate font-mono text-xs text-muted-foreground">{data.step.key}</span>
-        <span title={data.detail} className="block truncate font-mono text-xs text-muted-foreground">
-          {data.detail}
-        </span>
-        <StepProgress step={data.step} />
-      </button>
+          <span
+            title={data.detail}
+            className="block truncate px-3 pt-1 font-mono text-xs text-muted-foreground"
+          >
+            {data.detail}
+          </span>
+          <IngestionNodeResources nodeId={data.step.key} compact />
+          <span className="mt-auto block px-3 pb-2 pt-1">
+            <StepProgress step={data.step} />
+          </span>
+        </div>
+        <button
+          type="button"
+          onClick={data.onOpen}
+          aria-label={`Open ${data.label} node details`}
+          aria-describedby={detailsId}
+          aria-haspopup="dialog"
+          style={{ pointerEvents: "auto" }}
+          className="nodrag nopan absolute inset-0 z-10 cursor-pointer rounded-md border-0 bg-transparent p-0 text-transparent hover:bg-transparent focus-visible:outline-2 focus-visible:outline-ring"
+        />
+      </fieldset>
       <Handle type="source" position={Position.Bottom} isConnectable={false} />
     </>
   );

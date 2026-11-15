@@ -8,6 +8,7 @@
 import type { JSX } from "react";
 
 import { STATUS_WORD_LABEL, statusWord } from "../domain";
+import { IngestionNodeResources } from "./ingestion-node-resources";
 import { IngestionStatusGlyph } from "./ingestion-status-glyph";
 import { StatusBadge } from "./status-badge";
 
@@ -99,6 +100,7 @@ export function PipelineSteps({
               <span className="mt-1 block text-xs break-words text-muted-foreground">
                 {step.view.hint ?? step.defaultHint}
               </span>
+              <IngestionNodeResources nodeId={step.key} />
             </button>
           </li>
         );

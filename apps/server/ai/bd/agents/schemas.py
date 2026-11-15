@@ -227,14 +227,23 @@ class FindingCheckBatch(BaseModel):
 
 
 class PatchVerification(BaseModel):
-    """A visual verifier's literal reading of a proposed source-page correction."""
+    """A visual verifier's literal reading and line-wrap assessment for a correction."""
 
     model_config = ConfigDict(extra = "forbid")
 
-    issue_id: NonEmptyText
-    verdict: PatchVerificationVerdict
-    source_reading: str = ""
-    reason: NonEmptyText
+    issue_id: NonEmptyText = Field(description = "The exact issue_id from the verification request.")
+    verdict: PatchVerificationVerdict = Field(
+        description = "Whether the literal source image supports the proposed replacement_focus.",
+    )
+    source_reading: str = Field(
+        default = "",
+        description = "Literal text read from the image at the minimal changed span, not the surrounding sentence.",
+    )
+    line_break_hyphen: bool = Field(
+        default = False,
+        description = "True only when a visible line-ending hyphen is a typographic wrap within one unhyphenated word.",
+    )
+    reason: NonEmptyText = Field(description = "A short explanation consistent with verdict and source_reading.")
 
 
 class PatchVerificationBatch(BaseModel):

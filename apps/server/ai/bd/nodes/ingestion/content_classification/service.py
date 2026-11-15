@@ -85,7 +85,15 @@ async def classify_content(
             _json_body({"revision": revision, "key": output_key, "sha256": digest}),
             "application/json",
         )
-        return _selection_state(saved.pages, output_key, digest, saved.revision)
+        selection_state = _selection_state(saved.pages, output_key, digest, saved.revision)
+        await graphs.service.report(
+            progress_callback,
+            kind = "content_selection",
+            classified_pages = [page["page_number"] for page in selection_state["content_selection"]],
+            selected_page_count = selection_state["selected_page_count"],
+            excluded_page_count = selection_state["excluded_page_count"],
+        )
+        return selection_state
 
     audits_by_page = {page["page"]: page for page in page_audits}
     semaphore = asyncio.Semaphore(params.CONTENT_CLASSIFICATION_CONCURRENCY)
@@ -215,7 +223,15 @@ async def classify_content(
         _json_body({"revision": revision, "key": output_key, "sha256": digest}),
         "application/json",
     )
-    return _selection_state(manifest.pages, output_key, digest, revision)
+    selection_state = _selection_state(manifest.pages, output_key, digest, revision)
+    await graphs.service.report(
+        progress_callback,
+        kind = "content_selection",
+        classified_pages = [page["page_number"] for page in selection_state["content_selection"]],
+        selected_page_count = selection_state["selected_page_count"],
+        excluded_page_count = selection_state["excluded_page_count"],
+    )
+    return selection_state
 
 
 def _selection_state(pages: list[Any], key: str, digest: str, revision: int) -> dict[str, Any]:

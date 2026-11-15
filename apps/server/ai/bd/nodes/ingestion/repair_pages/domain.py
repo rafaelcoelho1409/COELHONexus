@@ -5,6 +5,7 @@ from . import errors, patterns
 from .... import agents
 
 import difflib
+import re
 import unicodedata
 import json
 from collections.abc import Iterator
@@ -47,6 +48,32 @@ def _validate_patch_response(
         return agents.schemas.PatchDraftBatch.model_validate(value)
     except ValidationError:
         return agents.schemas.PatchProposalBatch.model_validate(value)
+
+
+def extract_patch_verification_response(result: Any) -> agents.schemas.PatchVerificationBatch:
+    """Read the structured verifier result or recover its JSON assistant answer."""
+    structured = result.get("structured_response") if isinstance(result, dict) else None
+    last_error = None
+    if structured is not None:
+        try:
+            return agents.schemas.PatchVerificationBatch.model_validate(structured)
+        except ValidationError as error:
+            last_error = error
+
+    messages = result.get("messages") if isinstance(result, dict) else None
+    content = _last_assistant_content(messages)
+    if content is None:
+        if last_error is not None:
+            raise last_error
+        raise ValueError("visual verifier returned no structured response or assistant message")
+    for value in _json_objects(content):
+        try:
+            return agents.schemas.PatchVerificationBatch.model_validate(value)
+        except ValidationError as error:
+            last_error = error
+    if last_error is not None:
+        raise last_error
+    raise ValueError("visual verifier assistant message contained no verification JSON")
 
 
 def _last_assistant_content(messages: Any) -> str | None:
@@ -366,6 +393,39 @@ def source_verification_candidates(
             continue
         candidates.append(proposal)
     return candidates
+
+
+def source_reading_confirms_patch(
+    proposal: agents.schemas.PatchProposal,
+    verification: agents.schemas.PatchVerification,
+) -> bool:
+    """Use the exact visual reading of the changed span as evidence for the proposal."""
+    target_focus, replacement_focus = patch_verification_focus(proposal)
+    source_reading = patterns.WHITESPACE_RE.sub(" ", verification.source_reading).strip()
+    target_focus = patterns.WHITESPACE_RE.sub(" ", target_focus).strip()
+    replacement_focus = patterns.WHITESPACE_RE.sub(" ", replacement_focus).strip()
+    if source_reading and source_reading == replacement_focus and target_focus != replacement_focus:
+        return True
+    if (
+        source_reading
+        and source_reading == patterns.WHITESPACE_RE.sub(" ", proposal.replacement).strip()
+        and proposal.target_text != proposal.replacement
+    ):
+        return True
+    if (
+        proposal.issue_code != agents.schemas.IssueCode.SPLIT_WORD
+        or not verification.line_break_hyphen
+    ):
+        return False
+    if not source_reading or source_reading != target_focus:
+        return False
+    split_word = re.fullmatch(r"(.+?)[-‐‑]\s+(.+)", target_focus)
+    return bool(split_word and split_word.group(1) + split_word.group(2) == replacement_focus)
+
+
+def patch_verification_focus(proposal: agents.schemas.PatchProposal) -> tuple[str, str]:
+    """Return the minimal changed word span, excluding unchanged context from image matching."""
+    return _changed_words(proposal.target_text, proposal.replacement)
 
 
 def _occurrences(markdown: str, target: str) -> list[int]:

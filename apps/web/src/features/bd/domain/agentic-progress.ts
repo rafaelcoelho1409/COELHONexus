@@ -173,11 +173,43 @@ export const EMPTY_AGENTIC_PROGRESS: AgenticProgress = {
   audited_pages: [],
   audit_warning_pages: [],
   processed_pages: [],
+  repaired_pages: [],
   active_audit_pages: [],
   active_repair_pages: [],
   classified_pages: [],
   active_classification_pages: [],
+  selected_page_count: 0,
+  excluded_page_count: 0,
 };
+
+function pageSelectionCounts(progress: AgenticProgress, total?: number) {
+  const selected = progress.selected_page_count;
+  const excluded = progress.excluded_page_count;
+  if (
+    selected !== undefined &&
+    excluded !== undefined &&
+    (total === undefined ? selected + excluded > 0 : selected + excluded === total)
+  ) {
+    return { selected, excluded, known: true };
+  }
+  const excludedCount = progress.excluded_page_count ?? 0;
+  const fallbackTotal = total ?? progress.processed_pages.length;
+  return {
+    selected: Math.max(0, fallbackTotal - excludedCount),
+    excluded: excludedCount,
+    known: false,
+  };
+}
+
+function repairedSelectionCount(
+  progress: AgenticProgress,
+  status: AgenticNodeStatus,
+  total?: number,
+): number {
+  const { selected } = pageSelectionCounts(progress, total);
+  if (status === "done") return selected;
+  return Math.min(progress.repaired_pages?.length ?? 0, selected);
+}
 
 export type ChapterProgress = ChapterRange & { processed: number; total: number };
 
@@ -230,6 +262,7 @@ export function agenticNodeCaption(
   nodeId: string,
   total: number,
   unitPlural = "pages",
+  status?: AgenticNodeStatus,
 ): string | null {
   if (total <= 0) return null;
   if (nodeId === "audit_batch") {
@@ -240,18 +273,21 @@ export function agenticNodeCaption(
       : `${done} of ${total} ${unitPlural} audited`;
   }
   if (nodeId === "repair_pages") {
-    const done = progress.processed_pages.length;
+    const done = repairedSelectionCount(progress, status ?? "running", total);
     const active = progress.active_repair_pages.length;
+    const { selected, excluded } = pageSelectionCounts(progress, total);
     return active > 0
-      ? `${done} ${unitPlural} repaired · ${active} active · ${total} total`
-      : `${done} of ${total} ${unitPlural} repaired`;
+      ? `${done} of ${selected} selected ${unitPlural} processed · ${excluded} excluded from repair · ${active} active`
+      : `${done} of ${selected} selected ${unitPlural} processed · ${excluded} excluded from repair`;
   }
   if (nodeId === "classify_content") {
     const done = progress.classified_pages?.length ?? 0;
     const active = progress.active_classification_pages?.length ?? 0;
+    const { selected, excluded, known } = pageSelectionCounts(progress, total);
+    const selection = known ? ` · ${selected} selected · ${excluded} excluded` : "";
     return active > 0
-      ? `${done} ${unitPlural} classified · ${active} active · ${total} total`
-      : `${done} of ${total} ${unitPlural} classified`;
+      ? `${done} ${unitPlural} classified · ${active} active · ${total} total${selection}`
+      : `${done} of ${total} ${unitPlural} classified${selection}`;
   }
   return null;
 }
@@ -263,12 +299,18 @@ export function agenticNodeKpi(
   status: AgenticNodeStatus,
   unitPlural: string,
   summary: AgenticRunSummary | null,
+  total?: number,
 ): string | null {
   if (status !== "done") return null;
   if (nodeId === "audit_batch") return `${progress.audited_pages.length} ${unitPlural} audited`;
-  if (nodeId === "repair_pages") return `${progress.processed_pages.length} ${unitPlural} repaired`;
-  if (nodeId === "classify_content")
-    return `${progress.classified_pages?.length ?? 0} ${unitPlural} classified`;
+  if (nodeId === "repair_pages") {
+    const { excluded } = pageSelectionCounts(progress, total);
+    return `${repairedSelectionCount(progress, status, total)} selected processed · ${excluded} excluded from repair`;
+  }
+  if (nodeId === "classify_content") {
+    const { selected, excluded } = pageSelectionCounts(progress, total);
+    return `${selected} selected · ${excluded} excluded from Distill`;
+  }
   if (nodeId === "publish" && summary) {
     return `${summary.deliveredPages} delivered · ${summary.reviewPages} need review`;
   }
@@ -287,11 +329,17 @@ export function agenticNodeLiveLine(
     nodeId === "audit_batch"
       ? [progress.audited_pages.length, progress.active_audit_pages.length]
       : nodeId === "repair_pages"
-        ? [progress.processed_pages.length, progress.active_repair_pages.length]
+        ? [repairedSelectionCount(progress, status, total), progress.active_repair_pages.length]
         : nodeId === "classify_content"
           ? [progress.classified_pages?.length ?? 0, progress.active_classification_pages?.length ?? 0]
           : [null, 0];
   if (done === null) return null;
+  if (nodeId === "repair_pages") {
+    const { selected, excluded } = pageSelectionCounts(progress, total);
+    return active > 0
+      ? `${done}/${selected} selected · ${excluded} excluded · ${active} active`
+      : `${done}/${selected} selected · ${excluded} excluded`;
+  }
   return active > 0 ? `${done}/${total} · ${active} in flight` : `${done}/${total}`;
 }
 
@@ -322,10 +370,12 @@ function agenticNodeProgress(
     };
   }
   if (nodeId === "repair_pages") {
+    const { selected } = pageSelectionCounts(progress, total);
+    if (selected <= 0) return null;
     return {
-      current: Math.min(progress.processed_pages.length, total),
-      total,
-      label: "pages repaired",
+      current: repairedSelectionCount(progress, status, total),
+      total: selected,
+      label: "selected pages processed",
       active: progress.active_repair_pages.length,
     };
   }
@@ -353,7 +403,7 @@ export function agenticNodeViews(
       id: node.id,
       label: node.label,
       status,
-      kpi: agenticNodeKpi(progress, node.id, status, unitPlural, summary),
+      kpi: agenticNodeKpi(progress, node.id, status, unitPlural, summary, total),
       liveLine: agenticNodeLiveLine(progress, node.id, status, total),
       resources: AGENTIC_NODE_DETAILS[node.id].resources,
       progress: agenticNodeProgress(progress, node.id, status, total),

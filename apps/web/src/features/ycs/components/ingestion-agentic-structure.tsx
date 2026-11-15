@@ -11,6 +11,7 @@ import { MermaidTopology } from "@/shared/markdown/mermaid-topology";
 
 import { STATUS_WORD_LABEL, statusWord } from "../domain";
 import { ActionButton } from "./action-button";
+import { IngestionNodeResources } from "./ingestion-node-resources";
 import type { Step } from "./pipeline-steps";
 import { PipelineSteps } from "./pipeline-steps";
 import { SideSheet } from "./side-sheet";
@@ -162,6 +163,10 @@ export function IngestionAgenticStructure({
           <section aria-label="Node purpose" className="rounded-sm border border-border bg-card p-3">
             <h3 className="text-sm font-medium">What this node does</h3>
             <p className="mt-2 text-sm text-muted-foreground">{selected.defaultHint}</p>
+          </section>
+          <section aria-label="Node resources" className="mt-3 rounded-sm border border-border bg-card p-3">
+            <h3 className="text-sm font-medium">Agent, skills, and tools</h3>
+            <IngestionNodeResources nodeId={selected.key} />
           </section>
           <dl className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
             <div className="rounded-sm border border-border px-3 py-2">

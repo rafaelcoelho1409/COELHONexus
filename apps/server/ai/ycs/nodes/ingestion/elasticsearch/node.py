@@ -86,7 +86,7 @@ async def index_documents(
 
 
 def dispatch_to_stores(
-    state: states.IngestionChunkState,
+    state: graphs.ingestion.states.IngestionChunkState,
 ) -> str | list[str]:
     video_ids = state.get("dispatched_ids", [])
     extract_id = state.get("extract_id")
