@@ -20,6 +20,7 @@ export const pageBodySchema = z.object({
   page: z.number(),
   markdown: z.string(),
   content_source: z.enum(["docling", "agentic"]).catch("docling"),
+  converted_figures: z.array(z.string()).catch([]),
 });
 
 export const contentSelectionPageSchema = z.looseObject({
@@ -131,6 +132,10 @@ const agenticProgressSchema = z.looseObject({
   active_repair_pages: z.array(z.number()).catch([]),
   classified_pages: z.array(z.number()).catch([]).optional(),
   active_classification_pages: z.array(z.number()).catch([]).optional(),
+  visual_candidate_count: z.number().int().nonnegative().catch(0).optional(),
+  visual_completed_count: z.number().int().nonnegative().catch(0).optional(),
+  visual_converted_count: z.number().int().nonnegative().catch(0).optional(),
+  visual_failed_count: z.number().int().nonnegative().catch(0).optional(),
   selected_page_count: z.number().int().nonnegative().catch(0).optional(),
   excluded_page_count: z.number().int().nonnegative().catch(0).optional(),
 });
@@ -207,6 +212,9 @@ export const agenticEventSchema = z.looseObject({
     "page_repair",
     "content_classification",
     "content_selection",
+    "visual_enrichment_progress",
+    "visual_figure",
+    "visual_page",
     "run_done",
     "run_failed",
     "run_cancelled",

@@ -171,7 +171,7 @@ async def cancel_watcher(
 
 
 async def _cleanup_run_staging(minio, framework_slug: str, run_id: str) -> int:
-    """Delete only temporary assembly objects; raw inputs and agentic candidates are immutable run artifacts."""
+    """Delete temporary split outputs; raw captures and published page versions are immutable run artifacts."""
     try:
         n = await minio.delete_prefix(
             domains.dd.ingestion.storage.keys.stage_prefix(framework_slug, run_id)
@@ -252,7 +252,7 @@ async def reserve_run(slug: str, refresh: bool) -> dict:
     ingestion is running, this slug's lock is held, or a concurrent start won the lock) or `cached` (a manifest
     exists and no refresh was asked) — or `{"status": "reserved", "run_id": ...}` with the slug's lock held and the
     cancel flag cleared: the caller enqueues the run and calls `release_run` if that fails. A refresh does not touch the
-    stored copy here: each run writes immutable raw/agentic artifacts and replaces the canonical manifest only after publish."""
+    stored copy here: each run writes immutable raw captures and replaces the canonical manifest only after publication."""
     progress = domains.dd.ingestion.runtime.progress.service
     async with infra.redis.service.client() as r:
         other = await progress.find_other_running(r, slug)
@@ -611,9 +611,10 @@ async def _run_inner(
         await progress.start(tier="post", total=0)
 
         phase_started = time.monotonic()
-        post_summary = await domains.dd.ingestion.post.service.prepare_for_agentic(
+        post_summary = await domains.dd.ingestion.post.service.prepare_pages(
             store
         )
+        await domains.dd.ingestion.post.service.publish_extracted_pages(store)
         if benchmark_report is not None:
             benchmark_report.setdefault("timings_ms", {})["post"] = max(
                 0, int((time.monotonic() - phase_started) * 1000)
@@ -627,33 +628,8 @@ async def _run_inner(
 
         await progress.raise_if_cancelled()
 
-        phase_started = time.monotonic()
-        ai_result = await domains.dd.ingestion.ai.service.run_ingestion_agentic(
-            store,
-            progress=progress,
-            checkpointer=infra.postgres.service.get_checkpointer(),
-        )
-        if benchmark_report is not None:
-            benchmark_report["agentic"] = ai_result
-            benchmark_report.setdefault("timings_ms", {})["agentic"] = max(
-                0, int((time.monotonic() - phase_started) * 1000)
-            )
-            try:
-                benchmark_report["llm_counters"] = await domains.settings.llm_counter.service.read_counters(
-                    "dd", run_id,
-                )
-            except Exception as error:
-                logger.warning(
-                    "[dispatch] benchmark LLM counters unavailable for %s: %s",
-                    run_id,
-                    type(error).__name__,
-                )
-            await _persist_benchmark_report(progress, minio, benchmark_report)
-
-        # Vaults are derived from the final agentic page version and live beneath that agentic run.
-        # Own tier + real total/current — on a large framework (400+ pages)
-        # this was previously a single multi-second block with the progress
-        # UI stuck showing "post" and no counter moving at all.
+        # Vaults are derived from the immutable extracted page version consumed by Planner and Synth.
+        # Own tier + real total/current so larger frameworks report visible progress.
         await progress.start(tier="vault_backfill", total=post_summary["output_files"])
 
         async def _on_backfill_progress(done: int, total: int) -> None:
@@ -715,7 +691,6 @@ async def _run_inner(
 
         await progress.finish(status="done")
 
-        base_result["agentic"] = ai_result
         return domain.done_result(base_result, store.manifest, post_summary)
 
     except (
@@ -742,7 +717,7 @@ async def _run_inner(
 
     except Exception as e:
         logger.exception(f"[dispatch] {slug}: failed")
-        # The previous canonical manifest remains active. Raw and partial agentic artifacts stay versioned for diagnosis/retry.
+        # The previous canonical manifest remains active. Raw captures and partial published pages remain versioned for diagnosis/retry.
         await _cleanup_run_staging(minio, storage_slug, run_id)
         await progress.finish(status="failed", error=domain.error_text(e))
         if benchmark_report is not None:

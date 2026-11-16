@@ -73,20 +73,14 @@ def pages_from_bundle(
 ) -> list[domains.dd.ingestion.transform.entities.Page]:
     """What Tier 1 makes of a bundle (`body`, already cut to the catalog's `path_filter`; `url` is where it came from, `nav_index` the
     site's own page order and sections): its pages, as the explorer and the Planner read them. The whole chain in one place and pure —
-    the title of a bundle that stays one page, the normalizer, links made absolute, the split, the site's navigation order and
-    sections, titles told apart — the same steps, in the same order, as `Store.add_page` and `post.service.apply_to_store` take when
-    a run stores the bundle (arm A of the A/B). Image downloads are not part of it: they come after, for every arm alike."""
+    the title of a bundle that stays one page, the structural split, the site's navigation order and sections, and titles told apart.
+    Extracted Markdown stays unchanged; image downloads and text normalization are not part of this path."""
     post = domains.dd.ingestion.post
     entities = domains.dd.ingestion.transform.entities
     slug = host_slug((urlparse(url).netloc or "").lower())
     will_split = post.domain.will_be_split(body)
     title = post.domain.display_title(body, slug)
-    try:
-        normalized = domains.dd.ingestion.corpus_normalize.domain.normalize_doc(body).body
-    except Exception as e:  # noqa: BLE001 — the page is stored as it came, as `Store.add_page` does
-        logger.warning(f"[tier-1] normalize_doc failed for {slug!r}: {type(e).__name__}: {e}; keeping the bundle as it came")
-        normalized = body
-    text = post.domain.absolutize_links(normalized, url, relative = not will_split)
+    text = body
     whole = [entities.Page(slug = slug, title = title, body = text)]
     if len(text.encode("utf-8")) < post.params.MONOLITH_SPLIT_THRESHOLD_BYTES:
         return whole

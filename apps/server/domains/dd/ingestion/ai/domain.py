@@ -89,4 +89,7 @@ def restored_manifest(manifest: dict, entries: list, ingested_at: float) -> dict
         "total_bytes": sum(entry.bytes for entry in entries),
         "ingested_at": ingested_at,
         "agentic_run_id": None,
+        "page_content_mode": "extracted",
+        "normalizer": None,
+        "normalizer_version": 0,
     }

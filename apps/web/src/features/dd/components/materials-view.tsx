@@ -1,11 +1,15 @@
 "use client";
 
-/** The Ingestion tab's Materials: the ingested pages read the way a Study chapter is. The page list on the left (filter, tier
+/** The Pages view: ingested pages read the way a Study chapter is. The page list on the left (filter, tier
  * chips, sections in the order of the original documentation), the page itself in the middle with an outline beside it, search
  * across every page, and a reading window that gives the page the whole screen. Both side columns fold away (and stay folded,
  * per browser). While a run is on screen the pages are the run's own, so Agentic AI's output shows as it is published. */
 
 import {
+  ChevronLeft,
+  ChevronRight,
+  ChevronsLeft,
+  ChevronsRight,
   Maximize2,
   PanelLeftClose,
   PanelLeftOpen,
@@ -32,6 +36,7 @@ import { MaterialsReadingMode } from "./materials-reading-mode";
 import { MaterialsSearch } from "./materials-search";
 import { PageQualityPanel } from "./page-quality";
 import { ReadingProgress } from "./reading-progress";
+import { StageBar } from "./stage-bar";
 import { StudyOutline } from "./study-outline";
 
 /** The page's grid from 1024px up for each way of folding the two side columns (whole class names, so Tailwind sees them). */
@@ -56,18 +61,23 @@ function isTyping(target: EventTarget | null): boolean {
 
 export function MaterialsView({
   slug,
+  info,
   manifest,
   runId = null,
   loadError = false,
   active = true,
+  controlsInNavbar = false,
 }: {
   slug: string;
+  info?: string;
   manifest: Manifest | null;
   runId?: string | null;
   /** The saved manifest request failed and no live run manifest is available. */
   loadError?: boolean;
   /** The Materials tab is the one on show: the shortcuts (Ctrl+K, the arrow keys) belong to it only then. */
   active?: boolean;
+  /** The Pages stage supplies the third navbar slot; embedded readers keep controls in the page header. */
+  controlsInNavbar?: boolean;
 }) {
   const { layout, update } = useMaterialsLayout();
   const [mode, setMode] = useState<PreviewMode>("rendered");
@@ -181,6 +191,87 @@ export function MaterialsView({
     if (target !== null) setSelectedIdx(target);
   };
 
+  const firstPage = filtered[0]?.idx ?? null;
+  const lastPage = filtered[filtered.length - 1]?.idx ?? null;
+  const panelToggles = (
+    <>
+      <ActionButton
+        iconOnly
+        aria-expanded={layout.chapters}
+        aria-label={layout.chapters ? "Hide pages" : "Show pages"}
+        title={layout.chapters ? "Hide pages" : "Show pages"}
+        onClick={() => update({ chapters: !layout.chapters })}
+      >
+        {layout.chapters ? <PanelLeftClose aria-hidden /> : <PanelLeftOpen aria-hidden />}
+      </ActionButton>
+      <ActionButton
+        iconOnly
+        aria-expanded={layout.outline}
+        aria-label={layout.outline ? "Hide outline" : "Show outline"}
+        title={layout.outline ? "Hide outline" : "Show outline"}
+        onClick={() => update({ outline: !layout.outline })}
+      >
+        {layout.outline ? <PanelRightClose aria-hidden /> : <PanelRightOpen aria-hidden />}
+      </ActionButton>
+    </>
+  );
+  const pageControls = (
+    <div className="flex shrink-0 flex-wrap items-center justify-end gap-1">
+      {controlsInNavbar ? panelToggles : null}
+      <span className="mr-1 text-xs tabular-nums text-muted-foreground">
+        {neighbours.position < 0 ? "0 / 0" : `${neighbours.position + 1} / ${filtered.length}`}
+      </span>
+      <ActionButton
+        iconOnly
+        aria-label="First page"
+        title="First page"
+        disabled={firstPage === null || selected === firstPage}
+        onClick={() => firstPage !== null && setSelectedIdx(firstPage)}
+      >
+        <ChevronsLeft aria-hidden />
+      </ActionButton>
+      <ActionButton
+        iconOnly
+        aria-label="Previous page"
+        title="Previous page"
+        disabled={goPrevious === null}
+        onClick={() => goPrevious?.()}
+      >
+        <ChevronLeft aria-hidden />
+      </ActionButton>
+      <ActionButton
+        iconOnly
+        aria-label="Next page"
+        title="Next page"
+        disabled={goNext === null}
+        onClick={() => goNext?.()}
+      >
+        <ChevronRight aria-hidden />
+      </ActionButton>
+      <ActionButton
+        iconOnly
+        aria-label="Last page"
+        title="Last page"
+        disabled={lastPage === null || selected === lastPage}
+        onClick={() => lastPage !== null && setSelectedIdx(lastPage)}
+      >
+        <ChevronsRight aria-hidden />
+      </ActionButton>
+      <ActionButton
+        aria-haspopup="dialog"
+        title="Read this page on the whole screen"
+        disabled={selectedEntry === null || reading !== null}
+        onClick={() => setReading({ startId: activeId })}
+      >
+        <Maximize2 aria-hidden />
+        Reading mode
+      </ActionButton>
+    </div>
+  );
+  const stageBar = controlsInNavbar ? (
+    <StageBar stage="pages" slug={slug} info={info} end={pageControls} />
+  ) : null;
+
   // Ctrl/Cmd+K opens the search; the left and right arrow keys turn pages. Only while this tab is the one on show.
   useEffect(() => {
     if (!active) return;
@@ -202,18 +293,21 @@ export function MaterialsView({
 
   if (entries.length === 0) {
     return (
-      <section
-        aria-label="Ingested library"
-        className="rounded-md border border-border bg-card p-8 text-center text-sm text-muted-foreground"
-      >
-        {loadError ? (
-          <p role="alert">Could not load the ingested pages. Refresh the page to try again.</p>
-        ) : manifest ? (
-          "This ingestion has no pages."
-        ) : (
-          "No ingested pages yet."
-        )}
-      </section>
+      <>
+        {stageBar}
+        <section
+          aria-label="Ingested library"
+          className="rounded-md border border-border bg-card p-8 text-center text-sm text-muted-foreground"
+        >
+          {loadError ? (
+            <p role="alert">Could not load the ingested pages. Refresh the page to try again.</p>
+          ) : manifest ? (
+            "This ingestion has no pages."
+          ) : (
+            "No ingested pages yet."
+          )}
+        </section>
+      </>
     );
   }
 
@@ -272,6 +366,7 @@ export function MaterialsView({
 
   const pageToolbar = (
     <div className="flex shrink-0 flex-wrap items-center justify-end gap-1">
+      {controlsInNavbar ? null : pageControls}
       {layout.chapters ? null : (
         <ActionButton
           iconOnly
@@ -282,135 +377,105 @@ export function MaterialsView({
           <Search aria-hidden />
         </ActionButton>
       )}
-      <ActionButton
-        iconOnly
-        aria-expanded={layout.chapters}
-        aria-label={layout.chapters ? "Hide pages" : "Show pages"}
-        title={layout.chapters ? "Hide pages" : "Show pages"}
-        onClick={() => update({ chapters: !layout.chapters })}
-      >
-        {layout.chapters ? <PanelLeftClose aria-hidden /> : <PanelLeftOpen aria-hidden />}
-      </ActionButton>
-      {hasOutline ? (
-        <ActionButton
-          iconOnly
-          className="hidden lg:inline-flex"
-          aria-expanded={layout.outline}
-          aria-label={layout.outline ? "Hide outline" : "Show outline"}
-          title={layout.outline ? "Hide outline" : "Show outline"}
-          onClick={() => update({ outline: !layout.outline })}
-        >
-          {layout.outline ? <PanelRightClose aria-hidden /> : <PanelRightOpen aria-hidden />}
-        </ActionButton>
-      ) : null}
-      <ActionButton
-        aria-haspopup="dialog"
-        title="Read this page on the whole screen"
-        disabled={selectedEntry === null}
-        onClick={() => setReading({ startId: activeId })}
-      >
-        <Maximize2 aria-hidden />
-        Reading mode
-      </ActionButton>
+      {controlsInNavbar ? null : panelToggles}
     </div>
   );
 
   return (
-    <section
-      aria-label="Ingested library"
-      onKeyDown={(event) => {
-        if (event.key === "/" && !isTyping(event.target)) {
-          event.preventDefault();
-          filterRef.current?.focus();
-        }
-      }}
-    >
-      <ReadingProgress />
-      <div className={`flex flex-col gap-4 lg:grid ${columns}`}>
-        {layout.chapters ? (
-          <aside className={`flex min-w-0 flex-col gap-3 ${STICKY_COLUMN}`}>
-            <ActionButton
-              className="w-full justify-start"
-              onClick={() => setSearchOpen(true)}
-              aria-haspopup="dialog"
-              disabled={entries.length === 0}
-            >
-              <Search aria-hidden />
-              Search pages
-              <kbd className="ml-auto font-mono text-xs text-muted-foreground">Ctrl K</kbd>
-            </ActionButton>
-            <div className="rounded-md border border-border bg-card p-3">{pageList}</div>
-          </aside>
-        ) : null}
+    <>
+      {stageBar}
+      <section
+        aria-label="Ingested library"
+        onKeyDown={(event) => {
+          if (event.key === "/" && !isTyping(event.target)) {
+            event.preventDefault();
+            filterRef.current?.focus();
+          }
+        }}
+      >
+        <ReadingProgress />
+        <div className={`flex flex-col gap-4 lg:grid ${columns}`}>
+          {layout.chapters ? (
+            <aside className={`flex min-w-0 flex-col gap-3 ${STICKY_COLUMN}`}>
+              <ActionButton
+                className="w-full justify-start"
+                onClick={() => setSearchOpen(true)}
+                aria-haspopup="dialog"
+                disabled={entries.length === 0}
+              >
+                <Search aria-hidden />
+                Search pages
+                <kbd className="ml-auto font-mono text-xs text-muted-foreground">Ctrl K</kbd>
+              </ActionButton>
+              <div className="rounded-md border border-border bg-card p-3">{pageList}</div>
+            </aside>
+          ) : null}
 
-        {/* In the reading window the text is drawn there, not here: one copy at a time, so a heading's id is never twice on the page. */}
-        <MaterialsArticle
-          ref={articleRef}
-          entry={selectedEntry}
-          place={place}
-          framed
-          mode={mode}
-          onMode={setMode}
-          version={selectedVersion}
-          onVersion={setVersion}
-          hasVersions={hasVersions}
-          onPrevious={goPrevious}
-          onNext={goNext}
-          toolbar={pageToolbar}
-          quality={quality}
-        >
-          {reading ? null : body}
-        </MaterialsArticle>
-
-        {showOutlineColumn ? (
-          <div className="hidden lg:block">
-            <div className={`${STICKY_COLUMN} overflow-y-auto`}>{outlineView}</div>
-          </div>
-        ) : null}
-      </div>
-
-      {reading && selectedEntry ? (
-        <MaterialsReadingMode
-          title={title}
-          position={`${neighbours.position + 1} / ${filtered.length}`}
-          onPrevious={goPrevious}
-          onNext={goNext}
-          layout={layout}
-          onLayout={update}
-          onSearch={() => setSearchOpen(true)}
-          onExit={exitReading}
-          startId={reading.startId}
-          pageIdx={selectedEntry.idx}
-          pages={pageList}
-          outline={outlineView}
-        >
+          {/* In the reading window the text is drawn there, not here: one copy at a time, so a heading's id is never twice on the page. */}
           <MaterialsArticle
+            ref={articleRef}
             entry={selectedEntry}
             place={place}
-            framed={false}
+            framed
             mode={mode}
             onMode={setMode}
             version={selectedVersion}
             onVersion={setVersion}
             hasVersions={hasVersions}
+            toolbar={pageToolbar}
+            quality={quality}
+          >
+            {reading ? null : body}
+          </MaterialsArticle>
+
+          {showOutlineColumn ? (
+            <div className="hidden lg:block">
+              <div className={`${STICKY_COLUMN} overflow-y-auto`}>{outlineView}</div>
+            </div>
+          ) : null}
+        </div>
+
+        {reading && selectedEntry ? (
+          <MaterialsReadingMode
+            title={title}
+            position={`${neighbours.position + 1} / ${filtered.length}`}
             onPrevious={goPrevious}
             onNext={goNext}
-            quality={readingQuality}
+            layout={layout}
+            onLayout={update}
+            onSearch={() => setSearchOpen(true)}
+            onExit={exitReading}
+            startId={reading.startId}
+            pageIdx={selectedEntry.idx}
+            pages={pageList}
+            outline={outlineView}
           >
-            {body}
-          </MaterialsArticle>
-        </MaterialsReadingMode>
-      ) : null}
+            <MaterialsArticle
+              entry={selectedEntry}
+              place={place}
+              framed={false}
+              mode={mode}
+              onMode={setMode}
+              version={selectedVersion}
+              onVersion={setVersion}
+              hasVersions={hasVersions}
+              quality={readingQuality}
+            >
+              {body}
+            </MaterialsArticle>
+          </MaterialsReadingMode>
+        ) : null}
 
-      {searchOpen ? (
-        <MaterialsSearch
-          slug={slug}
-          runId={runId}
-          entries={entries}
-          onChoose={chooseHit}
-          onClose={() => setSearchOpen(false)}
-        />
-      ) : null}
-    </section>
+        {searchOpen ? (
+          <MaterialsSearch
+            slug={slug}
+            runId={runId}
+            entries={entries}
+            onChoose={chooseHit}
+            onClose={() => setSearchOpen(false)}
+          />
+        ) : null}
+      </section>
+    </>
   );
 }

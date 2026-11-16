@@ -38,4 +38,8 @@ class IngestionRunState(TypedDict, total = False):
     processed_book_revision: int
     processed_page_count: int
     contents_status: str
+    visual_candidate_count: int
+    visual_completed_count: int
+    visual_converted_count: int
+    visual_failed_count: int
     status: str

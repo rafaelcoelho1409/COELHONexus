@@ -3,4 +3,5 @@ AGENT_SKILL_FOLDERS = {
     "text_repair": "text-repair",
     "structure_repair": "structure-repair",
     "metadata_normalizer": "metadata-normalizer",
+    "visual_extractor": "visual-extractor",
 }

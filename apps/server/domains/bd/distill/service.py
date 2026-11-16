@@ -348,7 +348,7 @@ async def queue_node_replay(book_id: str, run_id: str, node_id: str) -> dict[str
         graph_config = {"configurable": {
             "thread_id": f"bd-distill:{book_id}:{manifest['extraction_run_id']}:{run_id}",
         }}
-        await ai.langgraph.service.checkpoint_before_node(graph, graph_config, node_id)
+        await infra.postgres.service.checkpoint_before_node(graph, graph_config, node_id)
         await progress.service.clear_cancel(book_id, run_id)
 
         prefix = keys.run_prefix(book_id, run_id)
@@ -852,7 +852,7 @@ async def run_distill(
         completed_checkpoint_state = None
         if checkpointer is not None:
             if replay_from_node in params.GRAPH_NODES:
-                replay_config = await ai.langgraph.service.checkpoint_before_node(
+                replay_config = await infra.postgres.service.checkpoint_before_node(
                     graph,
                     graph_config,
                     replay_from_node,

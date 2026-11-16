@@ -44,6 +44,9 @@ SOURCE_PAGE_IMAGE_MAX_DIMENSION = 1800
 SOURCE_PAGE_IMAGE_JPEG_QUALITY = 82
 CONTENT_EXCLUSION_CONFIDENCE = 0.98
 CONTENT_SELECTION_REVISION = 4
+VISUAL_ENRICHMENT_CONCURRENCY = 4
+VISUAL_FIGURE_MAX_BYTES = 8 * 1024 * 1024
+VISUAL_CONTEXT_CHARS = 1600
 TASK_NAME = "domains.bd.ingestion.ai.task.run_ingestion_ai"
 AUTO_RUN_ID_PREFIX = "auto-"
 GRAPH_NODES = (
@@ -52,6 +55,7 @@ GRAPH_NODES = (
     "plan_repairs",
     "repair_pages",
     "normalize_metadata",
+    "enrich_visuals",
     "materialize_processed_book",
     "reconcile_contents",
     "publish",

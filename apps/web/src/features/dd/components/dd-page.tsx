@@ -4,9 +4,9 @@
  * picker and its facts in the third (`StageBar`). The stage comes from the pathname; slug/run come from search
  * params (read inside a Suspense boundary per Next.js requirements). */
 
-import { usePathname, useSearchParams } from "next/navigation";
-import { Suspense } from "react";
-import { DD_STAGES, type DdStage } from "../params";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { Suspense, useEffect } from "react";
+import { DD_STAGES, pagesHref, type DdStage } from "../params";
 import { AutoChainToggle } from "./auto-chain-toggle";
 import { CatalogStage } from "./catalog-stage";
 import { IngestionStage } from "./ingestion-stage";
@@ -38,28 +38,35 @@ export function DocsDistillerPage() {
 
 function StageWithSearchParams({ stage }: { stage: DdStage }) {
   const params = useSearchParams();
+  const router = useRouter();
   const slug = params.get("slug");
   const runId = params.get("run");
+  const legacyIngestionUrl = stage === "ingestion";
+
+  useEffect(() => {
+    if (legacyIngestionUrl) {
+      router.replace(pagesHref(slug, runId), { scroll: false });
+    }
+  }, [legacyIngestionUrl, router, slug, runId]);
+
+  const visibleStage = legacyIngestionUrl ? "pages" : stage;
   return (
     <>
-      {/* Ingestion and Pages draw their own stage bar and content controls. */}
-      {stage === "ingestion" || stage === "pages" ? null : (
+      {/* Pages draws its own framework bar and controls. */}
+      {visibleStage === "pages" ? null : (
         <StageBar
-          stage={stage}
+          stage={visibleStage}
           slug={slug}
-          controls={stage === "pipeline" ? <AutoChainToggle /> : undefined}
+          controls={visibleStage === "pipeline" ? <AutoChainToggle /> : undefined}
         />
       )}
-      <StageBody stage={stage} slug={slug} runId={runId} />
+      <StageBody stage={visibleStage} slug={slug} runId={runId} />
     </>
   );
 }
 
 function StageBody({ stage, slug, runId }: { stage: DdStage; slug: string | null; runId: string | null }) {
-  if (stage === "ingestion") {
-    return <IngestionStage slug={slug} runId={runId} />;
-  }
-  if (stage === "pages") {
+  if (stage === "ingestion" || stage === "pages") {
     return <IngestionStage slug={slug} runId={runId} view="materials" />;
   }
   if (stage === "pipeline") {

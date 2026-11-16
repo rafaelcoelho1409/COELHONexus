@@ -5,7 +5,7 @@ import type { Section } from "@/shared/layout/section";
  * their URLs stay reachable as deep links to a single stage. */
 export const DD_STAGES = [
   { key: "catalog", label: "Catalog", href: "/dd", tab: true },
-  { key: "ingestion", label: "Ingestion", href: "/dd/ingestion", tab: true },
+  { key: "ingestion", label: "Ingestion", href: "/dd/ingestion", tab: false },
   { key: "pages", label: "Pages", href: "/dd/pages", tab: true },
   { key: "pipeline", label: "Pipeline", href: "/dd/pipeline", tab: true },
   { key: "planner", label: "Planner", href: "/dd/planner", tab: false },
@@ -20,10 +20,13 @@ export type DdStage = (typeof DD_STAGES)[number]["key"];
 export const DD_SECTION: Section = {
   href: "/dd",
   title: "Docs Distiller",
-  description: "Ingest docs, plan distillation, study what was distilled",
+  description: "Browse source pages, plan distillation, study what was distilled",
   defaultTab: "catalog",
   carryParam: "slug",
-  tabs: DD_STAGES.map((stage) => ({ ...stage, carry: stage.key !== "catalog" })),
+  tabs: DD_STAGES.filter((stage) => stage.key !== "ingestion").map((stage) => ({
+    ...stage,
+    carry: stage.key !== "catalog",
+  })),
 };
 
 /** The two graph-driven stages that stream progress and share a run lock. */
@@ -104,7 +107,7 @@ export const AUTO_CHAIN_STORAGE_KEY = "dd:pipeline:autochain";
 /** How the reader of the Study tab wants it laid out (side columns open or closed, text width), remembered per browser. */
 export const STUDY_LAYOUT_STORAGE_KEY = "dd:study:layout";
 
-/** The same layout for the Ingestion tab's Materials reader (its left column is the page list), kept apart from the Study's. */
+/** The Pages reader layout (its left column is the page list), kept apart from the Study's. */
 export const MATERIALS_LAYOUT_STORAGE_KEY = "dd:materials:layout";
 
 /** Searching the materials reads the pages' text this many at a time, and keeps what it read for this long. */

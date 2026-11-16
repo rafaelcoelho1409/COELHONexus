@@ -1,6 +1,8 @@
 # YCS Agentic RAG Architecture — SOTA review (2026-11-08; implementation-plan updates 2026-11-09)
 
 **Status:** proposed architecture; no application code changed by this review.
+**Implementation note added 2026-11-16:** clarified YCS ingestion node/domain
+ownership; the proposed workflow-engine target remains open.
 **Scope:** YCS Ask, YCS Query, Elasticsearch, Qdrant, Neo4j, and the planned COELHO Search MCP router.
 
 ## Decision
@@ -113,6 +115,39 @@ The implementation is already streaming and per-video, not a single batch-wide `
 3. Redis counters aggregate the streaming work for the UI. A `SET NX` guard lets one caller invalidate the Ask cache after both index phases finish. That guards finalization; it does not provide exactly-once task execution.
 
 This behavior is implemented in [extract/service.py](../apps/server/domains/ycs/ingestion/extract/service.py), [pipeline_task/service.py](../apps/server/domains/ycs/ingestion/pipeline_task/service.py), [qdrant_task/task.py](../apps/server/domains/ycs/ingestion/qdrant_task/task.py), and [neo4j_task/service.py](../apps/server/domains/ycs/ingestion/neo4j_task/service.py). Preserve the early per-video fan-out and the bounded Neo4j chunking: the code comments document real worker-pool starvation when Neo4j was dispatched one video per Celery task.
+
+### Current node/domain ownership
+
+The current graph is implemented under `ai/ycs/graphs/ingestion/` and
+`ai/ycs/nodes/ingestion/`. Its nodes call YCS capability services and pure
+helpers under `domains/ycs/ingestion/`, but they also coordinate graph-step
+work: state projection, progress callbacks, cancellation, result aggregation,
+failure compensation, and edge selection. So the current implementation does
+not put every deterministic statement in `domains/`, and that is not the
+standard to apply mechanically.
+
+Use ownership to decide placement, as defined in
+[`CODE-CONVENTIONS.md`](CODE-CONVENTIONS.md#which-domainpy-owns-the-pure-logic):
+
+- Keep reusable video normalization, metadata projection, transcript
+  partitioning, and YCS ingestion policies under `domains/ycs/ingestion/`.
+- Keep graph state, conditional routing, and coordination of a particular
+  graph step with the graph. For example, dispatching from Elasticsearch to
+  the Qdrant and Neo4j branches is a graph transition, even though its
+  condition is deterministic.
+- Keep pure rules tied to an AI step's prompt or agent-output contract beside
+  that step under `ai/`; use its `domain.py` for the pure logic and its
+  `service.py` for model calls and orchestration.
+- Keep `node.py` as a thin LangGraph adapter. The current YCS ingestion node
+  functions also perform substantial orchestration; a cleanup should extract
+  that orchestration into node-local `service.py` modules, not move it into
+  `domains/` just because it is deterministic.
+
+This ownership clarification describes the current code and does not change
+the proposed target below. If the target's deterministic Celery data plane is
+adopted, revisit whether YCS ingestion needs a LangGraph graph at all; that is
+a workflow-engine decision, separate from where an individual pure helper
+belongs.
 
 ### Recommended target
 

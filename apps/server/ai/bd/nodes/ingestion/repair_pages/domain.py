@@ -276,12 +276,9 @@ def check_draft(
         return "rejected: the replacement adds words, a link or a marker that the page does not contain"
     proposal = accepted[0]
     starts = _occurrences(markdown, proposal.target_text)
-    if all(
-        _is_auto_applicable(proposal, markdown, start, start + len(proposal.target_text))
-        for start in starts
-    ):
+    if starts:
         return "ok: this validated proposal is applied automatically; source-image verification is advisory"
-    return "rejected: the patch changes protected content or alters structural text beyond formatting"
+    return "rejected: the exact source text was not found"
 
 
 def count_variants(text: str, variants: list[str], *, max_variants: int, max_chars: int) -> str:
@@ -319,35 +316,32 @@ def apply_proposals(
         for start in _occurrences(markdown, proposal.target_text)
     ]
     spans.sort(key = lambda span: span[0])
-    # Every validated quality proposal is approved automatically unless it edits protected content or conflicts with
-    # another proposal. Source-image verification is retained as evidence, but it cannot veto a contextual correction.
-    eligible_issue_ids = {
-        proposal.issue_id
-        for proposal in proposals
-        if all(
-            _is_auto_applicable(proposal, markdown, start, start + len(proposal.target_text))
-            for start in _occurrences(markdown, proposal.target_text)
-        )
-    }
-    eligible = [span for span in spans if span[2].issue_id in eligible_issue_ids]
-    # Only eligible edits can collide; an unsafe proposal must not block an independent safe correction.
-    overlapping_issue_ids: set[str] = set()
-    for index, current in enumerate(eligible):
-        for previous in eligible[:index]:
-            if current[0] < previous[1] and previous[0] < current[1]:
-                overlapping_issue_ids.add(current[2].issue_id)
-                overlapping_issue_ids.add(previous[2].issue_id)
+    # Every proposal that passed exact-source, issue-scope, and no-invented-content validation is applied. The user
+    # explicitly trusts these quality corrections; visual verification remains advisory. Identical proposals from
+    # separate issue records describe one edit and must be deduplicated before overlapping edits are evaluated.
+    edit_groups: dict[tuple[int, int, str], list[agents.schemas.PatchProposal]] = {}
+    for start, end, proposal in spans:
+        edit_groups.setdefault((start, end, proposal.replacement), []).append(proposal)
+    edits = sorted(edit_groups.items(), key = lambda item: item[0][0])
+    conflicting_issue_ids: set[str] = set()
+    for index, ((start, end, _), proposals_for_edit) in enumerate(edits):
+        for (previous_start, previous_end, _), previous_proposals in edits[:index]:
+            if start < previous_end and previous_start < end:
+                conflicting_issue_ids.update(proposal.issue_id for proposal in proposals_for_edit)
+                conflicting_issue_ids.update(proposal.issue_id for proposal in previous_proposals)
 
     normalized = markdown
     applied_issue_ids: dict[str, None] = {}
     review_issue_ids: dict[str, None] = {}
-    for start, end, proposal in reversed(spans):
-        auto_apply = proposal.issue_id in eligible_issue_ids and proposal.issue_id not in overlapping_issue_ids
-        if auto_apply:
-            normalized = normalized[:start] + proposal.replacement + normalized[end:]
-            applied_issue_ids[proposal.issue_id] = None
+    for (start, end, replacement), grouped_proposals in reversed(edits):
+        issue_ids = {proposal.issue_id for proposal in grouped_proposals}
+        if issue_ids.isdisjoint(conflicting_issue_ids):
+            normalized = normalized[:start] + replacement + normalized[end:]
+            applied_issue_ids.update(dict.fromkeys(issue_ids))
         else:
-            review_issue_ids[proposal.issue_id] = None
+            review_issue_ids.update(dict.fromkeys(issue_ids))
+    for issue_id in applied_issue_ids:
+        review_issue_ids.pop(issue_id, None)
     return normalized, list(reversed(applied_issue_ids)), list(reversed(review_issue_ids))
 
 
@@ -471,25 +465,6 @@ def _occurrences(markdown: str, target: str) -> list[int]:
         starts.append(start)
         start = markdown.find(target, start + len(target))
     return starts
-
-
-def _is_auto_applicable(
-    proposal: agents.schemas.PatchProposal,
-    markdown: str,
-    start: int,
-    end: int,
-) -> bool:
-    if _inside_code(markdown, start) or _inside_path_or_address(markdown, start, end):
-        return False
-    if proposal.issue_code == agents.schemas.IssueCode.STRUCTURE:
-        # Structure repairs may move Markdown markers, but must preserve source words, numbers, and line boundaries.
-        source_tokens = sorted(re.findall(r"[^\W_]+", proposal.target_text.casefold()))
-        replacement_tokens = sorted(re.findall(r"[^\W_]+", proposal.replacement.casefold()))
-        return (
-            source_tokens == replacement_tokens
-            and proposal.target_text.count("\n") == proposal.replacement.count("\n")
-        )
-    return not _is_protected_patch(proposal, markdown, start, end)
 
 
 def _is_protected_patch(

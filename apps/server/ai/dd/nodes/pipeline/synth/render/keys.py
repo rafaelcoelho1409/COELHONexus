@@ -37,13 +37,12 @@ def planner_latest_key(slug: str) -> str:
 
 
 def source_key_to_vault_key(source_key: str, framework_slug: str) -> str:
-    """Translate ingestion page key to vault key; mirrors storage_minio.vault_manifest_key() without importing it."""
-    basename = source_key.rstrip("/").rsplit("/", 1)[-1]
-    if basename.endswith(".md"):
-        basename = basename[:-3]
-    run_id = domains.dd.ingestion.storage.keys.run_id_from_page_key(source_key)
-    prefix = domains.dd.ingestion.storage.keys.vault_prefix(framework_slug, run_id)
-    return f"{prefix}pages/{basename}.vault.json"
+    """Translate any current or legacy ingestion page key to its matching vault key."""
+    vault_key, _sentinelized_key = domains.dd.ingestion.storage.keys.page_vault_keys(
+        framework_slug,
+        source_key,
+    )
+    return vault_key
 
 
 def checklist_latest_key(slug: str, chapter_id: str) -> str:

@@ -13,7 +13,8 @@ import {
 } from "@/shared/api";
 import { apiErrorMessage } from "@/shared/lib/api-error";
 
-import { frameworkInfo, isRunTerminal, runFramework, runToAdopt } from "../domain/ingestion";
+import { frameworkInfo, isRunTerminal, runFramework, runToAdopt, tierLabel } from "../domain/ingestion";
+import { phaseStatusText } from "../domain/ingestion-progress";
 import { deleteCascadeText } from "../domain/library";
 import type { Manifest, RunStatus } from "../entities";
 import {
@@ -33,6 +34,7 @@ import {
 import { useDdOverlays } from "../hooks/use-overlays";
 import { ingestionHref, pagesHref } from "../params";
 import { IngestionPipeline } from "./ingestion-pipeline";
+import { ExtractionProgress } from "./ingestion-progress";
 import { MaterialsView } from "./materials-view";
 import { StageBar } from "./stage-bar";
 
@@ -111,22 +113,16 @@ export function IngestionStage({
       <>
         <StageBar stage={view === "pipeline" ? "ingestion" : "pages"} slug={null} />
         <div className="rounded-md border border-border bg-card p-8 text-center">
-          <h2 className="text-base font-medium">Ingest something first</h2>
+          <h2 className="text-base font-medium">Choose documentation</h2>
           <p className="mt-1 text-sm text-muted-foreground">
-            Pick a framework from the catalog — its progress and library will show up here.
+            Choose a framework from Catalog to view or fetch its pages.
           </p>
         </div>
       </>
     );
   }
   return (
-    <IngestionWorkspace
-      key={slug}
-      slug={slug}
-      runId={runId}
-      view={view}
-      onRunFinished={rememberFinished}
-    />
+    <IngestionWorkspace key={slug} slug={slug} runId={runId} view={view} onRunFinished={rememberFinished} />
   );
 }
 
@@ -159,6 +155,7 @@ function IngestionWorkspace({
   const catalog = useCatalog();
   const library = useLibrary();
   const framework = runFramework(slug, catalog.data, library.data);
+  const ingested = (library.data ?? []).some((item) => item.slug === slug);
 
   useEffect(() => {
     noticeRef.current = notice;
@@ -172,6 +169,7 @@ function IngestionWorkspace({
   const status = progress?.status ?? null;
   const agentic = progress?.stages?.agentic ?? null;
   const terminal = isRunTerminal(status);
+  const extraction = progress?.stages?.extraction ?? null;
 
   useEffect(() => {
     if (!runId || !terminal) return;
@@ -191,7 +189,7 @@ function IngestionWorkspace({
         keepGoing,
       );
     }
-    if (status === "cancelled") noticeRef.current("Ingestion cancelled.");
+    if (status === "cancelled") noticeRef.current("Documentation extraction cancelled.");
   }, [runId, terminal, status, slug, queryClient, onRunFinished, statusQuery.data?.manifest]);
 
   const liveEntries = statusQuery.data?.manifest;
@@ -207,21 +205,43 @@ function IngestionWorkspace({
         agentic_run_id: manifestQuery.data?.agentic_run_id ?? null,
       }
     : manifestQuery.data;
+  const hasMaterials = ingested || (activeManifest?.entries.length ?? 0) > 0;
   const explorerRunId = showLiveManifest ? runId : null;
   // A cancel that was sent for an earlier run says nothing about this one.
   const cancelRequested =
     status === "cancelling" ||
     ((cancel.isPending || cancel.isSuccess) && cancel.variables === effectiveRunId);
-  const ingested = (library.data ?? []).some((item) => item.slug === slug);
+  const statusUnavailable = effectiveRunId !== null && statusQuery.isError;
+  const extractionActive =
+    effectiveRunId !== null && !terminal && !statusUnavailable && extraction?.status === "running";
+  const extractionStopping = extractionActive && cancelRequested;
+  const extractionCurrent =
+    effectiveRunId !== null ? (extraction?.current ?? 0) : (manifestQuery.data?.entries.length ?? 0);
+  const extractionTotal =
+    effectiveRunId !== null ? (extraction?.total ?? 0) : (manifestQuery.data?.entries.length ?? 0);
+  const extractionStatusText =
+    effectiveRunId !== null
+      ? extractionStopping
+        ? "Stopping"
+        : phaseStatusText(extraction?.status, status)
+      : ingested
+        ? "Complete"
+        : "Not started";
+  const extractionDone = effectiveRunId !== null ? extraction?.status === "done" : ingested;
+  const retryable = status === "failed" || status === "cancelled";
+  const extractionCancelError =
+    cancel.isError && cancel.variables === effectiveRunId
+      ? `Could not cancel the run — ${apiErrorMessage(cancel.error)}`
+      : null;
 
-  const startIngestion = () =>
+  const startExtraction = () =>
     start.mutate(
       { slug },
       {
         onSuccess: (outcome) => {
           if (outcome.kind === "queued") {
-            notice(`Ingesting ${framework.name}…`);
-            router.replace(ingestionHref(slug, outcome.runId ?? null), { scroll: false });
+            notice(`Fetching documentation for ${framework.name}…`);
+            router.replace(pagesHref(slug, outcome.runId ?? null), { scroll: false });
           } else if (outcome.kind === "locked") {
             toast(outcome.message ?? "A run is already active for this framework.");
           } else {
@@ -297,7 +317,7 @@ function IngestionWorkspace({
       {
         onSuccess: () => {
           notice(`Wiped ${framework.name}'s Agentic AI results.`);
-          router.replace(ingestionHref(slug, null), { scroll: false });
+          router.replace(pagesHref(slug, null), { scroll: false });
           void queryClient.invalidateQueries(getDdIngestionSlugManifestOptions({ path: { slug } }));
           void queryClient.invalidateQueries({ queryKey: getDdIngestionQueryKey() });
         },
@@ -308,15 +328,15 @@ function IngestionWorkspace({
 
   const wipeIngestion = async () => {
     const confirmed = await confirm({
-      title: "Wipe ingested documentation?",
-      message: `Deletes ${framework.name}'s ingested pages and Agentic AI results permanently.${deleteCascadeText({ planner: true, synth: true }, "")} The framework stays in the catalog so you can ingest it again.`,
+      title: "Wipe saved pages?",
+      message: `Deletes ${framework.name}'s saved pages and Agentic AI results permanently.${deleteCascadeText({ planner: true, synth: true }, "")} The framework stays in the catalog so you can fetch its pages again.`,
       confirmLabel: "Wipe",
     });
     if (!confirmed) return;
     wipe.mutate(slug, {
       onSuccess: () => {
-        notice(`Wiped ${framework.name}'s ingested documentation.`);
-        router.replace(ingestionHref(slug, null), { scroll: false });
+        notice(`Wiped ${framework.name}'s saved pages.`);
+        router.replace(pagesHref(slug, null), { scroll: false });
       },
       onError: (error) => toast(apiErrorMessage(error)),
     });
@@ -324,54 +344,98 @@ function IngestionWorkspace({
 
   return (
     <div>
-      <StageBar
-        stage={view === "pipeline" ? "ingestion" : "pages"}
-        slug={slug}
-        info={frameworkInfo(activeManifest)}
-      />
-      <section
-        aria-label="Agents"
-        hidden={view !== "pipeline"}
-      >
-        <IngestionPipeline
-          runId={effectiveRunId}
-          agenticRunId={activeManifest?.agentic_run_id ?? null}
-          progress={progress}
-          ingested={ingested}
-          ingestedPages={manifestQuery.data?.entries.length ?? 0}
-          startPending={start.isPending}
-          wipePending={wipe.isPending}
-          agenticActionPending={startAgentic.isPending || resumeAgentic.isPending}
-          agenticCancelPending={cancel.isPending && cancel.variables === effectiveRunId}
-          agenticWipePending={wipeAgentic.isPending}
-          cancelRequested={cancelRequested}
-          cancelError={cancel.isError ? `Could not cancel the run — ${apiErrorMessage(cancel.error)}` : null}
-          statusUnavailable={effectiveRunId !== null && statusQuery.isError}
-          onStart={startIngestion}
-          onStop={() => {
-            if (runId) cancel.mutate(runId);
-          }}
-          onStartAgentic={startAgenticAI}
-          onResumeAgentic={resumeAgenticAI}
-          onStopAgentic={stopAgenticAI}
-          onWipeAgentic={() => void wipeAgenticAI()}
-          onPlayAgenticNode={(nodeId) => void replayAgenticAIFromNode(nodeId)}
-          onWipe={() => void wipeIngestion()}
-        />
-      </section>
-
-      <section
-        aria-label="Pages"
-        hidden={view !== "materials"}
-      >
-        <MaterialsView
+      {view === "pipeline" || !hasMaterials ? (
+        <StageBar
+          stage={view === "pipeline" ? "ingestion" : "pages"}
           slug={slug}
-          manifest={activeManifest}
-          runId={explorerRunId}
-          active={view === "materials"}
-          loadError={manifestQuery.isError && !manifestQuery.data && !showLiveManifest}
+          info={frameworkInfo(activeManifest) || framework.name}
         />
-      </section>
+      ) : null}
+      {view === "pipeline" ? (
+        <section aria-label="Agents">
+          <IngestionPipeline
+            runId={effectiveRunId}
+            agenticRunId={activeManifest?.agentic_run_id ?? null}
+            progress={progress}
+            ingested={ingested}
+            ingestedPages={manifestQuery.data?.entries.length ?? 0}
+            startPending={start.isPending}
+            wipePending={wipe.isPending}
+            agenticActionPending={startAgentic.isPending || resumeAgentic.isPending}
+            agenticCancelPending={cancel.isPending && cancel.variables === effectiveRunId}
+            agenticWipePending={wipeAgentic.isPending}
+            cancelRequested={cancelRequested}
+            cancelError={
+              cancel.isError ? `Could not cancel the run — ${apiErrorMessage(cancel.error)}` : null
+            }
+            statusUnavailable={statusUnavailable}
+            onStart={startExtraction}
+            onStop={() => {
+              if (runId) cancel.mutate(runId);
+            }}
+            onStartAgentic={startAgenticAI}
+            onResumeAgentic={resumeAgenticAI}
+            onStopAgentic={stopAgenticAI}
+            onWipeAgentic={() => void wipeAgenticAI()}
+            onPlayAgenticNode={(nodeId) => void replayAgenticAIFromNode(nodeId)}
+            onWipe={() => void wipeIngestion()}
+          />
+        </section>
+      ) : null}
+
+      {view === "materials" ? (
+        <>
+          <div className="mb-4">
+            <ExtractionProgress
+              statusText={extractionStatusText}
+              current={extractionCurrent}
+              total={extractionTotal}
+              tierText={extraction?.tier ? tierLabel(extraction.tier) : null}
+              lastUrl={extraction?.last_url ?? null}
+              successful={extractionDone && !extraction?.error}
+              live={effectiveRunId !== null && !terminal && !statusUnavailable}
+              extracting={extractionActive}
+              ingested={ingested}
+              retryable={retryable}
+              stopping={extractionStopping}
+              startPending={start.isPending}
+              wipePending={wipe.isPending}
+              statusUnavailable={statusUnavailable}
+              cancelError={extractionCancelError}
+              finishedText={
+                terminal
+                  ? `Documentation extraction ${phaseStatusText(extraction?.status, status).toLowerCase()}.`
+                  : null
+              }
+              onStart={startExtraction}
+              onStop={() => {
+                if (effectiveRunId) cancel.mutate(effectiveRunId);
+              }}
+              onWipe={() => void wipeIngestion()}
+            />
+          </div>
+          {hasMaterials ? (
+            <MaterialsView
+              slug={slug}
+              info={frameworkInfo(activeManifest) || framework.name}
+              controlsInNavbar
+              manifest={activeManifest}
+              runId={explorerRunId}
+              active
+              loadError={ingested && manifestQuery.isError && !manifestQuery.data && !showLiveManifest}
+            />
+          ) : (
+            <section
+              aria-label="Pages"
+              className="rounded-md border border-border bg-card p-8 text-center text-sm text-muted-foreground"
+            >
+              {effectiveRunId !== null && !terminal && !statusUnavailable
+                ? "Pages will appear here as extraction publishes them."
+                : "No source pages yet. Start documentation extraction above."}
+            </section>
+          )}
+        </>
+      ) : null}
     </div>
   );
 }

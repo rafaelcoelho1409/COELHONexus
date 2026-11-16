@@ -1,6 +1,8 @@
 """Object keys for Book Distiller books and immutable ingestion runs."""
 from __future__ import annotations
 
+import hashlib
+
 
 ROOT_PREFIX = "bd/"
 PREVIOUS_BOOKS_PREFIX = "bd/ingestion/books/"
@@ -91,6 +93,22 @@ def agentic_manifest_key(book_id: str, agentic_run_id: str) -> str:
 def agentic_page_key(book_id: str, agentic_run_id: str, page_no: int) -> str:
     _positive_page(page_no)
     return f"{agentic_prefix(book_id, agentic_run_id)}pages/{page_no:04d}.md"
+
+
+def agentic_visual_page_key(book_id: str, agentic_run_id: str, page_no: int) -> str:
+    _positive_page(page_no)
+    return f"{agentic_prefix(book_id, agentic_run_id)}visual-enrichment/pages/{page_no:04d}.md"
+
+
+def agentic_visual_artifacts_key(book_id: str, agentic_run_id: str, page_no: int) -> str:
+    _positive_page(page_no)
+    return f"{agentic_prefix(book_id, agentic_run_id)}visual-enrichment/pages/{page_no:04d}.json"
+
+
+def agentic_visual_figure_key(book_id: str, agentic_run_id: str, page_no: int, figure_name: str) -> str:
+    _positive_page(page_no)
+    digest = hashlib.sha256(figure_name.encode("utf-8")).hexdigest()[:20]
+    return f"{agentic_prefix(book_id, agentic_run_id)}visual-enrichment/figures/{page_no:04d}/{digest}.json"
 
 
 def agentic_assessment_key(book_id: str, agentic_run_id: str, page_no: int) -> str:

@@ -10,6 +10,8 @@ the migration target for existing ones.
 external chat/embeddings live in `domains/settings/` (§9 tree).
 **Updated 2026-11-03:** recorded a pending internal-import observation for
 `ai/`, `domains/`, `entrypoints/`, and `infra/` (no code migration yet).
+**Updated 2026-11-16:** clarified ownership of deterministic logic in
+`ai/` node packages versus the bounded-context `domains/` package.
 
 **Why this exists:** the project is a knowledge-demonstration codebase.
 Every file name, every module split, every choice between "dataclass vs
@@ -30,6 +32,9 @@ model without opening every file.
   (I/O orchestration)** — the Cosmic Python "Functional Core, Imperative
   Shell" pattern. Makes the pure logic trivially testable and reads top-
   to-bottom in `service.py`.
+- **Choose `ai/` versus `domains/` by ownership, not determinism.** A pure
+  AI-step rule may live in that step's `domain.py`; bounded-context rules
+  belong in `domains/<context>/`.
 - **`node.py` stays a thin LangGraph shell** — 20–40 lines wrapping a
   single call into `service.py`.
 - **Pydantic for boundary validation only** (LLM responses, HTTP bodies).
@@ -309,6 +314,73 @@ From the current sawc service.py, examples:
 These are the "Functional Core". They're trivial to unit-test
 (no mocks, no fixtures, no event loop). They're the modules to write
 property-based tests against.
+
+### Which `domain.py` owns the pure logic?
+
+`domain.py` and the top-level `domains/` package answer different questions.
+`domain.py` describes the kind of code: deterministic functional logic.
+`domains/<context>/` identifies the bounded context that owns a capability.
+Purity alone does not decide where a function belongs; place it beside the
+contract and policy that give the function its meaning.
+
+| Code responsibility | Owner |
+|---|---|
+| Stable feature rules and data transformations that make sense outside one AI graph | `domains/<context>/<capability>/domain.py` |
+| Business I/O and capability workflows | `domains/<context>/<capability>/service.py` |
+| Pure logic specific to an AI step's prompt, agent schema, or model-output policy | `ai/<context>/nodes/<flow>/<step>/domain.py` |
+| Model calls and graph-step orchestration, including progress, cancellation, and fan-out | `ai/<context>/nodes/<flow>/<step>/service.py` |
+| LangGraph state transitions and conditional-edge routing | `ai/<context>/graphs/` (with small adapters in `node.py`) |
+| External client lifecycle and provider-specific mechanics | `infra/<service>/` |
+
+Examples: DD's general Markdown normalization belongs to
+`domains/dd/ingestion/corpus_normalize/domain.py`; validation of an auditor's
+assessment or a repair agent's patch belongs beside those AI steps in
+`ai/dd/nodes/ingestion/{page_audit,page_repair}/domain.py`. YCS video
+projection and transcript partition rules belong to `domains/ycs/ingestion/`;
+which graph edge to take after indexing is workflow control and belongs with
+the YCS ingestion graph.
+
+AI code may call bounded-context domain services. Domain business-capability
+modules must not depend on LangGraph `State`/`Runtime` types or schemas owned
+by an AI agent. The documented composition roots under
+`domains/<context>/<tab>/ai/` are the exception: they bind AI graphs and
+infrastructure. If a pure rule becomes meaningful outside its AI step, move
+it to the owning bounded context and have the AI step call it. If a
+graph-specific algorithm is deterministic but changes with that step's agent
+contract, keep it in the AI node package. Keep `node.py` as the LangGraph
+adapter; put orchestration that outgrows a thin wrapper in the node's
+`service.py`.
+
+#### Applying the rule to BD and DD agentic AI
+
+Use YCS ingestion as an organizational precedent for separating AI-step
+behavior from bounded-context capabilities. Do not interpret it as a rule
+that all deterministic code must move to `domains/`; placement follows the
+contract and policy that own the code.
+
+- **BD:** Keep ask, distill, audit, and repair policies beside their AI nodes
+  when they depend on an agent schema or output contract. Keep persistent
+  ingestion state, selection revisions, and processed-book capabilities in
+  the BD domain layer when they express book-ingestion behavior independently
+  of a particular agent. The processed-book heading and page-mapping rules
+  are domain logic when they remain independent of agent contracts.
+- **BD inventory boundary follow-up:**
+  `domains/bd/ingestion/ai/inventory/domain.py` imports and returns
+  `ai.bd.agents.schemas` types, and its helpers are shared by the audit and
+  repair nodes. This crosses the domain-to-AI dependency boundary. The
+  recommended cleanup is to move the AI-contract-coupled inventory package
+  (`domain.py`, `params.py`, and `patterns.py`) under a shared AI ingestion
+  package such as `ai/bd/nodes/ingestion/inventory/`. This is a focused
+  follow-up, not a reason to relocate all deterministic BD logic.
+- **DD:** Keep page-audit and page-repair validation beside those AI steps.
+  Keep general Markdown normalization and deterministic ingestion tiers in
+  `domains/dd/ingestion/`. Keep AI run identifiers, checkpoint thread names,
+  candidate digests, and manifest transformations in the DD ingestion run
+  support where they define run lifecycle and persisted candidate behavior,
+  rather than an individual agent's output policy.
+
+This records the target ownership standard. It does not imply that the BD
+inventory package or other existing modules have already been moved.
 
 ### What goes in `service.py` (the "Imperative Shell")
 
@@ -762,7 +834,8 @@ synth follows it:
 - A fan-out stores each page's result under `dd/{slug}/planner/items/<node>/<version>/<digest>.json`: LangGraph re-runs an interrupted
   node from its start, so resume (and a re-plan of an unchanged corpus) is carried by those results, not by the checkpoint.
 - Progress events are `shared.service.emit(step, kind, **fields)` (LangGraph's `custom` stream); the run shell republishes them on the
-  Redis channel in the shape the web reads. Deterministic algorithms stay pure modules (`domain.py`) next to the step that calls them.
+  Redis channel in the shape the web reads. Deterministic AI-step algorithms stay pure modules (`domain.py`) next to their owning step;
+  rules that belong to the wider bounded context live under `domains/<context>/` and are called from the step.
 
 **An API URL is the package path of its router** (`entrypoints/api/v1/dd/pipeline/planner/router.py` serves
 `/api/v1/dd/pipeline/planner/…`, `ingestion/runs/` serves `/api/v1/dd/ingestion/runs/…`). A feature's `router.py` includes its
@@ -807,7 +880,7 @@ the re-exported types and the service's own attribute/key names.
 | `neo4j` | async driver, `Neo4jGraph`, connection tunables |
 | `opentelemetry` | SDK bootstrap, exporters, instruments, generic span helpers (`client_span`, `db_span`, `node_tracer`, `attach_span_attrs`) |
 | `playwright` (+ `crawl4ai/`) | CDP endpoint resolution, driver start, the Crawl4AI library bound to the browsers |
-| `postgres` | `connect()`, URL builder, shared LangGraph checkpointer |
+| `postgres` | `connect()`, URL builder, shared LangGraph checkpointer and checkpoint replay |
 | `qdrant` | async client, request models, sparse-embedding class |
 | `redis` | client lifecycle (`client()` / `client_sync()`), URL, event stream, cancel flags, locks (`try_lock`, `release_if_owner`), prefix scans (`iter_held`, `first_held`, `delete_matching`) |
 

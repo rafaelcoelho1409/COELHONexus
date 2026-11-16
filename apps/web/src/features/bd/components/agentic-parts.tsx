@@ -150,7 +150,7 @@ export function AgenticNodeList({
 }
 
 const RESOURCE_ROWS = [
-  { label: "Agent", key: "agents" },
+  { label: "Agents", key: "agents" },
   { label: "Skills", key: "skills" },
   { label: "Tools", key: "tools" },
 ] as const;

@@ -351,7 +351,7 @@ async def run_ingestion_agentic(
     if checkpointer is not None and replay_from_node is not None:
         if replay_from_node not in params.GRAPH_NODES:
             raise ValueError(f"unknown Docs Distiller ingestion node {replay_from_node!r}")
-        replay_config = await ai.langgraph.service.checkpoint_before_node(
+        replay_config = await infra.postgres.service.checkpoint_before_node(
             graph, graph_config, replay_from_node,
         )
         reset_state: dict[str, Any] = {}
@@ -587,7 +587,7 @@ async def queue_node_replay(slug: str, run_id: str, node_id: str) -> int:
         checkpointer=infra.postgres.service.get_checkpointer(),
     )
     config = {"configurable": {"thread_id": thread_id}}
-    await ai.langgraph.service.checkpoint_before_node(graph, config, node_id)
+    await infra.postgres.service.checkpoint_before_node(graph, config, node_id)
 
     if not await domains.dd.ingestion.runtime.dispatch.service.reserve_existing_run(slug, run_id):
         raise ValueError("another ingestion run is active")

@@ -32,6 +32,23 @@
   fill: var(--neutral-8);
 }
 
+.bd-agentic-flow .react-flow__controls {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 0.375rem;
+  box-shadow: none;
+}
+
+.bd-agentic-flow .react-flow__controls-button {
+  border-bottom: 1px solid var(--border);
+  background: var(--card);
+  fill: var(--foreground);
+}
+
+.bd-agentic-flow .react-flow__controls-button:hover {
+  background: var(--muted);
+}
+
 /* An edge between a finished node and the one now running. */
 .bd-agentic-flow .react-flow__edge.agentic-edge-active .react-flow__edge-path {
   stroke: var(--running-text);

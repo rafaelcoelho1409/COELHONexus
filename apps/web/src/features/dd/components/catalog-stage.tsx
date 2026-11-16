@@ -1,13 +1,13 @@
 "use client";
 
-/** Catalog stage: resolver tiles + search + facets + sticky Start-Ingestion
- * bar. Tiles already ingested open the Pipeline stage; starting a run
- * follows the legacy POST /runs contract (cached / queued / locked). */
+/** Catalog stage: browse and select source documentation, then explicitly enter Pages or start extraction. */
 
 import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
+
 import { ContextBar } from "@/shared/layout/context-bar";
 import { apiErrorMessage } from "@/shared/lib/api-error";
+import { Button } from "@/shared/ui/button";
 import { Input } from "@/shared/ui/input";
 
 import {
@@ -23,10 +23,10 @@ import {
   tileName,
   tileStatus,
 } from "../domain/catalog";
+import { isRunTerminal } from "../domain/ingestion";
 import { useActiveRun, useCatalog, useLibrary, useStartRun } from "../hooks/use-dd-data";
 import { useDdOverlays } from "../hooks/use-overlays";
-import { ingestionHref, stageHref } from "../params";
-import { ActionButton } from "./action-button";
+import { pagesHref, stageHref } from "../params";
 import { CatalogTile } from "./catalog-tile";
 import { FilterDropdown } from "./filter-dropdown";
 
@@ -35,10 +35,10 @@ const STATUSES: readonly CatalogStatus[] = ["Ingested", "Not ingested"];
 export function CatalogStage() {
   const catalog = useCatalog();
   const libraryQuery = useLibrary();
-  const start = useStartRun();
-  const { run: activeRun } = useActiveRun(true);
-  const { notice, toast } = useDdOverlays();
+  const { runs } = useActiveRun(true);
   const router = useRouter();
+  const start = useStartRun();
+  const { notice, toast } = useDdOverlays();
 
   const ingestedSlugs = useMemo(() => {
     const set = new Set<string>();
@@ -49,7 +49,7 @@ export function CatalogStage() {
   }, [libraryQuery.data]);
 
   const [filters, setFilters] = useState<CatalogFilters>({ ...DEFAULT_FILTERS });
-  const [selected, setSelected] = useState<string | null>(null);
+  const [selectedSlug, setSelectedSlug] = useState<string | null>(null);
 
   const entries = useMemo(() => catalog.data ?? [], [catalog.data]);
   const visible = useMemo(
@@ -61,36 +61,36 @@ export function CatalogStage() {
     [entries, ingestedSlugs, filters],
   );
 
-  const selectedEntry = selected ? (entries.find((entry) => entry.slug === selected) ?? null) : null;
-  const selectedIngested = selected != null && ingestedSlugs.has(selected);
+  const selectedEntry = entries.find((entry) => entry.slug === selectedSlug) ?? null;
+  const selectedIngested = selectedEntry ? ingestedSlugs.has(selectedEntry.slug) : false;
+  const selectedRun = selectedSlug
+    ? runs.find((run) => run.slug === selectedSlug && !isRunTerminal(run.progress?.status))
+    : undefined;
 
-  const pick = (slug: string) => {
-    if (ingestedSlugs.has(slug)) {
-      router.push(stageHref("pipeline", slug));
-      return;
-    }
-    setSelected((current) => (current === slug ? null : slug));
+  const continueToPages = () => {
+    if (!selectedEntry) return;
+    router.push(stageHref("pages", selectedEntry.slug));
   };
 
   const startIngestion = () => {
-    if (!selected) {
-      return;
-    }
-    const body = selectedIngested ? { slug: selected, refresh: true } : { slug: selected };
-    start.mutate(body, {
-      onSuccess: (outcome) => {
-        if (outcome.kind === "cached") {
-          notice("Already up to date — opening the pipeline.");
-          router.push(stageHref("pipeline", selected));
-        } else if (outcome.kind === "queued") {
-          notice(`Ingesting ${selectedEntry ? tileName(selectedEntry) : selected}…`);
-          router.push(ingestionHref(selected, outcome.runId ?? null));
-        } else {
-          toast(outcome.message ?? "A run is already active for this framework.");
-        }
+    if (!selectedEntry) return;
+    const name = tileName(selectedEntry);
+    start.mutate(
+      { slug: selectedEntry.slug },
+      {
+        onSuccess: (outcome) => {
+          if (outcome.kind === "queued") {
+            notice(`Ingesting ${name}…`);
+            router.push(pagesHref(selectedEntry.slug, outcome.runId ?? null));
+          } else if (outcome.kind === "locked") {
+            toast(outcome.message ?? "A run is already active for this framework.");
+          } else {
+            router.push(stageHref("pages", selectedEntry.slug));
+          }
+        },
+        onError: (error) => toast(apiErrorMessage(error)),
       },
-      onError: (error) => toast(apiErrorMessage(error)),
-    });
+    );
   };
 
   const categories = useMemo(() => ["All", ...catalogCategories(entries)], [entries]);
@@ -108,12 +108,8 @@ export function CatalogStage() {
     );
   }
 
-  const activeFramework = activeRun?.slug
-    ? (entries.find((entry) => entry.slug === activeRun.slug)?.name ?? activeRun.slug)
-    : null;
-
   return (
-    <div className="pb-28">
+    <div className={selectedEntry ? "pb-24" : undefined}>
       {/* The third navbar: search and filters; the match count sits beside Status. */}
       <ContextBar
         start={
@@ -183,8 +179,12 @@ export function CatalogStage() {
                 onReset={() => setFilters((f) => ({ ...f, statuses: new Set() }))}
               />
               <span aria-live="polite" className="shrink-0 text-xs tabular-nums text-muted-foreground">
-                <span aria-hidden="true">{visible.length}/{entries.length}</span>
-                <span className="sr-only">{visible.length} of {entries.length} frameworks shown</span>
+                <span aria-hidden="true">
+                  {visible.length}/{entries.length}
+                </span>
+                <span className="sr-only">
+                  {visible.length} of {entries.length} frameworks shown
+                </span>
               </span>
             </div>
           </>
@@ -197,8 +197,8 @@ export function CatalogStage() {
             <CatalogTile
               entry={entry}
               ingested={tileStatus(entry.slug, ingestedSlugs) === "Ingested"}
-              selected={selected === entry.slug}
-              onPick={() => pick(entry.slug)}
+              selected={selectedSlug === entry.slug}
+              onPick={() => setSelectedSlug(entry.slug)}
             />
           </li>
         ))}
@@ -206,26 +206,40 @@ export function CatalogStage() {
           <li className="col-span-full text-sm text-muted-foreground">Nothing matches those filters.</li>
         ) : null}
       </ul>
-
-      {selected && selectedEntry ? (
-        <div className="fixed bottom-0 left-0 z-40 w-full border-t border-border bg-card p-3">
-          <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-3">
-            <span className="text-sm font-medium">{tileName(selectedEntry)}</span>
-            <span className="text-xs text-muted-foreground">
-              {selectedIngested ? "Already ingested — reingests with fresh crawls." : "Not ingested yet."}
-              {activeFramework ? ` A run is active (${activeFramework}).` : ""}
-            </span>
-            <div className="ml-auto flex gap-2">
-              <ActionButton onClick={() => setSelected(null)}>
-                Cancel
-              </ActionButton>
-              <ActionButton
-                onClick={startIngestion}
-                disabled={start.isPending || activeRun != null}
-                aria-busy={start.isPending}
+      {selectedEntry ? (
+        <div className="fixed inset-x-0 bottom-0 z-40 border-t border-border bg-background">
+          <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3 px-4 py-3 sm:px-6">
+            <div className="min-w-0">
+              <p className="text-sm font-medium">{tileName(selectedEntry)}</p>
+              <p className="text-xs text-muted-foreground">
+                {selectedIngested ? "Pages are ready" : "Ready to fetch documentation pages"}
+              </p>
+            </div>
+            <div className="flex shrink-0 items-center gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setSelectedSlug(null)}
+                disabled={start.isPending}
               >
-                {selectedIngested ? "Reingest" : start.isPending ? "Starting…" : "Start Ingestion"}
-              </ActionButton>
+                Cancel
+              </Button>
+              {selectedRun ? (
+                <Button
+                  type="button"
+                  onClick={() => router.push(pagesHref(selectedEntry.slug, selectedRun.run_id))}
+                >
+                  Open Pages
+                </Button>
+              ) : selectedIngested ? (
+                <Button type="button" onClick={continueToPages}>
+                  Open Pages
+                </Button>
+              ) : (
+                <Button type="button" onClick={startIngestion} disabled={start.isPending}>
+                  {start.isPending ? "Starting ingestion…" : "Start Ingestion"}
+                </Button>
+              )}
             </div>
           </div>
         </div>

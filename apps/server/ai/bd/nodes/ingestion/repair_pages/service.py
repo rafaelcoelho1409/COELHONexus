@@ -2,6 +2,7 @@
 from __future__ import annotations
 import domains
 from . import domain
+from .. import audit_batch
 from .... import agents, graphs, skills
 
 import asyncio
@@ -451,6 +452,16 @@ async def repair_pages(
             source_sha256 = hashlib.sha256(markdown.encode("utf-8")).hexdigest()
             if source_sha256 != page_ref["source_sha256"]:
                 raise ValueError(f"source page {page_number} changed after its quality audit")
+            assessment, assessment_warnings = audit_batch.domain.sanitize_assessment(
+                audits[page_number]["assessment"],
+                page_number = page_number,
+                pictures = page_ref["pictures"],
+                markdown = markdown,
+            )
+            audit_record = {
+                **audits[page_number],
+                "assessment": assessment.model_dump(mode = "json"),
+            }
             selected = selection_by_page.get(page_number)
             if selected is None:
                 raise ValueError(f"source page {page_number} has no early content-selection result")
@@ -467,9 +478,7 @@ async def repair_pages(
                 > domains.bd.ingestion.ai.params.MAX_PAGE_MARKDOWN_CHARS
             ) and not repair_skipped
 
-            issue_list = agents.schemas.PageAssessment.model_validate(
-                audits[page_number]["assessment"],
-            ).issues
+            issue_list = assessment.issues
             issues = {issue.issue_id: issue for issue in issue_list}
             _, _, mechanically_resolved_before_repair = (
                 (markdown, {}, [])
@@ -481,7 +490,8 @@ async def repair_pages(
             for item in work_by_page.get(page_number, []):
                 remaining_refs = [
                     reference for reference in item["issue_refs"]
-                    if reference["issue_id"] not in mechanically_resolved
+                    if reference["issue_id"] in issues
+                    and reference["issue_id"] not in mechanically_resolved
                 ]
                 if remaining_refs:
                     assigned_items.append({**item, "issue_refs": remaining_refs})
@@ -490,7 +500,7 @@ async def repair_pages(
                 for item in assigned_items
             ))
             proposals = [proposal for batch, _, _, _ in responses for proposal in batch]
-            audit_warnings = list(audits[page_number].get("warnings", []))
+            audit_warnings = list(audit_record.get("warnings", [])) + assessment_warnings
             errors = [error for _, error, _, _ in responses if error]
             (
                 source_verified_ids,
@@ -559,7 +569,7 @@ async def repair_pages(
             review_ids = [] if repair_skipped else sorted(unresolved | unsupported)
             normalized_hash = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
             assessment_content = json.dumps(
-                audits[page_number]["assessment"], ensure_ascii = False,
+                audit_record["assessment"], ensure_ascii = False,
                 separators = (",", ":"), sort_keys = True,
             )
             proposal_payload = {
@@ -591,15 +601,15 @@ async def repair_pages(
                 "normalized_key": page_ref["normalized_key"],
                 "assessment_key": page_ref["assessment_key"],
                 "patch_proposals_key": page_ref["patch_proposals_key"],
-                "assessment": audits[page_number]["assessment"],
+                "assessment": audit_record["assessment"],
                 "patch_proposal_count": len(proposals),
                 "auto_applied_issue_ids": auto_applied,
                 "review_required_issue_ids": review_ids,
                 "delivery_disposition": (
                     "discarded_blank"
-                    if audits[page_number]["assessment"].get("page_kind") == "blank"
+                    if audit_record["assessment"].get("page_kind") == "blank"
                     else "image_only"
-                    if audits[page_number]["assessment"].get("page_kind") == "image_only"
+                    if audit_record["assessment"].get("page_kind") == "image_only"
                     else "include"
                 ),
                 "repair_context_chars": sum(context_chars for _, _, context_chars, _ in responses),

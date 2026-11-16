@@ -9,7 +9,7 @@
 import "@xyflow/react/dist/style.css";
 import "./agentic-flow.css";
 
-import { type Edge, Handle, MarkerType, type Node, type NodeProps, Position, ReactFlow } from "@xyflow/react";
+import { Controls, type Edge, Handle, MarkerType, type Node, type NodeProps, Position, ReactFlow } from "@xyflow/react";
 
 import type { AgenticNodeStatus, AgenticNodeView } from "../domain/agentic-progress";
 import {
@@ -24,9 +24,6 @@ const NODE_WIDTH = 216;
 const NODE_HEIGHT = 136;
 const NODE_GAP = 30;
 const PADDING = 16;
-/** A strip under the last node for React Flow's small credit line, so it never covers a node. */
-const CREDIT_ROOM = 32;
-
 type AgenticFlowData = {
   nodeId: string;
   label: string;
@@ -175,34 +172,28 @@ export function AgenticFlow({
   });
 
   return (
-    <figure
-      className="bd-agentic-flow mx-auto max-w-full"
-      style={{
-        width: NODE_WIDTH + PADDING * 2,
-        height:
-          PADDING * 2 + views.length * NODE_HEIGHT + Math.max(0, views.length - 1) * NODE_GAP + CREDIT_ROOM,
-      }}
-      aria-label={ariaLabel}
-    >
+    <figure className="bd-agentic-flow mx-auto h-[min(76vh,880px)] min-h-[440px] w-full min-w-0" aria-label={ariaLabel}>
       <ReactFlow
         nodes={nodes}
         edges={edges}
         nodeTypes={NODE_TYPES}
-        defaultViewport={{ x: 0, y: 0, zoom: 1 }}
-        minZoom={1}
-        maxZoom={1}
+        defaultViewport={{ x: 0, y: 0, zoom: 0.82 }}
+        minZoom={0.18}
+        maxZoom={2.25}
         nodesDraggable={false}
         nodesConnectable={false}
         nodesFocusable={false}
         edgesFocusable={false}
         elementsSelectable={false}
-        panOnDrag={false}
-        zoomOnScroll={false}
-        zoomOnPinch={false}
+        panOnDrag
+        zoomOnScroll
+        zoomOnPinch
         zoomOnDoubleClick={false}
-        preventScrolling={false}
+        preventScrolling
         proOptions={{ hideAttribution: false }}
-      />
+      >
+        <Controls showInteractive={false} position="bottom-right" />
+      </ReactFlow>
     </figure>
   );
 }

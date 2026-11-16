@@ -1,37 +1,23 @@
-"""Structural page preparation for Agentic AI, plus the legacy debug post-process path."""
+"""Content-preserving page splitting and legacy debug post-processing."""
 from __future__ import annotations
 import domains
 from . import domain, params
 
 import asyncio
 import logging
+from dataclasses import replace
 
 
 
 logger = logging.getLogger(__name__)
 
 
-async def _drop_pages_empty_after_normalization(pages, *, body_index: int):
-    """Drop only pages whose deterministic corpus cleanup leaves no readable content."""
-    if not pages:
-        return pages, 0
-    normalized = await asyncio.gather(*(
-        asyncio.to_thread(
-            domains.dd.ingestion.corpus_normalize.domain.normalize_doc,
-            page[body_index],
-        )
-        for page in pages
-    ))
-    kept = [page for page, result in zip(pages, normalized) if result.body.strip()]
-    return kept, len(pages) - len(kept)
 
+async def prepare_pages(store: domains.dd.ingestion.storage.service.Store) -> dict:
+    """Split bundles and oversized pages without normalizing, filtering, or deduplicating extracted content.
 
-async def prepare_for_agentic(store: domains.dd.ingestion.storage.service.Store) -> dict:
-    """Create page-sized AI inputs while keeping every extracted page for Agentic AI to assess and normalize.
-
-    Only structural splitting remains deterministic: a Tier 1 bundle is segmented into source pages, and oversized
-    pages are divided at Markdown headings so they fit the page auditor's input limit. Stub filtering and duplicate
-    removal stay out of the ingestion path; the raw capture remains immutable in MinIO in either case.
+    A Tier 1 bundle is segmented into source pages, and oversized pages are divided at Markdown headings so downstream
+    agents can read them without truncation. Each output is still derived directly from the extracted Markdown.
     """
     current = store.manifest
     input_files = len(current)
@@ -42,7 +28,7 @@ async def prepare_for_agentic(store: domains.dd.ingestion.storage.service.Store)
         try:
             body = await store.read_body(0)
         except Exception as e:
-            logger.warning(f"[post] body read failed before Agentic AI: {e}")
+            logger.warning(f"[post] body read failed before structural splitting: {e}")
             return domain.make_summary(params.SUMMARY_KIND_PREPARE, input_files, input_bytes, current)
         writes, _stubs, _duplicates = await asyncio.to_thread(
             domain.split_monolith,
@@ -50,36 +36,21 @@ async def prepare_for_agentic(store: domains.dd.ingestion.storage.service.Store)
             only.slug,
             cleanup = False,
         )
-        writes, empty_pages_dropped = await _drop_pages_empty_after_normalization(
-            writes,
-            body_index=1,
-        )
         if not writes:
-            await store.delete_body_by_key(only.key)
-            await store.delete_vault(only.idx, only.slug)
-            await store.replace_manifest([])
-            return domain.make_summary(
-                params.SUMMARY_KIND_PREPARE,
-                input_files,
-                input_bytes,
-                [],
-                was_split=True,
-                empty_pages_dropped=empty_pages_dropped,
-            )
+            writes = [(only.slug, body, only.url or "")]
         if len(writes) == 1 and writes[0][1] == body:
             return domain.make_summary(
                 params.SUMMARY_KIND_PREPARE,
                 input_files,
                 input_bytes,
                 current,
-                empty_pages_dropped=empty_pages_dropped,
             )
 
         nav_index = getattr(store, "nav_index", None) or []
         ordered = domain.order_by_nav(writes, [url for url, _section in nav_index])
         sections = domain.sections_by_nav(ordered, nav_index)
-        await store.delete_body_by_key(only.key)
-        await store.delete_vault(only.idx, only.slug)
+        if only.key != only.raw_key:
+            await store.delete_body_by_key(only.key)
         key_factory = lambda idx, slug: domains.dd.ingestion.storage.keys.stage_page_key(
             store.framework_slug,
             store.run_id,
@@ -101,7 +72,6 @@ async def prepare_for_agentic(store: domains.dd.ingestion.storage.service.Store)
             input_bytes,
             new_entries,
             was_split = True,
-            empty_pages_dropped=empty_pages_dropped,
         )
 
     if not current:
@@ -115,16 +85,12 @@ async def prepare_for_agentic(store: domains.dd.ingestion.storage.service.Store)
         return (entry.slug, entry.url, body)
 
     pages = list(await asyncio.gather(*(read_one(entry) for entry in current)))
-    pages, empty_pages_dropped = await _drop_pages_empty_after_normalization(
-        pages,
-        body_index=2,
-    )
     expanded, oversized = domain.presplit_oversized(
         pages,
         params.OVERSIZED_SPLIT_BYTES,
         deduplicate = False,
     )
-    if not oversized and not empty_pages_dropped:
+    if not oversized:
         return domain.make_summary(params.SUMMARY_KIND_PREPARE, input_files, input_bytes, current)
 
     for slug, size_kb, children in oversized:
@@ -134,8 +100,8 @@ async def prepare_for_agentic(store: domains.dd.ingestion.storage.service.Store)
 
     async def delete_one(entry):
         async with delete_sem:
-            await store.delete_body_by_key(entry.key)
-            await store.delete_vault(entry.idx, entry.slug)
+            if entry.key != entry.raw_key:
+                await store.delete_body_by_key(entry.key)
 
     await asyncio.gather(*(delete_one(entry) for entry in current))
     key_factory = lambda idx, slug: domains.dd.ingestion.storage.keys.stage_page_key(
@@ -158,8 +124,42 @@ async def prepare_for_agentic(store: domains.dd.ingestion.storage.service.Store)
         input_bytes,
         new_entries,
         was_split = True,
-        empty_pages_dropped=empty_pages_dropped,
     )
+
+
+async def publish_extracted_pages(store: domains.dd.ingestion.storage.service.Store) -> int:
+    """Move only structurally split outputs out of staging; untouched pages keep their immutable raw object key."""
+    current = store.manifest
+    read_sem = asyncio.BoundedSemaphore(params.READ_CONCURRENCY)
+
+    async def publish_one(entry):
+        async with read_sem:
+            body = await store.read_body_by_key(entry.key)
+            if entry.raw_key:
+                try:
+                    raw_body = await store.read_body_by_key(entry.raw_key)
+                except Exception:
+                    raw_body = None
+                if raw_body == body:
+                    return replace(entry, key=entry.raw_key, bytes=len(body.encode("utf-8")))
+
+            key = domains.dd.ingestion.storage.keys.published_page_key(
+                store.framework_slug,
+                store.run_id,
+                entry.idx,
+                entry.slug,
+            )
+            await domains.dd.ingestion.storage.service.write_immutable(
+                store.minio,
+                key,
+                body,
+                params.PAGE_CONTENT_TYPE,
+            )
+            return replace(entry, key=key, bytes=len(body.encode("utf-8")))
+
+    published = list(await asyncio.gather(*(publish_one(entry) for entry in current)))
+    await store.replace_manifest(published)
+    return len(published)
 
 
 async def apply_to_store(store: domains.dd.ingestion.storage.service.Store) -> dict:
@@ -192,8 +192,9 @@ async def apply_to_store(store: domains.dd.ingestion.storage.service.Store) -> d
             logger.info(f"[post] {store.framework_slug}: {len(ordered)} pages put in the site's navigation order")
         writes = ordered
         sections = domain.sections_by_nav(writes, nav_index)
-        await store.delete_body_by_key(only.key)
-        await store.delete_vault(only.idx, only.slug)  # the bundle's vault, if one was built, is orphaned by the split
+        if only.key != only.raw_key:
+            await store.delete_body_by_key(only.key)
+            await store.delete_vault(only.idx, only.slug)  # the bundle's vault, if one was built, is orphaned by the split
         key_factory = lambda idx, slug: domains.dd.ingestion.storage.keys.stage_page_key(store.framework_slug, store.run_id, idx, slug)
         new_entries, write_batch = domain.split_manifest(store.framework_slug, only, writes, sections, key_factory)
         await store.minio.write_many(write_batch)
@@ -238,8 +239,9 @@ async def apply_to_store(store: domains.dd.ingestion.storage.service.Store) -> d
 
     async def _del_one(e):
         async with del_sem:
-            await store.delete_body_by_key(e.key)
-            await store.delete_vault(e.idx, e.slug)  # rewritten under a new idx: the old vault can never be found again
+            if e.key != e.raw_key:
+                await store.delete_body_by_key(e.key)
+                await store.delete_vault(e.idx, e.slug)  # rewritten under a new idx: the old vault can never be found again
 
     await asyncio.gather(*(_del_one(e) for e in current))
     key_factory = lambda idx, slug: domains.dd.ingestion.storage.keys.stage_page_key(store.framework_slug, store.run_id, idx, slug)

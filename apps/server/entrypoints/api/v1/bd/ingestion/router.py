@@ -416,7 +416,7 @@ def _content_selection_response(selection, digest: str) -> dict:
     response_model = schemas.PageBody,
 )
 async def get_agentic_run_page(book_id: str, agentic_run_id: str, page_no: int) -> dict:
-    """Read the normalized page from one exact immutable ingestion QA run."""
+    """Read the final processed page from one exact immutable ingestion run."""
     try:
         manifest = await domains.bd.ingestion.ai.service.read_ingestion_ai_run(book_id, agentic_run_id)
     except ValueError as error:
@@ -428,16 +428,19 @@ async def get_agentic_run_page(book_id: str, agentic_run_id: str, page_no: int) 
         raise HTTPException(status_code = 404, detail = f"no normalized page {page_no} exists in this ingestion run")
     storage = infra.minio.service.get_storage()
     try:
-        markdown = await storage.read_text(page["normalized_key"])
+        content_key = page.get("enriched_key") or page["normalized_key"]
+        markdown = await storage.read_text(content_key)
     except FileNotFoundError as error:
         raise HTTPException(status_code = 404, detail = f"page {page_no} artifact is missing") from error
-    if hashlib.sha256(markdown.encode("utf-8")).hexdigest() != page["normalized_sha256"]:
+    expected_sha256 = page.get("enriched_sha256") or page["normalized_sha256"]
+    if hashlib.sha256(markdown.encode("utf-8")).hexdigest() != expected_sha256:
         raise HTTPException(status_code = 409, detail = f"page {page_no} failed its integrity check")
     return {
         "book_id": book_id,
         "page": page_no,
         "markdown": markdown,
         "content_source": "agentic",
+        "converted_figures": page.get("converted_figures", []),
     }
 
 
@@ -512,7 +515,7 @@ async def get_page(
 ) -> dict:
     """The page as the reader shows it: the AI page when the current run has one, else the raw Docling page.
     `source` pins one side, so the reader can compare the raw page with the AI-processed one."""
-    markdown, content_source = await domains.bd.ingestion.ai.service.read_display_page(
+    markdown, content_source, converted_figures = await domains.bd.ingestion.ai.service.read_display_page(
         book_id, page_no, storage = infra.minio.service.get_storage(), source = source,
     )
     if markdown is None:
@@ -529,6 +532,7 @@ async def get_page(
         "page": page_no,
         "markdown": markdown,
         "content_source": content_source,
+        "converted_figures": converted_figures,
     }
 
 

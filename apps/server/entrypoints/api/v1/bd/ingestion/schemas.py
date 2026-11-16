@@ -120,6 +120,10 @@ class AgenticProgress(BaseModel):
     active_repair_pages: list[int]
     classified_pages: list[int] = Field(default_factory = list)
     active_classification_pages: list[int] = Field(default_factory = list)
+    visual_candidate_count: int = 0
+    visual_completed_count: int = 0
+    visual_converted_count: int = 0
+    visual_failed_count: int = 0
     selected_page_count: int = 0
     excluded_page_count: int = 0
 
@@ -215,6 +219,7 @@ class PageBody(BaseModel):
     page: int
     markdown: str
     content_source: Literal["docling", "agentic"] = "docling"
+    converted_figures: list[str] = Field(default_factory = list)
 
 
 class PatchSuggestion(BaseModel):

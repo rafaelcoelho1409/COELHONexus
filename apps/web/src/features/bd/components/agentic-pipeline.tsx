@@ -500,6 +500,7 @@ function AgenticNodeSheet({
         <Tabs defaultValue="overview" className="w-full">
           <TabsList aria-label="Node details">
             <TabsTrigger value="overview">Overview</TabsTrigger>
+            <TabsTrigger value="llm-calls">LLM Calls</TabsTrigger>
             <TabsTrigger value="resources">Resources</TabsTrigger>
           </TabsList>
           <TabsContent value="overview" className="flex flex-col gap-3 pt-4">
@@ -517,15 +518,17 @@ function AgenticNodeSheet({
               <span>LLM</span>
               <span className="text-sm">{details.llm}</span>
             </div>
+            {note ? <p role="status" className="text-sm text-muted-foreground">{note}</p> : null}
+          </TabsContent>
+          <TabsContent value="llm-calls" className="flex flex-col gap-3 pt-4">
+            <UsageBreakdown usage={usage} nodeId={node.id} loading={loading} failed={failed} hasRun={hasRun} />
           </TabsContent>
           <TabsContent value="resources" className="pt-4">
-            <section aria-label="Agent, skills, and tools">
+            <section aria-label="Agents, skills, and tools">
               <AgenticNodeDetailsList resources={details.resources} />
             </section>
           </TabsContent>
         </Tabs>
-        {note ? <p className="text-sm text-muted-foreground">{note}</p> : null}
-        <UsageBreakdown usage={usage} nodeId={node.id} loading={loading} failed={failed} hasRun={hasRun} />
       </div>
     </dialog>
   );

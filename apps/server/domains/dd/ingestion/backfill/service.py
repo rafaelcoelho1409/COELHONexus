@@ -34,11 +34,10 @@ async def _list_page_keys(slug: str) -> list[str]:
     ]
 
 
-async def _vault_exists(slug: str, idx: int, page_slug: str, run_id: str = "") -> bool:
+async def _vault_exists(slug: str, page_key: str) -> bool:
     """True iff BOTH vault blobs are present. Partial state → missing."""
     s = infra.minio.service.get_storage()
-    vk = domains.dd.ingestion.storage.keys.vault_manifest_key(slug, idx, page_slug, run_id)
-    sk = domains.dd.ingestion.storage.keys.vault_sentinelized_key(slug, idx, page_slug, run_id)
+    vk, sk = domains.dd.ingestion.storage.keys.page_vault_keys(slug, page_key)
     a, b = await asyncio.gather(s.exists(vk), s.exists(sk))
     return bool(a and b)
 
@@ -53,17 +52,15 @@ async def _backfill_one(
         if parsed is None:
             return (page_key, 0, "error")
         idx, page_slug = parsed
-        run_id = domains.dd.ingestion.storage.keys.run_id_from_page_key(page_key)
         try:
-            if await _vault_exists(slug, idx, page_slug, run_id):
+            if await _vault_exists(slug, page_key):
                 return (page_slug, 0, "skipped")
             s = infra.minio.service.get_storage()
             body = await s.read_text(page_key)
             sentinelized, manifest = domains.dd.ingestion.vault.domain.build_manifest(
                 framework = slug, source_key = page_key, md_text = body,
             )
-            vk = domains.dd.ingestion.storage.keys.vault_manifest_key(slug, idx, page_slug, run_id)
-            sk = domains.dd.ingestion.storage.keys.vault_sentinelized_key(slug, idx, page_slug, run_id)
+            vk, sk = domains.dd.ingestion.storage.keys.page_vault_keys(slug, page_key)
             await asyncio.gather(
                 s.write(vk, manifest.model_dump_json(),
                         content_type = "application/json"),
@@ -168,17 +165,15 @@ async def _normalize_one(
                 await s.write(
                     page_key_str, normalized, content_type = "text/markdown",
                 )
-            run_id = domains.dd.ingestion.storage.keys.run_id_from_page_key(page_key_str)
             # Vault rebuild on the normalized body — an existing vault was hashed
             # against the old text, so it is stale once the page changed. An
             # unchanged page that already has its vault is left untouched.
-            if changed or not await _vault_exists(slug, idx, page_slug, run_id):
+            if changed or not await _vault_exists(slug, page_key_str):
                 sentinelized, manifest = domains.dd.ingestion.vault.domain.build_manifest(
                     framework = slug, source_key = page_key_str,
                     md_text = normalized if changed else body,
                 )
-                vk = domains.dd.ingestion.storage.keys.vault_manifest_key(slug, idx, page_slug, run_id)
-                sk = domains.dd.ingestion.storage.keys.vault_sentinelized_key(slug, idx, page_slug, run_id)
+                vk, sk = domains.dd.ingestion.storage.keys.page_vault_keys(slug, page_key_str)
                 await asyncio.gather(
                     s.write(
                         vk, manifest.model_dump_json(),
@@ -196,12 +191,14 @@ async def _normalize_one(
 
 
 async def backfill_normalize_for_framework(slug: str) -> dict:
-    """Legacy repair only; agentic runs are immutable and must never be passed through deterministic normalization."""
+    """Legacy repair only; current extracted and Agentic corpora are authoritative and are not rewritten here."""
     manifest = await domains.dd.ingestion.storage.service.read_framework_manifest(
         infra.minio.service.get_storage(), slug,
     )
     if manifest and _is_agentic_normalizer(manifest.get("normalizer")):
         return {"slug": slug, "pages": manifest.get("page_count", 0), "skipped": "agentic_ingestion_is_authoritative"}
+    if manifest and manifest.get("page_content_mode") == "extracted":
+        return {"slug": slug, "pages": manifest.get("page_count", 0), "skipped": "extracted_pages_are_authoritative"}
     page_keys = await _list_page_keys(slug)
     if not page_keys:
         return {"slug": slug, "pages": 0, "normalized": 0,
@@ -227,6 +224,8 @@ async def ensure_framework_normalized(slug: str) -> dict:
     manifest = await domains.dd.ingestion.storage.service.read_framework_manifest(s, slug)
     if not manifest:
         return {"slug": slug, "skipped": "no_manifest"}
+    if manifest.get("page_content_mode") == "extracted":
+        return {"slug": slug, "skipped": "extracted_pages_are_authoritative", "normalizer_version": 0}
     if _is_agentic_normalizer(manifest.get("normalizer")):
         return {"slug": slug, "skipped": "agentic_ingestion_is_authoritative",
                 "normalizer_version": domains.dd.ingestion.ai.params.NORMALIZER_VERSION}

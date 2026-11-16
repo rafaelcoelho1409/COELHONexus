@@ -241,9 +241,36 @@
   overflow-x: auto;
 }
 
+.markdown .md-diagram-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  min-height: 2.25rem;
+  padding-inline: 0.75rem 0.25rem;
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+}
+
 .markdown .md-diagram svg {
   max-width: 100%;
   height: auto;
+}
+
+.markdown .md-visualization {
+  margin: 0;
+  padding: 0.75rem;
+  overflow-x: auto;
+}
+
+.markdown .md-visualization-canvas {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.markdown .md-visualization-canvas .vega-embed,
+.markdown .md-visualization-canvas svg {
+  max-width: 100%;
 }
 
 /* Terminal tones (ANSI colours): the semantic text roles, never raw colours. */

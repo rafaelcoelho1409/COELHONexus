@@ -35,13 +35,15 @@ async def verify_pages(
         return text
 
     async def check(page: dict[str, Any]) -> tuple[int, bool, int]:
+        content_key = page.get("enriched_key") or page["normalized_key"]
+        content_sha256 = page.get("enriched_sha256") or page["normalized_sha256"]
         async with semaphore:
             source, normalized = await asyncio.gather(
-                read(source_keys[page["page"]]), read(page["normalized_key"]),
+                read(source_keys[page["page"]]), read(content_key),
             )
         return (
             page["page"],
-            domain.sha256_matches(normalized, page["normalized_sha256"]),
+            domain.sha256_matches(normalized, content_sha256),
             domain.lost_alphanumeric(source, normalized),
         )
 
@@ -175,6 +177,16 @@ async def publish(
         "processed_page_count": state.get("processed_page_count", 0),
         "processed_book_revision": state.get("processed_book_revision"),
         "contents_status": state.get("contents_status"),
+        "visual_figures_considered": state.get("visual_candidate_count", 0),
+        "visual_figures_completed": state.get("visual_completed_count", 0),
+        "visual_figures_converted": state.get("visual_converted_count", 0),
+        "visual_figures_failed": state.get("visual_failed_count", 0),
+        "visual_figures_retained": max(
+            0,
+            state.get("visual_completed_count", 0)
+            - state.get("visual_converted_count", 0)
+            - state.get("visual_failed_count", 0),
+        ),
         "content_selection_review_pages": content_selection_review_pages,
         "discarded_blank_pages": discarded_blank_pages,
         "discarded_blank_page_count": len(discarded_blank_pages),
@@ -235,9 +247,14 @@ async def publish(
         source_key = next(ref["source_key"] for ref in state["page_refs"] if ref["page"] == page["page"]),
         source_sha256 = page["source_sha256"],
         normalized_key = page["normalized_key"],
+        enriched_key = page.get("enriched_key"),
         assessment_key = page["assessment_key"],
         patch_proposals_key = page["patch_proposals_key"],
         normalized_sha256 = page["normalized_sha256"],
+        enriched_sha256 = page.get("enriched_sha256"),
+        visual_artifacts_key = page.get("visual_artifacts_key"),
+        visual_artifacts_sha256 = page.get("visual_artifacts_sha256"),
+        converted_figures = page.get("converted_figures", []),
         assessment_sha256 = page["assessment_sha256"],
         patch_proposals_sha256 = page["patch_proposals_sha256"],
         status = domains.bd.ingestion.ai.schemas.AgenticPageStatus(page["status"]),

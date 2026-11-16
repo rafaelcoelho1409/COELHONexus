@@ -7,6 +7,7 @@ from . import (
     structure_repair, 
     text_patch_verifier,
     text_repair,
+    visual_extractor,
 )
 
 __all__ = [
@@ -17,5 +18,6 @@ __all__ = [
     "page_auditor", 
     "structure_repair", 
     "text_patch_verifier",
-    "text_repair"
+    "text_repair",
+    "visual_extractor",
 ]

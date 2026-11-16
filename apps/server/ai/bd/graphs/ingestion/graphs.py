@@ -9,7 +9,7 @@ from langgraph.graph import END, START, StateGraph
 
 
 def ingestion_graph(checkpointer: Any | None = None):
-    """Compile the audit, early content selection, repair, metadata, and publication workflow.
+    """Compile the audit, page selection, repair, visual enrichment, and publication workflow.
 
     Runtime dependencies such as page access, agents, and progress reporting arrive through the graph context,
     so graph construction only needs an optional checkpointer.
@@ -23,6 +23,7 @@ def ingestion_graph(checkpointer: Any | None = None):
     workflow.add_node("plan_repairs", nodes.ingestion.plan_repairs.node.plan_repairs)
     workflow.add_node("repair_pages", nodes.ingestion.repair_pages.node.repair_pages)
     workflow.add_node("normalize_metadata", nodes.ingestion.metadata_normalization.node.normalize_metadata)
+    workflow.add_node("enrich_visuals", nodes.ingestion.visual_enrichment.node.enrich_visuals)
     workflow.add_node(
         "materialize_processed_book",
         nodes.ingestion.materialize_processed_book.node.materialize_processed_book,
@@ -34,7 +35,8 @@ def ingestion_graph(checkpointer: Any | None = None):
     workflow.add_edge("classify_content", "plan_repairs")
     workflow.add_edge("plan_repairs", "repair_pages")
     workflow.add_edge("repair_pages", "normalize_metadata")
-    workflow.add_edge("normalize_metadata", "materialize_processed_book")
+    workflow.add_edge("normalize_metadata", "enrich_visuals")
+    workflow.add_edge("enrich_visuals", "materialize_processed_book")
     workflow.add_edge("materialize_processed_book", "reconcile_contents")
     workflow.add_edge("reconcile_contents", "publish")
     workflow.add_edge("publish", END)

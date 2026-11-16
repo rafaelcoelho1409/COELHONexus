@@ -12,7 +12,7 @@ import "./markdown.css";
 
 import type { Element } from "hast";
 import { toString as hastText } from "hast-util-to-string";
-import { type ComponentProps, useMemo } from "react";
+import { type ComponentProps, type ReactNode, useMemo } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
 import rehypeKatex from "rehype-katex";
@@ -28,6 +28,7 @@ import { normalizeMath } from "./math";
 import { MermaidDiagram } from "./mermaid-diagram";
 import { remarkAlerts } from "./remark-alerts";
 import { TerminalBlock } from "./terminal-block";
+import { VegaLiteVisualization } from "./vega-lite-visualization";
 
 /** Fences whose body is not source code to colour. */
 const PLAIN_LANGUAGES = ["mermaid", "ansi", "terminal"];
@@ -73,16 +74,7 @@ function languageOf(code: Element | undefined): string | null {
 
 const BASE_COMPONENTS: Components = {
   pre({ node, children }) {
-    const code = codeChild(node);
-    const language = languageOf(code);
-    const raw = code ? hastText(code) : "";
-    if (language === "mermaid") return <MermaidDiagram source={raw} />;
-    if (language === "ansi" || language === "terminal") return <TerminalBlock source={raw} />;
-    return (
-      <CodeBlock language={language} raw={raw.replace(/\n$/, "")}>
-        {children}
-      </CodeBlock>
-    );
+    return renderPre(node, children);
   },
   table({ children }) {
     return (
@@ -111,6 +103,44 @@ const BASE_COMPONENTS: Components = {
   },
 };
 
+function renderPre(
+  node: Element | undefined,
+  children: ReactNode,
+  onExpandVisual?: (source: string, language: string, label: string) => void,
+) {
+  const code = codeChild(node);
+  const language = languageOf(code);
+  const raw = code ? hastText(code) : "";
+  if (language === "mermaid") {
+    const firstLine = raw.trimStart().split(/\r?\n/, 1)[0]?.trim().toLowerCase();
+    let label = "Diagram";
+    if (firstLine?.startsWith("timeline")) label = "Timeline";
+    else if (firstLine?.startsWith("xychart")) label = "Chart";
+    else if (firstLine?.startsWith("flowchart") || firstLine?.startsWith("graph ")) label = "Flowchart";
+    return (
+      <MermaidDiagram
+        source={raw}
+        label={label}
+        onExpand={onExpandVisual ? () => onExpandVisual(raw, "mermaid", label) : undefined}
+      />
+    );
+  }
+  if (language === "vega-lite") {
+    return (
+      <VegaLiteVisualization
+        source={raw}
+        onExpand={onExpandVisual ? (label) => onExpandVisual(raw, "vega-lite", label) : undefined}
+      />
+    );
+  }
+  if (language === "ansi" || language === "terminal") return <TerminalBlock source={raw} />;
+  return (
+    <CodeBlock language={language} raw={raw.replace(/\n$/, "")}>
+      {children}
+    </CodeBlock>
+  );
+}
+
 /** react-markdown hands every component its syntax-tree `node`; it must not reach the DOM element. */
 function withoutNode<T extends { node?: unknown }>(props: T): Omit<T, "node"> {
   const { node, ...rest } = props;
@@ -123,6 +153,7 @@ export function Markdown({
   allowHtml = false,
   remarkPlugins,
   components,
+  onExpandVisual,
 }: {
   text: string;
   /** Parse raw HTML in the text (crawled pages carry tables and the like), sanitised first. */
@@ -131,10 +162,22 @@ export function Markdown({
   remarkPlugins?: PluggableList;
   /** Overrides for single elements. Must be referentially stable. */
   components?: Components;
+  /** Called when a rendered diagram, chart, or map's expand control is used. */
+  onExpandVisual?: (source: string, language: string, label: string) => void;
 }) {
   const source = useMemo(() => normalizeMath(text), [text]);
   const remark = useMemo(() => [...REMARK_PLUGINS, ...(remarkPlugins ?? [])], [remarkPlugins]);
-  const merged = useMemo(() => ({ ...BASE_COMPONENTS, ...components }), [components]);
+  const merged = useMemo(() => {
+    const base: Components = onExpandVisual
+      ? {
+          ...BASE_COMPONENTS,
+          pre({ node, children }) {
+            return renderPre(node, children, onExpandVisual);
+          },
+        }
+      : BASE_COMPONENTS;
+    return { ...base, ...components };
+  }, [components, onExpandVisual]);
   const options: ComponentProps<typeof ReactMarkdown> = {
     remarkPlugins: remark,
     rehypePlugins: allowHtml ? REHYPE_PLUGINS_WITH_HTML : REHYPE_PLUGINS,

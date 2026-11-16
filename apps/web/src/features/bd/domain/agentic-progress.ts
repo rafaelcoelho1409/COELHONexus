@@ -6,6 +6,7 @@ export const AGENTIC_NODES = [
   { id: "plan_repairs", label: "Plan repairs" },
   { id: "repair_pages", label: "Repair pages" },
   { id: "normalize_metadata", label: "Normalize metadata" },
+  { id: "enrich_visuals", label: "Convert source figures" },
   { id: "materialize_processed_book", label: "Build processed pages" },
   { id: "reconcile_contents", label: "Reconcile contents" },
   { id: "publish", label: "Publish results" },
@@ -112,6 +113,26 @@ export const AGENTIC_NODE_DETAILS: Record<AgenticNodeId, AgenticNodeDetails> = {
       tools: ["read_file"],
     },
   },
+  enrich_visuals: {
+    title: "Convert source figures",
+    subtitle:
+      "Transcribes selected-page figures with the configured vision model and replaces only high-confidence conversions in the processed Markdown.",
+    kind: "Vision extraction + deterministic Markdown serialization",
+    actions: [
+      "Reads source figure crops from the immutable Docling extraction and uses nearby repaired page text as context.",
+      "Converts flow diagrams to Mermaid, tables to GFM, explicitly labeled charts to Mermaid XY charts, equations to KaTeX LaTeX, and legible code samples to fenced code.",
+      "Keeps the original image in the figure gallery and leaves the inline image unchanged whenever the source is incomplete or uncertain.",
+      "Persists each successful figure response so an interrupted run can resume without repeating completed vision calls.",
+    ],
+    reads: ["selected repaired pages", "source figure PNGs", "section paths"],
+    writes: ["visually enriched Markdown", "figure conversion provenance"],
+    llm: "Visual extractor DeepAgent, one schema-constrained vision call per eligible figure; the Rotator selects a vision model from image input.",
+    resources: {
+      agents: ["visual_extractor"],
+      skills: ["transcribe-source-figure"],
+      tools: ["read_file"],
+    },
+  },
   classify_content: {
     title: "Select Distill pages",
     subtitle:
@@ -192,6 +213,10 @@ export const EMPTY_AGENTIC_PROGRESS: AgenticProgress = {
   active_classification_pages: [],
   selected_page_count: 0,
   excluded_page_count: 0,
+  visual_candidate_count: 0,
+  visual_completed_count: 0,
+  visual_converted_count: 0,
+  visual_failed_count: 0,
 };
 
 function pageSelectionCounts(progress: AgenticProgress, total?: number) {
@@ -277,6 +302,15 @@ export function agenticNodeCaption(
   status?: AgenticNodeStatus,
 ): string | null {
   if (total <= 0) return null;
+  if (nodeId === "enrich_visuals") {
+    const candidates = progress.visual_candidate_count ?? 0;
+    const completed = progress.visual_completed_count ?? 0;
+    const converted = progress.visual_converted_count ?? 0;
+    const failed = progress.visual_failed_count ?? 0;
+    return candidates > 0
+      ? `${completed} of ${candidates} processed · ${converted} converted · ${failed} failed`
+      : "No eligible figures on selected pages";
+  }
   if (nodeId === "audit_batch") {
     const done = progress.audited_pages.length;
     const active = progress.active_audit_pages.length;
@@ -314,6 +348,12 @@ export function agenticNodeKpi(
   total?: number,
 ): string | null {
   if (status !== "done") return null;
+  if (nodeId === "enrich_visuals") {
+    const converted = progress.visual_converted_count ?? 0;
+    const candidates = progress.visual_candidate_count ?? 0;
+    const failed = progress.visual_failed_count ?? 0;
+    return `${converted} converted · ${failed} failed · ${candidates} figures`;
+  }
   if (nodeId === "audit_batch") return `${progress.audited_pages.length} ${unitPlural} audited`;
   if (nodeId === "repair_pages") {
     const { excluded } = pageSelectionCounts(progress, total);
@@ -337,6 +377,9 @@ export function agenticNodeLiveLine(
   total: number,
 ): string | null {
   if (status !== "running" || total <= 0) return null;
+  if (nodeId === "enrich_visuals") {
+    return `${progress.visual_completed_count ?? 0}/${progress.visual_candidate_count ?? 0} processed · ${progress.visual_converted_count ?? 0} converted · ${progress.visual_failed_count ?? 0} failed`;
+  }
   const [done, active] =
     nodeId === "audit_batch"
       ? [progress.audited_pages.length, progress.active_audit_pages.length]
@@ -373,6 +416,16 @@ function agenticNodeProgress(
   total: number,
 ): AgenticNodeProgress | null {
   if (total <= 0 || status === "pending") return null;
+  if (nodeId === "enrich_visuals") {
+    const visualTotal = progress.visual_candidate_count ?? 0;
+    if (visualTotal <= 0) return null;
+    return {
+      current: Math.min(progress.visual_completed_count ?? 0, visualTotal),
+      total: visualTotal,
+      label: "figures processed",
+      active: 0,
+    };
+  }
   if (nodeId === "audit_batch") {
     return {
       current: Math.min(progress.audited_pages.length, total),

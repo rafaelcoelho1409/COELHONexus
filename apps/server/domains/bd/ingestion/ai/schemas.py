@@ -49,6 +49,10 @@ class AgenticRunProgress(BaseModel):
     active_repair_pages: list[int] = Field(default_factory = list)
     classified_pages: list[int] = Field(default_factory = list)
     active_classification_pages: list[int] = Field(default_factory = list)
+    visual_candidate_count: int = Field(default = 0, ge = 0, strict = True)
+    visual_completed_count: int = Field(default = 0, ge = 0, strict = True)
+    visual_converted_count: int = Field(default = 0, ge = 0, strict = True)
+    visual_failed_count: int = Field(default = 0, ge = 0, strict = True)
     selected_page_count: int = Field(default = 0, ge = 0, strict = True)
     excluded_page_count: int = Field(default = 0, ge = 0, strict = True)
 
@@ -186,9 +190,14 @@ class IngestionPageArtifact(BaseModel):
     source_key: ObjectKey
     source_sha256: Sha256Hex
     normalized_key: ObjectKey
+    enriched_key: ObjectKey | None = None
     assessment_key: ObjectKey
     patch_proposals_key: ObjectKey
     normalized_sha256: Sha256Hex | None = None
+    enriched_sha256: Sha256Hex | None = None
+    visual_artifacts_key: ObjectKey | None = None
+    visual_artifacts_sha256: Sha256Hex | None = None
+    converted_figures: list[NonEmptyText] = Field(default_factory = list)
     assessment_sha256: Sha256Hex | None = None
     patch_proposals_sha256: Sha256Hex | None = None
     status: AgenticPageStatus = AgenticPageStatus.PENDING
@@ -196,6 +205,14 @@ class IngestionPageArtifact(BaseModel):
 
     @model_validator(mode = "after")
     def _validate_completed_artifacts(self) -> IngestionPageArtifact:
+        if (self.enriched_key is None) != (self.enriched_sha256 is None):
+            raise ValueError("enriched page references must include their hash")
+        if (self.visual_artifacts_key is None) != (self.visual_artifacts_sha256 is None):
+            raise ValueError("visual provenance references must include their hash")
+        if len(self.converted_figures) != len(set(self.converted_figures)):
+            raise ValueError("converted figure names must be unique per page")
+        if self.converted_figures and (self.enriched_key is None or self.visual_artifacts_key is None):
+            raise ValueError("converted figures must include their page and provenance artifacts")
         if self.status in {AgenticPageStatus.DONE, AgenticPageStatus.REVIEW_REQUIRED}:
             if any(value is None for value in (
                 self.normalized_sha256,
@@ -211,7 +228,7 @@ class IngestionAIRunManifest(BaseModel):
 
     model_config = ConfigDict(extra = "forbid")
 
-    schema_version: Literal["1.0", "1.1", "1.2", "1.3", "1.4"] = versions.MANIFEST_SCHEMA_VERSION
+    schema_version: Literal["1.0", "1.1", "1.2", "1.3", "1.4", "1.5"] = versions.MANIFEST_SCHEMA_VERSION
     workflow_version: NonEmptyText = versions.WORKFLOW_VERSION
     agentic_run_id: SafeSegment
     book_id: SafeSegment
@@ -287,7 +304,7 @@ class IngestionAIRunManifest(BaseModel):
                 raise ValueError("completed runs may contain only completed or review-required pages")
             if self.book_metadata_sha256 is None or self.quality_report_sha256 is None:
                 raise ValueError("completed runs must include hashes for book metadata and quality report")
-            if self.schema_version in {"1.1", "1.2", "1.3", "1.4"}:
+            if self.schema_version in {"1.1", "1.2", "1.3", "1.4", "1.5"}:
                 if self.quality_status is None:
                     raise ValueError("completed 1.1 runs must include a quality status")
                 if self.delivered_page_count != sum(
@@ -302,14 +319,14 @@ class IngestionAIRunManifest(BaseModel):
                     page.status == AgenticPageStatus.REVIEW_REQUIRED for page in self.pages
                 ):
                     raise ValueError("review_page_count must match page review statuses")
-            if self.schema_version in {"1.2", "1.3", "1.4"}:
+            if self.schema_version in {"1.2", "1.3", "1.4", "1.5"}:
                 if len(self.unverified_pages) != self.unverified_page_count:
                     raise ValueError("unverified_page_count must match unverified_pages")
                 if len(self.unverified_pages) != len(set(self.unverified_pages)):
                     raise ValueError("unverified_pages must contain unique page numbers")
                 if any(page_number < 1 or page_number > self.expected_page_count for page_number in self.unverified_pages):
                     raise ValueError("unverified_pages must be within the expected page range")
-            if self.schema_version in {"1.3", "1.4"}:
+            if self.schema_version in {"1.3", "1.4", "1.5"}:
                 if any(value is None for value in (
                     self.content_selection_key,
                     self.content_selection_sha256,
@@ -320,14 +337,14 @@ class IngestionAIRunManifest(BaseModel):
                     raise ValueError("completed 1.3 runs must pin a complete content-selection revision")
                 if self.selected_page_count + self.excluded_page_count != self.expected_page_count:
                     raise ValueError("content-selection counts must cover every physical page")
-            if self.schema_version == "1.4" and any(value is None for value in (
+            if self.schema_version in {"1.4", "1.5"} and any(value is None for value in (
                 self.processed_book_key,
                 self.processed_book_sha256,
                 self.processed_book_revision,
                 self.processed_page_count,
                 self.contents_status,
             )):
-                raise ValueError("completed 1.4 runs must pin the processed-book manifest")
+                raise ValueError("completed 1.4+ runs must pin the processed-book manifest")
 
         return self
 
@@ -340,6 +357,7 @@ class ExtractionPage(BaseModel):
     page: StrictInt = Field(gt = 0)
     key: str = Field(min_length = 1)
     pictures: StrictInt = Field(default = 0, ge = 0)
+    figures: list[str] = Field(default_factory = list)
 
 
 class ExtractionRequest(BaseModel):
@@ -368,7 +386,7 @@ class ExtractionRequest(BaseModel):
                 raise ValueError(f"page {page_ref.page} does not use its canonical raw object key")
         return self
 
-    def page_references(self) -> list[dict[str, int | str]]:
+    def page_references(self) -> list[dict[str, int | str | list[str]]]:
         """The pages as the plain dicts the graph state keeps."""
         return [page_ref.model_dump() for page_ref in self.page_refs]
 

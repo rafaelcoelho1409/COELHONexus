@@ -36,9 +36,20 @@ def manifest_key(framework_slug: str) -> str:
 
 
 def page_key(framework_slug: str, idx: int, slug: str, run_id: str = "") -> str:
-    """Mutable working key retained for legacy callers; published pages are immutable agentic run objects."""
+    """Legacy mutable page key retained for stored-manifest compatibility."""
     safe_slug = (slug or "page").strip().strip("/")[:80]
     return f"{ingestion_prefix(framework_slug)}pages/{idx:04d}-{safe_slug}.md"
+
+
+def published_page_prefix(framework_slug: str, run_id: str) -> str:
+    """Immutable home for pages that had to be structurally split during extraction."""
+    safe_run_id = (run_id or "run").strip().strip("/")[:100]
+    return f"{ingestion_prefix(framework_slug)}pages/runs/{safe_run_id}/"
+
+
+def published_page_key(framework_slug: str, run_id: str, idx: int, slug: str) -> str:
+    safe_slug = (slug or "page").strip().strip("/")[:80]
+    return f"{published_page_prefix(framework_slug, run_id)}{idx:04d}-{safe_slug}.md"
 
 
 def stage_prefix(framework_slug: str, run_id: str) -> str:
@@ -112,6 +123,25 @@ def vault_prefix(framework_slug: str, run_id: str = "") -> str:
     return f"{ingestion_prefix(framework_slug)}vault/"
 
 
+def page_vault_prefix(framework_slug: str, page_key: str) -> str:
+    """Vault location for a canonical page, preserving paths from older Agentic manifests."""
+    parts = page_key.strip("/").split("/")
+    for index in range(len(parts) - 2):
+        if parts[index:index + 2] == ["ingestion", "agentic"]:
+            return f"{agentic_prefix(framework_slug, parts[index + 2])}vault/"
+        if parts[index:index + 3] == ["ingestion", "pages", "runs"] and len(parts) > index + 3:
+            return f"{published_page_prefix(framework_slug, parts[index + 3])}vault/"
+        if parts[index:index + 2] == ["ingestion", "raw"] and len(parts) > index + 3:
+            return f"{raw_tier_prefix(framework_slug, parts[index + 2], parts[index + 3])}vault/"
+    return vault_prefix(framework_slug)
+
+
+def page_vault_keys(framework_slug: str, page_key: str) -> tuple[str, str]:
+    basename = page_key.rstrip("/").rsplit("/", 1)[-1].removesuffix(".md")
+    prefix = f"{page_vault_prefix(framework_slug, page_key)}pages/{basename}"
+    return f"{prefix}.vault.json", f"{prefix}.sentinelized.md"
+
+
 def vault_manifest_key(framework_slug: str, idx: int, slug: str, run_id: str = "") -> str:
     safe_slug = (slug or "page").strip().strip("/")[:80]
     return f"{vault_prefix(framework_slug, run_id)}pages/{idx:04d}-{safe_slug}.vault.json"
@@ -123,10 +153,14 @@ def vault_sentinelized_key(framework_slug: str, idx: int, slug: str, run_id: str
 
 
 def run_id_from_page_key(page_key: str) -> str:
-    """Extract the immutable agentic run segment from a published page key."""
+    """Extract the immutable run segment from a published page key, including legacy Agentic keys."""
     parts = page_key.strip("/").split("/")
     for index in range(len(parts) - 2):
         if parts[index:index + 2] == ["ingestion", "agentic"]:
+            return parts[index + 2]
+        if parts[index:index + 3] == ["ingestion", "pages", "runs"] and len(parts) > index + 3:
+            return parts[index + 3]
+        if parts[index:index + 2] == ["ingestion", "raw"] and len(parts) > index + 3:
             return parts[index + 2]
     return ""
 

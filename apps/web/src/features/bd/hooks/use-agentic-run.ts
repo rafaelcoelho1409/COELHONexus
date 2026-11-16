@@ -137,7 +137,10 @@ export function useAgenticRun(bookId: string, snapshot: BookSnapshot): AgenticRu
       };
     });
 
-    if (event.kind === "page_repair" && event.status === "done" && event.page !== undefined) {
+    if (
+      ((event.kind === "page_repair" && event.status === "done") || event.kind === "visual_page") &&
+      event.page !== undefined
+    ) {
       void queryClient.invalidateQueries({
         queryKey: getBdIngestionBookIdPagesPageNoQueryKey({
           path: { book_id: bookId, page_no: event.page },

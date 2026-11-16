@@ -6,6 +6,7 @@ from .... import agents
 
 import json
 import hashlib
+import re
 import unicodedata
 from collections.abc import Iterator
 from typing import Any
@@ -192,7 +193,12 @@ def sanitize_assessment(
         verified_evidence = [
             evidence
             for evidence in source_verified_evidence
-            if _evidence_supports_issue_code(issue.code, evidence.excerpt)
+            if _evidence_supports_issue_code(
+                issue.code,
+                evidence.excerpt,
+                description = issue.description,
+                markdown = markdown,
+            )
         ]
         invalid_code_evidence_count += len(source_verified_evidence) - len(verified_evidence)
         if not verified_evidence:
@@ -231,7 +237,13 @@ def _content_lines(excerpt: str) -> list[str]:
     ]
 
 
-def _evidence_supports_issue_code(issue_code: agents.schemas.IssueCode, excerpt: str) -> bool:
+def _evidence_supports_issue_code(
+    issue_code: agents.schemas.IssueCode,
+    excerpt: str,
+    *,
+    description: str = "",
+    markdown: str = "",
+) -> bool:
     if issue_code == agents.schemas.IssueCode.CONTROL_CHARACTERS:
         return any(
             unicodedata.category(character) == "Cc" and character not in "\t\n\r"
@@ -247,16 +259,67 @@ def _evidence_supports_issue_code(issue_code: agents.schemas.IssueCode, excerpt:
     if issue_code == agents.schemas.IssueCode.NEAR_EMPTY:
         # Sparseness is measured in code (inventory); a model calling a title or part page "empty" only adds noise.
         return False
+    if issue_code == agents.schemas.IssueCode.SPLIT_WORD:
+        return _evidence_shows_split_word(excerpt, description)
+    if issue_code == agents.schemas.IssueCode.TEXT_CORRUPTION and _is_technical_literal(excerpt, markdown):
+        return False
     lines = _content_lines(excerpt)
     if issue_code == agents.schemas.IssueCode.OTHER and (
         domains.bd.ingestion.ai.inventory.patterns.HTML_ENTITY_RE.search(excerpt)
     ):
         # `&amp;` is how Markdown writes an ampersand and renders as one; models still file it, then call it "not a finding".
         return False
-    if issue_code in {agents.schemas.IssueCode.STRUCTURE, agents.schemas.IssueCode.TABLE_OR_INDEX_LAYOUT}:
+    if issue_code == agents.schemas.IssueCode.TABLE_OR_INDEX_LAYOUT:
+        patterns = domains.bd.ingestion.ai.inventory.patterns
+        return (
+            bool(re.search(r"(?m)^\s*\|[^\n]*\|\s*$", excerpt))
+            or "\t" in excerpt
+            or bool(patterns.TOC_LEADER_ROW_RE.search(excerpt))
+        )
+    if issue_code == agents.schemas.IssueCode.STRUCTURE:
         # Models report "a figure with a caption" as a layout finding; a caption line alone is normal Docling output.
         return not all(domains.bd.ingestion.ai.inventory.patterns.CAPTION_LINE_RE.match(line) for line in lines)
     return bool(lines)
+
+
+def _evidence_shows_split_word(excerpt: str, description: str) -> bool:
+    """Require the cited text itself to show a broken token, not just a claim about line wrapping."""
+    patterns = domains.bd.ingestion.ai.inventory.patterns
+    if patterns.HEADING_FRAGMENT_RE.search(excerpt):
+        return True
+    if re.search(r"\b[A-Za-z]{2,}[-‐‑][ \t]*\n[ \t]*[A-Za-z]{2,}\b", excerpt):
+        return True
+    # A missing second hyphen in common `*-of-*` compounds is a visible extraction defect (`denial-ofservice`).
+    if re.search(r"\b[A-Za-z]{3,}-of[A-Za-z]{4,}\b", excerpt, re.IGNORECASE):
+        return True
+
+    quoted_terms = re.findall(r"['\"“`]([A-Za-z][A-Za-z'’\-]{3,})['\"”`]", description)
+    for term in quoted_terms:
+        if not term.isalpha() and not re.fullmatch(r"[A-Za-z]+(?:['’][A-Za-z]+)?(?:-[A-Za-z]+)*", term):
+            continue
+        spaced_term = r"\b" + r"\s*".join(re.escape(character) for character in term) + r"\b"
+        match = re.search(spaced_term, excerpt, re.IGNORECASE)
+        if match and re.search(r"\s", match.group()):
+            return True
+    return False
+
+
+def _is_technical_literal(excerpt: str, markdown: str) -> bool:
+    """Do not flag opaque code/data literals as damaged prose when page context identifies them as such."""
+    start = markdown.find(excerpt)
+    context = markdown[max(0, start - 600):start + len(excerpt) + 600] if start >= 0 else excerpt
+    technical_context = re.search(
+        r"\b(?:encrypted|ciphertext|encoded|obfuscated|code sample|sample code|source code|payload|hash|checksum)\b",
+        context,
+        re.IGNORECASE,
+    )
+    if not technical_context:
+        return False
+    compact = re.sub(r"\s+", "", excerpt)
+    if not compact:
+        return False
+    non_word = sum(not character.isalnum() for character in compact)
+    return non_word / len(compact) >= 0.18 or "```" in context
 
 
 def _materialize_assessment(

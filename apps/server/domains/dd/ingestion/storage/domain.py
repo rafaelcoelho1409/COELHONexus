@@ -68,7 +68,7 @@ def manifest_payload(
     normalizer_version: int,
     extra: dict | None = None,
 ) -> dict:
-    """Canonical published manifest; `extra` carries the Agentic AI run identity and source metadata."""
+    """Canonical published manifest; `extra` carries source metadata and optional legacy Agentic run identity."""
     payload = {
         "framework_slug": framework_slug,
         "ingested_at": ingested_at,

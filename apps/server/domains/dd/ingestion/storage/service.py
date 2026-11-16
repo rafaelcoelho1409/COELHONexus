@@ -9,9 +9,6 @@ import logging
 import time
 from datetime import UTC, datetime
 
-import httpx
-
-
 logger = logging.getLogger(__name__)
 
 
@@ -28,12 +25,6 @@ async def write_immutable(
             raise RuntimeError(f"immutable MinIO object conflict at {key}")
         return
     await minio.write(key, expected, content_type=content_type)
-
-
-async def _cpu_bound(fn, *args, size: int, **kwargs):
-    if size < params.CPU_THREAD_THRESHOLD_CHARS:
-        return fn(*args, **kwargs)
-    return await asyncio.to_thread(fn, *args, **kwargs)
 
 
 class Store:
@@ -57,9 +48,6 @@ class Store:
         # idx-assign region atomic; slow MinIO PUT outside the lock.
         self._add_lock = asyncio.Lock()
         self._live_last_flush = 0.0
-        # Lazy artifact client — every tier flows through add_page.
-        self._artifact_client: httpx.AsyncClient | None = None
-        self._artifact_lock = asyncio.Lock()
         # Tier 2 index summary (llms.txt blockquote) — set by tier2.service.run,
         # read by dispatch.finalize into the manifest. "" = absent (all tiers).
         self.index_summary: str = ""
@@ -87,84 +75,27 @@ class Store:
         relative_links: bool = True,
         keep_raw: bool = True,
     ) -> entities.ManifestEntry:
-        """Capture extracted Markdown, stage deterministic page assembly, then hand it to the page agent.
+        """Store extracted Markdown unchanged; structural splitting happens after the tier finishes.
 
-        The raw object is written before artifact rewriting, URL rewriting, or AI enhancement. `keep_raw` is retained for
-        call compatibility; every tier now captures every extracted page.
-
-        `defer_vault` remains accepted for tier compatibility; vaults are built only after the final Agentic AI page is published.
-
-        The stored copy has its site-relative links made absolute against `url`. `relative_links=False` limits that to
-        `/x` links (a bundle's `./x` is relative to each section's own URL, which the split knows and `url` does not)."""
-        # First durable page-level copy: before artifact rewriting or any normalization.
+        Legacy keyword arguments remain accepted for tier compatibility. Vaults are built after the final
+        extraction pages are published."""
         async with self._add_lock:
             idx = self._next_idx
             self._next_idx += 1
         raw_key = keys.raw_page_key(self.framework_slug, idx, slug, self.run_id, tier)
         await write_immutable(self.minio, raw_key, body, params.MARKDOWN_TYPE)
 
-        # Markdown-side artifact hook for tiers 1/2/3/5 (tier4 uses HTML-stage).
-        if url:
-            try:
-                client = await self._get_artifact_client()
-                body, n_art = await domains.dd.ingestion.artifacts.service.extract_and_save_artifacts_from_md(
-                    body,
-                    url,
-                    slug = self.framework_slug,
-                    store = self,
-                    client = client,
-                )
-                if n_art:
-                    logger.info(
-                        f"[store] md-artifacts: {n_art} saved for "
-                        f"slug={slug!r} url={url[:80]!r}"
-                    )
-            except Exception as e:
-                logger.warning(
-                    f"[store] md-artifact extraction failed for slug={slug!r}: "
-                    f"{type(e).__name__}: {e}"
-                )
-        # This is only deterministic assembly for the page agent (artifact references and absolute URLs).
-        staged_body = body
-        if url:
-            staged_body = await _cpu_bound(
-                domains.dd.ingestion.post.domain.absolutize_links, staged_body, url,
-                size = len(staged_body), relative = relative_links,
-            )
-        staged_bytes = len(staged_body.encode("utf-8"))
         async with self._add_lock:
             entry = domain.new_entry(
-                self.framework_slug, idx, key=keys.stage_page_key(self.framework_slug, self.run_id, idx, slug),
-                slug = slug, url = url, tier = tier, size = staged_bytes,
+                self.framework_slug, idx, key=raw_key,
+                slug = slug, url = url, tier = tier, size = len(body.encode("utf-8")),
                 title = title, section = section, notes = notes, lastmod = lastmod, anchors = anchors,
                 raw_key = raw_key,
             )
             self._cached_manifest.append(entry)
             self._cached_manifest.sort(key=lambda item: item.idx)
-        await self.minio.write(entry.key, staged_body, content_type=params.MARKDOWN_TYPE)
         await self._write_live_manifest()
         return entry
-
-    async def _get_artifact_client(self) -> httpx.AsyncClient:
-        """Lazy singleton httpx client for the markdown artifact extractor.
-        One pool per Store so add_page calls reuse keepalive sockets."""
-        if self._artifact_client is not None:
-            return self._artifact_client
-        async with self._artifact_lock:
-            if self._artifact_client is not None:
-                return self._artifact_client
-            self._artifact_client = httpx.AsyncClient(
-                timeout = httpx.Timeout(params.ARTIFACT_TIMEOUT_S, connect = params.ARTIFACT_CONNECT_TIMEOUT_S),
-                headers = {
-                    "User-Agent": params.ARTIFACT_USER_AGENT,
-                    "Accept": params.ARTIFACT_ACCEPT,
-                },
-                limits = httpx.Limits(
-                    max_connections = params.ARTIFACT_MAX_CONNECTIONS,
-                    max_keepalive_connections = params.ARTIFACT_MAX_KEEPALIVE),
-                follow_redirects = True,
-            )
-            return self._artifact_client
 
     def reorder_by_url_list(self, url_list: list[str]) -> None:
         """Reorder manifest to discovery order; parallel fetch writes in race order, not chapter order (Bash GNU manual regression). entry.idx unchanged."""
@@ -173,14 +104,7 @@ class Store:
         self._cached_manifest = domain.ordered_by_urls(self._cached_manifest, url_list)
 
     async def close(self) -> None:
-        """Release the lazy httpx artifact client. Idempotent."""
-        if self._artifact_client is not None:
-            try:
-                await self._artifact_client.aclose()
-            except Exception as e:
-                logger.warning(f"[store] artifact client close failed: {e}")
-            finally:
-                self._artifact_client = None
+        """Compatibility hook; page storage no longer owns an HTTP client."""
 
     async def add_artifact(
         self, *, slug: str, name: str, data: bytes, content_type: str,
@@ -195,37 +119,6 @@ class Store:
         key = keys.artifact_key(self.framework_slug, name)
         await self.minio.write(key, data, content_type = content_type)
         return key
-
-    async def _build_and_persist_vault(
-        self, idx: int, slug: str, body: str,
-    ) -> None:
-        """Sentinelize body + persist vault manifest + sentinelized text.
-        Empty vaults still get written so synth has a uniform read path."""
-        source_key = keys.stage_page_key(self.framework_slug, self.run_id, idx, slug)
-        sentinelized, manifest = await _cpu_bound(
-            domains.dd.ingestion.vault.domain.build_manifest,
-            framework = self.framework_slug,
-            source_key = source_key,
-            md_text = body,
-            size = len(body),
-        )
-        vk = keys.vault_manifest_key(self.framework_slug, idx, slug, self.run_id)
-        sk = keys.vault_sentinelized_key(self.framework_slug, idx, slug, self.run_id)
-        await asyncio.gather(
-            self.minio.write(
-                vk,
-                manifest.model_dump_json(),
-                content_type = params.JSON_TYPE),
-            self.minio.write(
-                sk,
-                sentinelized,
-                content_type = params.MARKDOWN_TYPE),
-        )
-        n = len(manifest.entries)
-        if n:
-            logger.info(
-                f"[store] vault built idx={idx} slug={slug!r}: {n} fence(s) -> {vk}"
-            )
 
     async def read_body(self, idx: int) -> str:
         if idx < 0 or idx >= len(self._cached_manifest):
@@ -260,13 +153,18 @@ class Store:
             await self.delete_body_by_key(key)
 
     async def finalize(self, extra: dict | None = None) -> None:
-        """Write the canonical MinIO manifest only after page normalization and vault generation finish."""
+        """Publish only after extracted pages and their code vaults are durable."""
+        manifest_extra = dict(extra or {})
+        is_agentic = bool(manifest_extra.get("agentic_run_id"))
+        manifest_extra["page_content_mode"] = "agentic" if is_agentic else "extracted"
+        if is_agentic:
+            manifest_extra.setdefault("normalizer", "dd-ingestion-agentic-v1")
         payload = domain.manifest_payload(
             self.framework_slug,
             self._cached_manifest,
             ingested_at = time.time(),
-            normalizer_version = 1,
-            extra = {**(extra or {}), "normalizer": "dd-ingestion-agentic-v1", "agentic_run_id": self.run_id},
+            normalizer_version = 1 if is_agentic else 0,
+            extra = manifest_extra,
         )
         try:
             await self.minio.write(

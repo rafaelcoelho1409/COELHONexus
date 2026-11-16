@@ -1,15 +1,14 @@
 "use client";
 
-/** One ingested page on the Materials tab: where it is in the list, its title and facts, how it is shown (rendered or as
+/** One ingested page in Pages: where it is in the list, its title and facts, how it is shown (rendered or as
  * source) and the way to the pages on either side, then the text (or why there is none). The page frames it as a card
  * between the side columns; the reading window shows it bare, on the whole screen. */
 
-import { ChevronLeft, ChevronRight, ExternalLink } from "lucide-react";
+import { ExternalLink } from "lucide-react";
 import type { ReactNode, Ref } from "react";
 
 import { pageFacts, pageTitle, sourceHref } from "../domain/materials";
 import type { ManifestEntry, PageVersion } from "../entities";
-import { ActionButton } from "./action-button";
 import { ToggleGroup } from "./toggle-group";
 
 const PREVIEW_MODES = [
@@ -32,8 +31,6 @@ export function MaterialsArticle({
   version,
   onVersion,
   hasVersions,
-  onPrevious,
-  onNext,
   toolbar,
   quality,
   children,
@@ -49,9 +46,7 @@ export function MaterialsArticle({
   version: PageVersion;
   onVersion: (version: PageVersion) => void;
   hasVersions: boolean;
-  onPrevious: (() => void) | null;
-  onNext: (() => void) | null;
-  /** Page navigation and layout controls, shown in the framed page header. */
+  /** Layout controls, shown in the framed page header. */
   toolbar?: ReactNode;
   /** Quality report for finalized Agentic AI pages. */
   quality?: ReactNode;
@@ -96,27 +91,7 @@ export function MaterialsArticle({
                 </p>
               </div>
               {framed ? (
-                <div className="flex shrink-0 flex-wrap items-center justify-end gap-1">
-                  <ActionButton
-                    iconOnly
-                    aria-label="Previous page"
-                    title="Previous page"
-                    disabled={onPrevious === null}
-                    onClick={() => onPrevious?.()}
-                  >
-                    <ChevronLeft aria-hidden />
-                  </ActionButton>
-                  <ActionButton
-                    iconOnly
-                    aria-label="Next page"
-                    title="Next page"
-                    disabled={onNext === null}
-                    onClick={() => onNext?.()}
-                  >
-                    <ChevronRight aria-hidden />
-                  </ActionButton>
-                  {toolbar}
-                </div>
+                <div className="flex shrink-0 flex-wrap items-center justify-end gap-1">{toolbar}</div>
               ) : null}
             </div>
             {quality}

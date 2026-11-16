@@ -10,6 +10,7 @@ from . import (
     publish,
     reconcile_contents,
     repair_pages,
+    visual_enrichment,
 )
 
 __all__ = [
@@ -21,4 +22,5 @@ __all__ = [
     "publish",
     "reconcile_contents",
     "repair_pages",
+    "visual_enrichment",
 ]

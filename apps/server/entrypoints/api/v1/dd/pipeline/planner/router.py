@@ -193,7 +193,7 @@ async def replay_planner_from_node(thread_id: str, node_id: str) -> dict:
         if dict(snapshot.values).get("status") in {"running", "queued"}:
             await domains.dd.pipeline.runtime.dispatch.service.release_start(slug)
             raise HTTPException(status_code = 409, detail = "stop the active Planner run before replaying a node")
-        await ai.langgraph.service.checkpoint_before_node(
+        await infra.postgres.service.checkpoint_before_node(
             graph,
             {"configurable": {"thread_id": thread_id}},
             node_id,

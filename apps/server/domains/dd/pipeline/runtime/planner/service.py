@@ -85,7 +85,7 @@ async def replay_from_node(
     values = dict(snapshot.values)
     if values.get("status") in {"running", "queued"}:
         raise ValueError("stop the active Planner run before replaying a node")
-    replay_config = await ai.langgraph.service.checkpoint_before_node(
+    replay_config = await infra.postgres.service.checkpoint_before_node(
         binding.graph,
         base_config,
         node_id,

@@ -20,7 +20,11 @@ SELF_DISMISSED_RE = re.compile(
 # A "structure" or "other" finding about how a picture sits in the text is page-kind commentary, not an extraction defect.
 IMAGE_PLACEMENT_RE = re.compile(
     r"\bmix of (?:textual )?(?:content|text) and (?:a |an )?(?:single )?(?:embedded )?(?:image|figure|picture)\b"
-    r"|\b(?:image|figure|picture)\b[^.]{0,80}\bnot\b[^.]{0,30}\b(?:integrated|rendered|described|referenced|represented)\b",
+    r"|\b(?:image|figure|picture)\b[^.]{0,80}\bnot\b[^.]{0,30}\b(?:integrated|rendered|described|referenced|represented)\b"
+    r"|\b(?:image|figure|picture)\b[^.]{0,100}\b(?:sparse|mostly visual|minimal|limited|little)\b[^.]{0,60}\b(?:text|content|context)\b"
+    r"|\b(?:sparse|mostly visual|minimal|limited|little)\b[^.]{0,60}\b(?:accompanying )?(?:text|content)\b[^.]{0,80}\b(?:image|figure|picture)\b"
+    r"|\b(?:image|figure|picture)\b.{0,300}\b(?:sparse|mostly visual|minimal|limited|little)\b"
+    r"|\b(?:sparse|mostly visual|minimal|limited|little)\b.{0,300}\b(?:image|figure|picture)\b",
     re.IGNORECASE,
 )
 HTML_ENTITY_RE =re.compile(r"&(?:[A-Za-z][A-Za-z0-9]{1,7}|#\d{1,6}|#[xX][0-9A-Fa-f]{1,6});")

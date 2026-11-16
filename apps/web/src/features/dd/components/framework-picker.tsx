@@ -20,7 +20,7 @@ import { deleteCascadeText, itemDisplayName, itemLogos } from "../domain/library
 import type { LibraryItem } from "../entities";
 import { useActiveRun, useCatalog, useDeleteLibrary, useLibrary, useStartRun } from "../hooks/use-dd-data";
 import { useDdOverlays } from "../hooks/use-overlays";
-import { type DdStage, ingestionHref, stageHref } from "../params";
+import { type DdStage, pagesHref, stageHref } from "../params";
 import { LogoStrip } from "./logo-strip";
 
 type FrameworkOption = {
@@ -74,8 +74,22 @@ export function FrameworkPicker({ stage, currentSlug }: { stage: DdStage; curren
         activeRunId: null,
       }));
 
-    return [...activeOptions, ...libraryOptions];
-  }, [activeRuns, catalogQuery.data, items]);
+    const currentCatalogEntry = catalogQuery.data?.find((entry) => entry.slug === currentSlug);
+    const currentCatalogOption =
+      currentCatalogEntry && !seen.has(currentCatalogEntry.slug)
+        ? [
+            {
+              slug: currentCatalogEntry.slug,
+              name: tileName(currentCatalogEntry),
+              logos: tileLogos(currentCatalogEntry),
+              libraryItem: null,
+              activeRunId: null,
+            },
+          ]
+        : [];
+
+    return [...activeOptions, ...libraryOptions, ...currentCatalogOption];
+  }, [activeRuns, catalogQuery.data, currentSlug, items]);
 
   useEffect(() => {
     if (!open) {
@@ -121,7 +135,7 @@ export function FrameworkPicker({ stage, currentSlug }: { stage: DdStage; curren
     setQuery("");
     const option = options.find((item) => item.slug === slug);
     if (option?.activeRunId) {
-      router.push(ingestionHref(slug, option.activeRunId));
+      router.push(pagesHref(slug, option.activeRunId));
       return;
     }
     if (slug === currentSlug) {
@@ -136,9 +150,9 @@ export function FrameworkPicker({ stage, currentSlug }: { stage: DdStage; curren
       {
         onSuccess: (outcome) => {
           if (outcome.kind === "queued") {
-            notice(`Reingesting ${nameForSlug(items, slug)}…`);
+            notice(`Refreshing pages for ${nameForSlug(items, slug)}…`);
             void queryClient.invalidateQueries({ queryKey: getDdIngestionQueryKey() });
-            router.push(ingestionHref(slug, outcome.runId ?? null));
+            router.push(pagesHref(slug, outcome.runId ?? null));
           } else if (outcome.kind === "locked") {
             toast(outcome.message ?? "A run is already active for this framework.");
           } else {
@@ -230,7 +244,7 @@ export function FrameworkPicker({ stage, currentSlug }: { stage: DdStage; curren
                         aria-label={`Refresh ${item.name}`}
                         disabled={busy}
                         onClick={() => refresh(item.slug)}
-                        title="Re-ingest (fresh crawls)"
+                        title="Refresh pages from documentation"
                         className="inline-flex size-9 items-center justify-center rounded-sm text-muted-foreground hover:text-foreground disabled:opacity-50"
                       >
                         <RotateCw className="size-4" aria-hidden />
@@ -256,7 +270,7 @@ export function FrameworkPicker({ stage, currentSlug }: { stage: DdStage; curren
                   ? "No match."
                   : libraryQuery.isPending || activeRunsPending
                     ? "Loading frameworks…"
-                    : "Ingest something first."}
+                    : "Choose a framework from the catalog to fetch its pages."}
               </li>
             ) : null}
           </ul>
@@ -273,7 +287,7 @@ function nameForSlug(items: LibraryItem[], slug: string): string {
 
 function optionMeta(option: FrameworkOption): string {
   const pages = option.libraryItem ? itemMeta(option.libraryItem) : "";
-  return [pages, option.activeRunId ? "Ingestion running" : ""].filter(Boolean).join(" · ");
+  return [pages, option.activeRunId ? "Page fetch running" : ""].filter(Boolean).join(" · ");
 }
 
 function itemMeta(item: Pick<LibraryItem, "page_count" | "ingested_at">): string {

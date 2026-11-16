@@ -15,14 +15,6 @@ import time
 logger = logging.getLogger(__name__)
 
 
-async def ensure_corpus_current(slug: str) -> None:
-    """Re-normalize the slug's stored pages if the normalizer has moved on since ingestion (no-op otherwise). Never blocks a synth run."""
-    try:
-        await domains.dd.ingestion.backfill.service.ensure_framework_normalized(slug)
-    except Exception as error:
-        logger.warning(f"[synth] {slug}: ensure_framework_normalized failed ({type(error).__name__}: {error}) — continuing on stored pages")
-
-
 async def run_chapter(binding: domains.dd.pipeline.runtime.runner.entities.Binding, thread_id: str, slug: str, chapter_id: str, mode: str = "quality") -> dict:
     """Fresh per-chapter run: the initial state, the graph task and the cancel watcher, then the terminal state."""
     with domains.dd.pipeline.observability.service.workflow_span(
@@ -44,7 +36,6 @@ async def run_chapter(binding: domains.dd.pipeline.runtime.runner.entities.Bindi
         },
         observation_metadata = {"framework_slug": slug, "chapter_id": chapter_id, "mode": mode},
     ) as set_output:
-        await ensure_corpus_current(slug)
         config = binding.config(thread_id)
         await domains.dd.pipeline.runtime.cancel.service.reset(thread_id)
         initial_state = {
@@ -110,7 +101,7 @@ async def replay_chapter_from_node(
     values = dict(snapshot.values)
     if values.get("status") in {"running", "queued"}:
         raise ValueError("stop the active Synth run before replaying a node")
-    replay_config = await ai.langgraph.service.checkpoint_before_node(
+    replay_config = await infra.postgres.service.checkpoint_before_node(
         binding.graph,
         base_config,
         node_id,

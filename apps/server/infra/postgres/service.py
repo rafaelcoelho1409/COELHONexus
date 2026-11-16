@@ -5,7 +5,8 @@ The only module that imports `psycopg` / `psycopg_pool` /
 else reaches Postgres dotted through here: `connect()` (awaitable async
 connection the caller closes), `url()` (connection URL, for the few places that
 need a DSN string), `init_checkpointer()` / `get_checkpointer()` /
-`close_checkpointer()` (the LangGraph saver shared by planner + synth), and the
+`close_checkpointer()` (the shared LangGraph saver) and
+`checkpoint_before_node()` (checkpoint replay for persisted graphs), plus the
 `Jsonb` / `AsyncPostgresSaver` names for query parameters and annotations.
 
 Connections are deliberately not cached: each operation opens one, uses it and
@@ -16,7 +17,7 @@ from . import domain, params
 
 import asyncio
 import logging
-from typing import Optional
+from typing import Any, Optional
 
 import psycopg
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
@@ -71,7 +72,7 @@ def span(operation: str, **attrs):
 
 
 # ---------------------------------------------------------------------------
-# LangGraph checkpointer — shared by planner + synth
+# LangGraph checkpointer — shared by persisted workflows
 # ---------------------------------------------------------------------------
 
 _saver: Optional[AsyncPostgresSaver] = None
@@ -174,8 +175,34 @@ def get_checkpointer() -> AsyncPostgresSaver:
     return _saver
 
 
+async def checkpoint_before_node(
+    graph: Any,
+    config: dict[str, Any],
+    node_id: str,
+) -> dict[str, Any]:
+    """Return the newest checkpoint that schedules ``node_id`` next.
+
+    LangGraph replay starts from that checkpoint, so upstream nodes stay
+    complete and the selected node runs again. The checkpoint history remains
+    available as an audit trail because this operation creates a new branch.
+    """
+    async for snapshot in graph.aget_state_history(config):
+        next_nodes = tuple(snapshot.next or ())
+        if node_id not in next_nodes:
+            continue
+        if len(next_nodes) > 1:
+            raise ValueError(
+                f"node {node_id!r} shares a pending checkpoint with other nodes; "
+                "it cannot be replayed independently"
+            )
+        snapshot_config = snapshot.config
+        if isinstance(snapshot_config, dict):
+            return snapshot_config
+    raise ValueError(f"no saved checkpoint schedules node {node_id!r}")
+
+
 # Public surface for the rest of the code (the re-exports are intentional).
 __all__ = [
-    "AsyncPostgresSaver", "Jsonb", "check_configured", "close_checkpointer", "connect",
+    "AsyncPostgresSaver", "Jsonb", "checkpoint_before_node", "check_configured", "close_checkpointer", "connect",
     "get_checkpointer", "init_checkpointer", "is_configured", "span", "url",
 ]

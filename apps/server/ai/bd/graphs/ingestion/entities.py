@@ -9,6 +9,7 @@ from typing import Any, NotRequired, TypedDict
 
 PageReader = Callable[[str], str | None | Awaitable[str | None]]
 SourcePageImageReader = Callable[[int], bytes | None | Awaitable[bytes | None]]
+SourceFigureReader = Callable[[str], bytes | None | Awaitable[bytes | None]]
 ArtifactWriter = Callable[[str, str, str], Any]
 ArtifactExists = Callable[[str], Awaitable[bool]]
 CancelCheck = Callable[[], Awaitable[bool]]
@@ -20,6 +21,7 @@ class PageReference(TypedDict):
     page: int
     key: str
     pictures: NotRequired[int]
+    figures: NotRequired[list[str]]
     section_path: NotRequired[list[str]]
 
 
@@ -32,7 +34,10 @@ class IngestionPageReference(TypedDict):
     normalized_key: str
     assessment_key: str
     patch_proposals_key: str
+    enriched_key: NotRequired[str]
+    visual_artifacts_key: NotRequired[str]
     pictures: NotRequired[int]
+    figures: NotRequired[list[str]]
     section_path: NotRequired[list[str]]
 
 
@@ -80,6 +85,11 @@ class IngestionPageResult(TypedDict, total = False):
     source_verified_issue_ids: list[str]
     source_verification_results: list[dict[str, object]]
     source_verification_unavailable_count: int
+    enriched_key: str
+    enriched_sha256: str
+    visual_artifacts_key: str
+    visual_artifacts_sha256: str
+    converted_figures: list[str]
 
 
 @dataclass(frozen = True, slots = True)
@@ -98,3 +108,5 @@ class IngestionDependencies:
     finding_verifier: Any | None = None
     patch_verifier: Any | None = None
     read_source_page_image: SourcePageImageReader | None = None
+    visual_extractor: Any | None = None
+    read_source_figure: SourceFigureReader | None = None

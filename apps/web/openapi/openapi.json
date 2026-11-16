@@ -21,6 +21,326 @@
         }
       }
     },
+    "/api/v1/bd/agents/history/{thread_id}": {
+      "get": {
+        "tags": [
+          "Book Distiller"
+        ],
+        "summary": "Get History",
+        "operationId": "get_bd_agents_history_thread_id",
+        "parameters": [
+          {
+            "name": "thread_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{1,128}$",
+              "title": "Thread Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Bd Agents History Thread Id"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/bd/agents/search/stream": {
+      "post": {
+        "tags": [
+          "Book Distiller"
+        ],
+        "summary": "Ask Stream",
+        "operationId": "post_bd_agents_search_stream",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AskRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/bd/agents/threads": {
+      "get": {
+        "tags": [
+          "Book Distiller"
+        ],
+        "summary": "Get Threads",
+        "operationId": "get_bd_agents_threads",
+        "parameters": [
+          {
+            "name": "book_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9_-]+$",
+              "title": "Book Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Bd Agents Threads"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/bd/agents/threads/{thread_id}": {
+      "delete": {
+        "tags": [
+          "Book Distiller"
+        ],
+        "summary": "Delete Thread",
+        "operationId": "delete_bd_agents_threads_thread_id",
+        "parameters": [
+          {
+            "name": "thread_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{1,128}$",
+              "title": "Thread Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Delete Bd Agents Threads Thread Id"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/bd/agents/threads/{thread_id}/branch": {
+      "post": {
+        "tags": [
+          "Book Distiller"
+        ],
+        "summary": "Branch Thread",
+        "operationId": "post_bd_agents_threads_thread_id_branch",
+        "parameters": [
+          {
+            "name": "thread_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{1,128}$",
+              "title": "Thread Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BranchRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Post Bd Agents Threads Thread Id Branch"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/bd/agents/turns/{turn_id}/cancel": {
+      "post": {
+        "tags": [
+          "Book Distiller"
+        ],
+        "summary": "Cancel Turn",
+        "operationId": "post_bd_agents_turns_turn_id_cancel",
+        "parameters": [
+          {
+            "name": "turn_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Turn Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Post Bd Agents Turns Turn Id Cancel"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/bd/agents/usage/{thread_id}": {
+      "get": {
+        "tags": [
+          "Book Distiller"
+        ],
+        "summary": "Get Usage",
+        "operationId": "get_bd_agents_usage_thread_id",
+        "parameters": [
+          {
+            "name": "thread_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{1,128}$",
+              "title": "Thread Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Bd Agents Usage Thread Id"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/bd/distill/capabilities": {
       "get": {
         "tags": [
@@ -546,6 +866,70 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/RagIndexStatus"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/bd/distill/{book_id}/runs/{run_id}/replay/{node_id}": {
+      "post": {
+        "tags": [
+          "Book Distiller"
+        ],
+        "summary": "Replay From Node",
+        "description": "Replay a Distill checkpoint from one node, clearing only its downstream artifacts.",
+        "operationId": "post_bd_distill_book_id_runs_run_id_replay_node_id",
+        "parameters": [
+          {
+            "name": "book_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]+$",
+              "title": "Book Id"
+            }
+          },
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]+$",
+              "title": "Run Id"
+            }
+          },
+          {
+            "name": "node_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]+$",
+              "title": "Node Id"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunStart"
                 }
               }
             }
@@ -1091,7 +1475,7 @@
           "Book Distiller"
         ],
         "summary": "Cancel Agentic Run",
-        "description": "Request a cooperative Agentic AI stop at the next safe page or graph-node boundary.",
+        "description": "Request a cooperative Agentic AI stop at the next safe work or LLM-call boundary.",
         "operationId": "post_bd_ingestion_book_id_agentic_runs_agentic_run_id_cancel",
         "parameters": [
           {
@@ -1394,6 +1778,119 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/PageBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/bd/ingestion/{book_id}/agentic/runs/{agentic_run_id}/processed-book": {
+      "get": {
+        "tags": [
+          "Book Distiller"
+        ],
+        "summary": "Get Processed Book",
+        "description": "Read selected pages with compact numbering and the canonical contents tree.",
+        "operationId": "get_bd_ingestion_book_id_agentic_runs_agentic_run_id_processed_book",
+        "parameters": [
+          {
+            "name": "book_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Book Id"
+            }
+          },
+          {
+            "name": "agentic_run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Agentic Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProcessedBookResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/bd/ingestion/{book_id}/agentic/runs/{agentic_run_id}/replay/{node_id}": {
+      "post": {
+        "tags": [
+          "Book Distiller"
+        ],
+        "summary": "Replay Agentic Run From Node",
+        "description": "Replay one node and its descendants from the persisted pre-node LangGraph checkpoint.",
+        "operationId": "post_bd_ingestion_book_id_agentic_runs_agentic_run_id_replay_node_id",
+        "parameters": [
+          {
+            "name": "book_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Book Id"
+            }
+          },
+          {
+            "name": "agentic_run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Agentic Run Id"
+            }
+          },
+          {
+            "name": "node_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Node Id"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgenticRunStart"
                 }
               }
             }
@@ -2054,6 +2551,68 @@
         }
       }
     },
+    "/api/v1/bd/rag/{book_id}/runs/{run_id}/index/replay/{node_id}": {
+      "post": {
+        "tags": [
+          "Book Distiller"
+        ],
+        "summary": "Replay Index Node",
+        "operationId": "post_bd_rag_book_id_runs_run_id_index_replay_node_id",
+        "parameters": [
+          {
+            "name": "book_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]+$",
+              "title": "Book Id"
+            }
+          },
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]+$",
+              "title": "Run Id"
+            }
+          },
+          {
+            "name": "node_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Node Id"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RagIndexStatus"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/dd/catalog": {
       "get": {
         "tags": [
@@ -2108,6 +2667,160 @@
                   "type": "object",
                   "additionalProperties": true,
                   "title": "Response Get Dd Catalog Slug"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dd/debug/benchmarks/{round_id}": {
+      "get": {
+        "tags": [
+          "Docs Distiller"
+        ],
+        "summary": "List Tier Benchmarks",
+        "description": "Read the durable comparison reports for one benchmark round.",
+        "operationId": "get_dd_debug_benchmarks_round_id",
+        "parameters": [
+          {
+            "name": "round_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Round Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Dd Debug Benchmarks Round Id"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dd/debug/benchmarks/{round_id}/{run_id}": {
+      "get": {
+        "tags": [
+          "Docs Distiller"
+        ],
+        "summary": "Get Tier Benchmark",
+        "description": "Read one benchmark report by round and ingestion run id.",
+        "operationId": "get_dd_debug_benchmarks_round_id_run_id",
+        "parameters": [
+          {
+            "name": "round_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Round Id"
+            }
+          },
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Dd Debug Benchmarks Round Id Run Id"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dd/debug/benchmarks/{slug}": {
+      "post": {
+        "tags": [
+          "Docs Distiller"
+        ],
+        "summary": "Start Tier Benchmark",
+        "description": "Queue an isolated, forced-tier run through extraction, normalization and publish.",
+        "operationId": "post_dd_debug_benchmarks_slug",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TierBenchmarkBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Post Dd Debug Benchmarks Slug"
                 }
               }
             }
@@ -2268,6 +2981,269 @@
                   "type": "object",
                   "additionalProperties": true,
                   "title": "Response Post Dd Debug Post Slug"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dd/debug/provenance": {
+      "get": {
+        "tags": [
+          "Docs Distiller"
+        ],
+        "summary": "Get Agentic Provenance",
+        "description": "Identify the DD Ingestion normalizer, prompts, agent settings and code in this server build.",
+        "operationId": "get_dd_debug_provenance",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Get Dd Debug Provenance"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dd/debug/replays/{evaluation_round_id}": {
+      "get": {
+        "tags": [
+          "Docs Distiller"
+        ],
+        "summary": "List Ingestion Replays",
+        "operationId": "get_dd_debug_replays_evaluation_round_id",
+        "parameters": [
+          {
+            "name": "evaluation_round_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Evaluation Round Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Dd Debug Replays Evaluation Round Id"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dd/debug/replays/{evaluation_round_id}/{replay_id}": {
+      "get": {
+        "tags": [
+          "Docs Distiller"
+        ],
+        "summary": "Get Ingestion Replay",
+        "operationId": "get_dd_debug_replays_evaluation_round_id_replay_id",
+        "parameters": [
+          {
+            "name": "evaluation_round_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Evaluation Round Id"
+            }
+          },
+          {
+            "name": "replay_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Replay Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Dd Debug Replays Evaluation Round Id Replay Id"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dd/debug/replays/{evaluation_round_id}/{replay_id}/pages/{page_idx}": {
+      "get": {
+        "tags": [
+          "Docs Distiller"
+        ],
+        "summary": "Get Ingestion Replay Page",
+        "description": "Read a pinned source page or its isolated replay input/output for human review.",
+        "operationId": "get_dd_debug_replays_evaluation_round_id_replay_id_pages_page_idx",
+        "parameters": [
+          {
+            "name": "evaluation_round_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Evaluation Round Id"
+            }
+          },
+          {
+            "name": "replay_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Replay Id"
+            }
+          },
+          {
+            "name": "page_idx",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Page Idx"
+            }
+          },
+          {
+            "name": "version",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "source",
+                "input",
+                "output"
+              ],
+              "type": "string",
+              "default": "output",
+              "title": "Version"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Dd Debug Replays Evaluation Round Id Replay Id Pages Page Idx"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dd/debug/replays/{source_round_id}/{source_run_id}": {
+      "post": {
+        "tags": [
+          "Docs Distiller"
+        ],
+        "summary": "Start Ingestion Replay",
+        "description": "Queue a fixed-input audit/repair replay for curated pages; it never extracts or publishes.",
+        "operationId": "post_dd_debug_replays_source_round_id_source_run_id",
+        "parameters": [
+          {
+            "name": "source_round_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Source Round Id"
+            }
+          },
+          {
+            "name": "source_run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Source Run Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IngestionReplayBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Post Dd Debug Replays Source Round Id Source Run Id"
                 }
               }
             }
@@ -3031,6 +4007,69 @@
                   "type": "object",
                   "additionalProperties": true,
                   "title": "Response Delete Dd Ingestion Slug Agentic Runs Run Id"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dd/ingestion/{slug}/agentic/runs/{run_id}/replay/{node_id}": {
+      "post": {
+        "tags": [
+          "Docs Distiller"
+        ],
+        "summary": "Replay Agentic Run From Node",
+        "description": "Replay one node and downstream stages while preserving the saved upstream checkpoint.",
+        "operationId": "post_dd_ingestion_slug_agentic_runs_run_id_replay_node_id",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          },
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Run Id"
+            }
+          },
+          {
+            "name": "node_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Node Id"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Post Dd Ingestion Slug Agentic Runs Run Id Replay Node Id"
                 }
               }
             }
@@ -3908,6 +4947,60 @@
         }
       }
     },
+    "/api/v1/dd/pipeline/planner/{thread_id}/replay/{node_id}": {
+      "post": {
+        "tags": [
+          "Docs Distiller"
+        ],
+        "summary": "Replay Planner From Node",
+        "description": "Replay a saved Planner run from the selected node and its downstream graph.",
+        "operationId": "post_dd_pipeline_planner_thread_id_replay_node_id",
+        "parameters": [
+          {
+            "name": "thread_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Thread Id"
+            }
+          },
+          {
+            "name": "node_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Node Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Post Dd Pipeline Planner Thread Id Replay Node Id"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/dd/pipeline/planner/{thread_id}/resume": {
       "post": {
         "tags": [
@@ -4548,6 +5641,60 @@
             "content": {
               "application/json": {
                 "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dd/pipeline/synth/{thread_id}/replay/{node_id}": {
+      "post": {
+        "tags": [
+          "Docs Distiller"
+        ],
+        "summary": "Replay Synth From Node",
+        "description": "Replay a saved Synth chapter from the selected node and its downstream graph.",
+        "operationId": "post_dd_pipeline_synth_thread_id_replay_node_id",
+        "parameters": [
+          {
+            "name": "thread_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Thread Id"
+            }
+          },
+          {
+            "name": "node_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Node Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Post Dd Pipeline Synth Thread Id Replay Node Id"
+                }
               }
             }
           },
@@ -6451,6 +7598,60 @@
         }
       }
     },
+    "/api/v1/ycs/content/videos/pipeline/{extract_id}/replay/{node_id}": {
+      "post": {
+        "tags": [
+          "YouTube Content Search"
+        ],
+        "summary": "Replay Videos Pipeline Node",
+        "description": "Replay the selected YCS graph node using its durable per-chunk LangGraph checkpoint.",
+        "operationId": "post_ycs_content_videos_pipeline_extract_id_replay_node_id",
+        "parameters": [
+          {
+            "name": "extract_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Extract Id"
+            }
+          },
+          {
+            "name": "node_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Node Id"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Post Ycs Content Videos Pipeline Extract Id Replay Node Id"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/ycs/content/videos/pipeline/{extract_id}/rerun": {
       "post": {
         "tags": [
@@ -7297,6 +8498,13 @@
             "type": "array",
             "title": "Processed Pages"
           },
+          "repaired_pages": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "title": "Repaired Pages"
+          },
           "active_audit_pages": {
             "items": {
               "type": "integer"
@@ -7324,6 +8532,31 @@
             },
             "type": "array",
             "title": "Active Classification Pages"
+          },
+          "visual_candidate_count": {
+            "type": "integer",
+            "title": "Visual Candidate Count",
+            "default": 0
+          },
+          "visual_completed_count": {
+            "type": "integer",
+            "title": "Visual Completed Count",
+            "default": 0
+          },
+          "visual_converted_count": {
+            "type": "integer",
+            "title": "Visual Converted Count",
+            "default": 0
+          },
+          "selected_page_count": {
+            "type": "integer",
+            "title": "Selected Page Count",
+            "default": 0
+          },
+          "excluded_page_count": {
+            "type": "integer",
+            "title": "Excluded Page Count",
+            "default": 0
           }
         },
         "type": "object",
@@ -7467,6 +8700,38 @@
               }
             ],
             "title": "Content Selection Revision"
+          },
+          "processed_page_count": {
+            "type": "integer",
+            "title": "Processed Page Count",
+            "default": 0
+          },
+          "processed_book_revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Processed Book Revision"
+          },
+          "contents_status": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "complete",
+                  "needs_review",
+                  "unavailable"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Contents Status"
           },
           "review_page_count": {
             "type": "integer",
@@ -7615,6 +8880,56 @@
         "title": "AskFeedbackRequest",
         "description": "User rating for an ask turn. `trace_id` is the 32-hex OTel trace id\nreturned as `trace_id` in the `/search` response; `rating` is 0.0 (bad)\nto 1.0 (good). Lands as a `user.feedback` score on the trace."
       },
+      "AskRequest": {
+        "properties": {
+          "question": {
+            "type": "string",
+            "maxLength": 8000,
+            "minLength": 1,
+            "title": "Question"
+          },
+          "thread_id": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "title": "Thread Id"
+          },
+          "book_id": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "title": "Book Id"
+          },
+          "force_mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Force Mode"
+          },
+          "sub_questions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 4,
+            "title": "Sub Questions"
+          }
+        },
+        "type": "object",
+        "required": [
+          "question",
+          "thread_id",
+          "book_id"
+        ],
+        "title": "AskRequest"
+      },
       "Body_post_bd_ingestion": {
         "properties": {
           "file": {
@@ -7691,6 +9006,23 @@
           "updated_at"
         ],
         "title": "BookRow"
+      },
+      "BranchRequest": {
+        "properties": {
+          "up_to_created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Up To Created At"
+          }
+        },
+        "type": "object",
+        "title": "BranchRequest"
       },
       "BulkDeleteRequest": {
         "properties": {
@@ -8175,7 +9507,7 @@
               "$ref": "#/components/schemas/EvidenceQuote"
             },
             "type": "array",
-            "maxItems": 4,
+            "maxItems": 8,
             "minItems": 1,
             "title": "Evidence"
           }
@@ -8276,7 +9608,7 @@
               "$ref": "#/components/schemas/EvidenceQuote"
             },
             "type": "array",
-            "maxItems": 4,
+            "maxItems": 8,
             "minItems": 1,
             "title": "Evidence"
           }
@@ -8327,7 +9659,7 @@
               "$ref": "#/components/schemas/EvidenceQuote"
             },
             "type": "array",
-            "maxItems": 4,
+            "maxItems": 8,
             "minItems": 1,
             "title": "Evidence"
           }
@@ -8575,7 +9907,7 @@
               "$ref": "#/components/schemas/EvidenceQuote"
             },
             "type": "array",
-            "maxItems": 4,
+            "maxItems": 8,
             "minItems": 1,
             "title": "Evidence"
           }
@@ -8755,6 +10087,38 @@
         "type": "object",
         "title": "IngestRequest",
         "description": "Request to ingest transcripts from ES into Qdrant.\nIf `video_ids` is None, ingests ALL transcripts in ES."
+      },
+      "IngestionReplayBody": {
+        "properties": {
+          "evaluation_round_id": {
+            "type": "string",
+            "maxLength": 48,
+            "minLength": 1,
+            "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]{0,47}$",
+            "title": "Evaluation Round Id"
+          },
+          "page_indices": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "integer"
+                },
+                "type": "array",
+                "maxItems": 20,
+                "minItems": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Page Indices"
+          }
+        },
+        "type": "object",
+        "required": [
+          "evaluation_round_id"
+        ],
+        "title": "IngestionReplayBody"
       },
       "Manifest": {
         "properties": {
@@ -8939,6 +10303,13 @@
             ],
             "title": "Content Source",
             "default": "docling"
+          },
+          "converted_figures": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Converted Figures"
           }
         },
         "type": "object",
@@ -9174,6 +10545,28 @@
           "risk": {
             "type": "string",
             "title": "Risk"
+          },
+          "verification_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verification Status"
+          },
+          "verification_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verification Reason"
           }
         },
         "type": "object",
@@ -9299,6 +10692,178 @@
         ],
         "title": "PlaylistRequest",
         "description": "`playlist_id` accepts: bare ID (PL/UU/RD…), full URL with ?list=…"
+      },
+      "ProcessedBookPage": {
+        "properties": {
+          "processed_page_number": {
+            "type": "integer",
+            "title": "Processed Page Number"
+          },
+          "source_page_number": {
+            "type": "integer",
+            "title": "Source Page Number"
+          },
+          "section_path": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Section Path"
+          },
+          "role": {
+            "type": "string",
+            "title": "Role"
+          }
+        },
+        "type": "object",
+        "required": [
+          "processed_page_number",
+          "source_page_number",
+          "section_path",
+          "role"
+        ],
+        "title": "ProcessedBookPage"
+      },
+      "ProcessedBookResponse": {
+        "properties": {
+          "book_id": {
+            "type": "string",
+            "title": "Book Id"
+          },
+          "extraction_run_id": {
+            "type": "string",
+            "title": "Extraction Run Id"
+          },
+          "agentic_run_id": {
+            "type": "string",
+            "title": "Agentic Run Id"
+          },
+          "selection_revision": {
+            "type": "integer",
+            "title": "Selection Revision"
+          },
+          "expected_source_page_count": {
+            "type": "integer",
+            "title": "Expected Source Page Count"
+          },
+          "source_page_count": {
+            "type": "integer",
+            "title": "Source Page Count"
+          },
+          "contents_status": {
+            "type": "string",
+            "enum": [
+              "complete",
+              "needs_review",
+              "unavailable"
+            ],
+            "title": "Contents Status"
+          },
+          "contents": {
+            "items": {
+              "$ref": "#/components/schemas/ProcessedContentsEntry"
+            },
+            "type": "array",
+            "title": "Contents"
+          },
+          "pages": {
+            "items": {
+              "$ref": "#/components/schemas/ProcessedBookPage"
+            },
+            "type": "array",
+            "title": "Pages"
+          }
+        },
+        "type": "object",
+        "required": [
+          "book_id",
+          "extraction_run_id",
+          "agentic_run_id",
+          "selection_revision",
+          "expected_source_page_count",
+          "source_page_count",
+          "contents_status",
+          "contents",
+          "pages"
+        ],
+        "title": "ProcessedBookResponse"
+      },
+      "ProcessedContentsEntry": {
+        "properties": {
+          "entry_id": {
+            "type": "string",
+            "title": "Entry Id",
+            "default": ""
+          },
+          "parent_entry_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Entry Id"
+          },
+          "level": {
+            "type": "integer",
+            "title": "Level"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "processed_page_number": {
+            "type": "integer",
+            "title": "Processed Page Number"
+          },
+          "source_page_number": {
+            "type": "integer",
+            "title": "Source Page Number"
+          },
+          "confidence": {
+            "type": "number",
+            "title": "Confidence"
+          },
+          "review_required": {
+            "type": "boolean",
+            "title": "Review Required"
+          },
+          "provenance": {
+            "type": "string",
+            "enum": [
+              "source_outline",
+              "processed_page_heading",
+              "section_path",
+              "source_outline_and_page_heading",
+              "source_outline_and_section_path"
+            ],
+            "title": "Provenance",
+            "default": "source_outline"
+          },
+          "source_outline_index": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Outline Index"
+          }
+        },
+        "type": "object",
+        "required": [
+          "level",
+          "title",
+          "processed_page_number",
+          "source_page_number",
+          "confidence",
+          "review_required"
+        ],
+        "title": "ProcessedContentsEntry"
       },
       "Progress": {
         "properties": {
@@ -10758,6 +12323,18 @@
             "exclusiveMinimum": 0.0,
             "title": "Page Number"
           },
+          "processed_page_number": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "exclusiveMinimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Processed Page Number"
+          },
           "section_path": {
             "items": {
               "type": "string"
@@ -10874,10 +12451,11 @@
             "type": "string",
             "enum": [
               "1.0",
-              "1.1"
+              "1.1",
+              "1.2"
             ],
             "title": "Schema Version",
-            "default": "1.1"
+            "default": "1.2"
           },
           "title": {
             "type": "string",
@@ -10926,6 +12504,18 @@
             "type": "integer",
             "minimum": 1.0,
             "title": "Content Selection Revision",
+            "default": 1
+          },
+          "processed_page_count": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Processed Page Count",
+            "default": 0
+          },
+          "processed_book_revision": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Processed Book Revision",
             "default": 1
           },
           "generated_at": {
@@ -11062,6 +12652,33 @@
           "review_required"
         ],
         "title": "StudyGuideDocument"
+      },
+      "TierBenchmarkBody": {
+        "properties": {
+          "tier": {
+            "type": "integer",
+            "enum": [
+              1,
+              2,
+              3,
+              4
+            ],
+            "title": "Tier"
+          },
+          "round_id": {
+            "type": "string",
+            "maxLength": 48,
+            "minLength": 1,
+            "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]{0,47}$",
+            "title": "Round Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "tier",
+          "round_id"
+        ],
+        "title": "TierBenchmarkBody"
       },
       "ValidationError": {
         "properties": {

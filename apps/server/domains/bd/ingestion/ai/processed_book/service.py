@@ -35,7 +35,7 @@ async def make_candidate(
     qa_pages: list[Any],
     storage: infra.minio.service.MinIOStorage,
 ) -> schemas.ProcessedBookCandidate:
-    """Build graph input from included, normalized pages and source contents evidence."""
+    """Build graph input from included, visually enriched pages and source contents evidence."""
     if (
         selection.book_id != source_manifest.get("book_id", selection.book_id)
         or selection.extraction_run_id != source_manifest.get("extraction_id", selection.extraction_run_id)
@@ -78,15 +78,15 @@ async def make_candidate(
             "review_required",
         }:
             raise ValueError(f"selected source page {selected_page.page_number} has no normalized content")
-        content_key = _page_value(qa_page, "normalized_key")
-        normalized_sha256 = _page_value(qa_page, "normalized_sha256")
-        if not isinstance(content_key, str) or not isinstance(normalized_sha256, str):
-            raise ValueError(f"selected source page {selected_page.page_number} has incomplete normalized references")
+        content_key = _page_value(qa_page, "enriched_key") or _page_value(qa_page, "normalized_key")
+        content_sha256 = _page_value(qa_page, "enriched_sha256") or _page_value(qa_page, "normalized_sha256")
+        if not isinstance(content_key, str) or not isinstance(content_sha256, str):
+            raise ValueError(f"selected source page {selected_page.page_number} has incomplete processed references")
         async with semaphore:
             content = await storage.read_text(content_key)
-        content_sha256 = _digest(content)
-        if content_sha256 != normalized_sha256:
-            raise ValueError(f"normalized source page {selected_page.page_number} failed its integrity check")
+        actual_sha256 = _digest(content)
+        if actual_sha256 != content_sha256:
+            raise ValueError(f"processed source page {selected_page.page_number} failed its integrity check")
         source = source_by_page.get(selected_page.page_number, {})
         source_key = _page_value(qa_page, "source_key") or source.get("key")
         source_sha256 = _page_value(qa_page, "source_sha256") or source.get("source_sha256")
@@ -101,7 +101,7 @@ async def make_candidate(
             "source_key": source_key,
             "source_sha256": source_sha256,
             "content_key": content_key,
-            "content_sha256": content_sha256,
+            "content_sha256": actual_sha256,
             "section_path": section_path,
             "role": selected_page.role,
         }

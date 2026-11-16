@@ -19,9 +19,10 @@ async def load_rich(blobs: Any, slug: str, source_keys: list[str]) -> tuple[dict
     n_loaded = 0
     n_skipped = 0
     for source_key in source_keys:
-        basename = source_key.rstrip("/").rsplit("/", 1)[-1].removesuffix(".md")
-        run_id = domains.dd.ingestion.storage.keys.run_id_from_page_key(source_key)
-        vault_key = f"{domains.dd.ingestion.storage.keys.vault_prefix(slug, run_id)}pages/{basename}.vault.json"
+        vault_key, _sentinelized_key = domains.dd.ingestion.storage.keys.page_vault_keys(
+            slug,
+            source_key,
+        )
         used_runtime = False
         if await blobs.exists(vault_key):
             try:

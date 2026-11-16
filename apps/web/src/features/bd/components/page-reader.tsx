@@ -2,7 +2,7 @@
 
 import { ChevronLeft, ChevronRight, X } from "lucide-react";
 import Image from "next/image";
-import { Children, isValidElement, type ReactNode, useId, useMemo, useState } from "react";
+import { Children, isValidElement, type ReactNode, useCallback, useId, useMemo, useState } from "react";
 import type { Components } from "react-markdown";
 
 import { Markdown } from "@/shared/markdown";
@@ -71,13 +71,23 @@ export function PageReader({
 }) {
   const [localPreviewMode, setLocalPreviewMode] = useState<(typeof PREVIEW_MODES)[number]["id"]>("rendered");
   const [selectedFigure, setSelectedFigure] = useState<number | null>(null);
+  const [expandedVisual, setExpandedVisual] = useState<{
+    source: string;
+    language: string;
+    label: string;
+  } | null>(null);
   const previewMode = controlledPreviewMode ?? localPreviewMode;
   const setPreviewMode = onPreviewModeChange ?? setLocalPreviewMode;
+  const openVisual = useCallback((source: string, language: string, label: string) => {
+    setExpandedVisual({ source, language, label });
+  }, []);
   const figures = row?.figures ?? EMPTY_FIGURES;
   const { body, raw, hasAi, version, source } = content;
+  const convertedFigures =
+    version === "docling" ? EMPTY_FIGURES : (body.data?.converted_figures ?? EMPTY_FIGURES);
   const renderedText = useMemo(
-    () => inlineFigures(source, figures, bookId, page ?? 0, units.singular),
-    [source, figures, bookId, page, units.singular],
+    () => inlineFigures(source, figures, convertedFigures, bookId, page ?? 0, units.singular),
+    [source, figures, convertedFigures, bookId, page, units.singular],
   );
   const markdownComponents = useMemo<Components>(
     () => ({
@@ -118,6 +128,9 @@ export function PageReader({
   }
 
   const unitName = `${units.singular[0]?.toUpperCase()}${units.singular.slice(1)}`;
+  const expandedPage = processedPageNumber ?? page;
+  const sourcePageLabel = processedPageNumber === undefined ? "" : ` · source ${page}`;
+  const expandedVisualLocation = `${unitName} ${expandedPage}${sourcePageLabel}`;
   const display = previewMode === "rendered" ? renderedText : source;
   const chips = pageChips(row);
   const trail = breadcrumb(row.sectionPath);
@@ -140,7 +153,9 @@ export function PageReader({
             </p>
           </div>
         ) : null}
-        <div className={`flex min-w-0 flex-wrap items-center justify-between gap-3 ${bookMetadata ? "mt-3" : ""}`}>
+        <div
+          className={`flex min-w-0 flex-wrap items-center justify-between gap-3 ${bookMetadata ? "mt-3" : ""}`}
+        >
           <div className="min-w-0 flex-1">
             <p className="mono-label">
               {unitName} {processedPageNumber ?? page}
@@ -217,7 +232,7 @@ export function PageReader({
           ) : display ? (
             previewMode === "rendered" ? (
               <div className={`${readerFont.className} reader-prose`}>
-                <Markdown text={renderedText} components={markdownComponents} />
+                <Markdown text={renderedText} components={markdownComponents} onExpandVisual={openVisual} />
               </div>
             ) : (
               <pre className="break-words whitespace-pre-wrap font-mono text-xs text-foreground">
@@ -266,21 +281,77 @@ export function PageReader({
           onClose={() => setSelectedFigure(null)}
         />
       ) : null}
+      {expandedVisual ? (
+        <VisualizationViewer
+          source={expandedVisual.source}
+          language={expandedVisual.language}
+          label={expandedVisual.label}
+          location={expandedVisualLocation}
+          onClose={() => setExpandedVisual(null)}
+        />
+      ) : null}
     </article>
+  );
+}
+
+function VisualizationViewer({
+  source,
+  language,
+  label,
+  location,
+  onClose,
+}: {
+  source: string;
+  language: string;
+  label: string;
+  location: string;
+  onClose: () => void;
+}) {
+  const dialogRef = useModalDialog();
+  const titleId = useId();
+
+  return (
+    <dialog
+      ref={dialogRef}
+      aria-labelledby={titleId}
+      onCancel={(event) => {
+        event.preventDefault();
+        onClose();
+      }}
+      className="m-auto max-h-[calc(100dvh-2rem)] w-[min(96vw,96rem)] max-w-none overflow-auto rounded-md border border-border bg-card p-3 text-foreground backdrop:bg-background/80 sm:p-5"
+    >
+      <header className="mb-3 flex items-start gap-3">
+        <div className="min-w-0 flex-1">
+          <h2 id={titleId} className="font-medium">
+            {label}
+          </h2>
+          <p className="text-xs text-muted-foreground">{location}</p>
+        </div>
+        <ActionButton iconOnly aria-label="Close expanded visualization" title="Close" onClick={onClose}>
+          <X aria-hidden="true" />
+        </ActionButton>
+      </header>
+      <div className="max-h-[calc(100dvh-8rem)] overflow-auto border border-border bg-background p-2 sm:p-4">
+        <Markdown text={`\`\`\`${language}\n${source}\n\`\`\``} />
+      </div>
+    </dialog>
   );
 }
 
 function inlineFigures(
   markdown: string,
   figures: readonly string[],
+  convertedFigures: readonly string[],
   bookId: string,
   page: number,
   unit: BookUnits["singular"],
 ): string {
   let index = 0;
+  const converted = new Set(convertedFigures);
+  const inline = figures.filter((figure) => !converted.has(figure));
   const withFigures = markdown.replace(/<!--[\s]*image[\s]*-->/gi, () => {
-    const figure = figures[index];
-    const figureNumber = index + 1;
+    const figure = inline[index];
+    const figureNumber = figures.indexOf(figure ?? "") + 1;
     index += 1;
     if (figure === undefined) return "";
     const alt = `Extracted figure ${figureNumber} from ${unit} ${page}`;

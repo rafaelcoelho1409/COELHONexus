@@ -75,6 +75,10 @@ export type AgenticProgress = {
      */
     processed_pages: Array<number>;
     /**
+     * Repaired Pages
+     */
+    repaired_pages?: Array<number>;
+    /**
      * Active Audit Pages
      */
     active_audit_pages: Array<number>;
@@ -90,6 +94,26 @@ export type AgenticProgress = {
      * Active Classification Pages
      */
     active_classification_pages?: Array<number>;
+    /**
+     * Visual Candidate Count
+     */
+    visual_candidate_count?: number;
+    /**
+     * Visual Completed Count
+     */
+    visual_completed_count?: number;
+    /**
+     * Visual Converted Count
+     */
+    visual_converted_count?: number;
+    /**
+     * Selected Page Count
+     */
+    selected_page_count?: number;
+    /**
+     * Excluded Page Count
+     */
+    excluded_page_count?: number;
 };
 
 /**
@@ -185,6 +209,18 @@ export type AgenticRunStatus = {
      */
     content_selection_revision?: number | null;
     /**
+     * Processed Page Count
+     */
+    processed_page_count?: number;
+    /**
+     * Processed Book Revision
+     */
+    processed_book_revision?: number | null;
+    /**
+     * Contents Status
+     */
+    contents_status?: 'complete' | 'needs_review' | 'unavailable' | null;
+    /**
      * Review Page Count
      */
     review_page_count?: number;
@@ -272,6 +308,32 @@ export type AskFeedbackRequest = {
 };
 
 /**
+ * AskRequest
+ */
+export type AskRequest = {
+    /**
+     * Question
+     */
+    question: string;
+    /**
+     * Thread Id
+     */
+    thread_id: string;
+    /**
+     * Book Id
+     */
+    book_id: string;
+    /**
+     * Force Mode
+     */
+    force_mode?: string | null;
+    /**
+     * Sub Questions
+     */
+    sub_questions?: Array<string>;
+};
+
+/**
  * Body_post_bd_ingestion
  */
 export type BodyPostBdIngestion = {
@@ -329,6 +391,16 @@ export type BookRow = {
      * Updated At
      */
     updated_at: number;
+};
+
+/**
+ * BranchRequest
+ */
+export type BranchRequest = {
+    /**
+     * Up To Created At
+     */
+    up_to_created_at?: string | null;
 };
 
 /**
@@ -966,6 +1038,20 @@ export type IngestRequest = {
 };
 
 /**
+ * IngestionReplayBody
+ */
+export type IngestionReplayBody = {
+    /**
+     * Evaluation Round Id
+     */
+    evaluation_round_id: string;
+    /**
+     * Page Indices
+     */
+    page_indices?: Array<number> | null;
+};
+
+/**
  * Manifest
  */
 export type Manifest = {
@@ -1100,6 +1186,10 @@ export type PageBody = {
      * Content Source
      */
     content_source?: 'docling' | 'agentic';
+    /**
+     * Converted Figures
+     */
+    converted_figures?: Array<string>;
 };
 
 /**
@@ -1256,6 +1346,14 @@ export type PatchSuggestion = {
      * Risk
      */
     risk: string;
+    /**
+     * Verification Status
+     */
+    verification_status?: string | null;
+    /**
+     * Verification Reason
+     */
+    verification_reason?: string | null;
 };
 
 /**
@@ -1330,6 +1428,116 @@ export type PlaylistRequest = {
      * Transcription Languages
      */
     transcription_languages?: Array<string> | null;
+};
+
+/**
+ * ProcessedBookPage
+ */
+export type ProcessedBookPage = {
+    /**
+     * Processed Page Number
+     */
+    processed_page_number: number;
+    /**
+     * Source Page Number
+     */
+    source_page_number: number;
+    /**
+     * Section Path
+     */
+    section_path: Array<string>;
+    /**
+     * Role
+     */
+    role: string;
+};
+
+/**
+ * ProcessedBookResponse
+ */
+export type ProcessedBookResponse = {
+    /**
+     * Book Id
+     */
+    book_id: string;
+    /**
+     * Extraction Run Id
+     */
+    extraction_run_id: string;
+    /**
+     * Agentic Run Id
+     */
+    agentic_run_id: string;
+    /**
+     * Selection Revision
+     */
+    selection_revision: number;
+    /**
+     * Expected Source Page Count
+     */
+    expected_source_page_count: number;
+    /**
+     * Source Page Count
+     */
+    source_page_count: number;
+    /**
+     * Contents Status
+     */
+    contents_status: 'complete' | 'needs_review' | 'unavailable';
+    /**
+     * Contents
+     */
+    contents: Array<ProcessedContentsEntry>;
+    /**
+     * Pages
+     */
+    pages: Array<ProcessedBookPage>;
+};
+
+/**
+ * ProcessedContentsEntry
+ */
+export type ProcessedContentsEntry = {
+    /**
+     * Entry Id
+     */
+    entry_id?: string;
+    /**
+     * Parent Entry Id
+     */
+    parent_entry_id?: string | null;
+    /**
+     * Level
+     */
+    level: number;
+    /**
+     * Title
+     */
+    title: string;
+    /**
+     * Processed Page Number
+     */
+    processed_page_number: number;
+    /**
+     * Source Page Number
+     */
+    source_page_number: number;
+    /**
+     * Confidence
+     */
+    confidence: number;
+    /**
+     * Review Required
+     */
+    review_required: boolean;
+    /**
+     * Provenance
+     */
+    provenance?: 'source_outline' | 'processed_page_heading' | 'section_path' | 'source_outline_and_page_heading' | 'source_outline_and_section_path';
+    /**
+     * Source Outline Index
+     */
+    source_outline_index?: number | null;
 };
 
 /**
@@ -2137,6 +2345,10 @@ export type SourceRef = {
      */
     page_number: number;
     /**
+     * Processed Page Number
+     */
+    processed_page_number?: number | null;
+    /**
      * Section Path
      */
     section_path: Array<string>;
@@ -2203,7 +2415,7 @@ export type StudyGuideDocument = {
     /**
      * Schema Version
      */
-    schema_version?: '1.0' | '1.1';
+    schema_version?: '1.0' | '1.1' | '1.2';
     /**
      * Title
      */
@@ -2240,6 +2452,14 @@ export type StudyGuideDocument = {
      * Content Selection Revision
      */
     content_selection_revision?: number;
+    /**
+     * Processed Page Count
+     */
+    processed_page_count?: number;
+    /**
+     * Processed Book Revision
+     */
+    processed_book_revision?: number;
     /**
      * Generated At
      */
@@ -2308,6 +2528,20 @@ export type StudyGuideDocument = {
      * Review Required
      */
     review_required: boolean;
+};
+
+/**
+ * TierBenchmarkBody
+ */
+export type TierBenchmarkBody = {
+    /**
+     * Tier
+     */
+    tier: 1 | 2 | 3 | 4;
+    /**
+     * Round Id
+     */
+    round_id: string;
 };
 
 /**
@@ -2618,6 +2852,233 @@ export type GetHealthResponses = {
      */
     200: unknown;
 };
+
+export type GetBdAgentsHistoryThreadIdData = {
+    body?: never;
+    path: {
+        /**
+         * Thread Id
+         */
+        thread_id: string;
+    };
+    query?: never;
+    url: '/api/v1/bd/agents/history/{thread_id}';
+};
+
+export type GetBdAgentsHistoryThreadIdErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type GetBdAgentsHistoryThreadIdError = GetBdAgentsHistoryThreadIdErrors[keyof GetBdAgentsHistoryThreadIdErrors];
+
+export type GetBdAgentsHistoryThreadIdResponses = {
+    /**
+     * Response Get Bd Agents History Thread Id
+     *
+     * Successful Response
+     */
+    200: {
+        [key: string]: unknown;
+    };
+};
+
+export type GetBdAgentsHistoryThreadIdResponse = GetBdAgentsHistoryThreadIdResponses[keyof GetBdAgentsHistoryThreadIdResponses];
+
+export type PostBdAgentsSearchStreamData = {
+    body: AskRequest;
+    path?: never;
+    query?: never;
+    url: '/api/v1/bd/agents/search/stream';
+};
+
+export type PostBdAgentsSearchStreamErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type PostBdAgentsSearchStreamError = PostBdAgentsSearchStreamErrors[keyof PostBdAgentsSearchStreamErrors];
+
+export type PostBdAgentsSearchStreamResponses = {
+    /**
+     * Successful Response
+     */
+    200: unknown;
+};
+
+export type GetBdAgentsThreadsData = {
+    body?: never;
+    path?: never;
+    query: {
+        /**
+         * Book Id
+         */
+        book_id: string;
+    };
+    url: '/api/v1/bd/agents/threads';
+};
+
+export type GetBdAgentsThreadsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type GetBdAgentsThreadsError = GetBdAgentsThreadsErrors[keyof GetBdAgentsThreadsErrors];
+
+export type GetBdAgentsThreadsResponses = {
+    /**
+     * Response Get Bd Agents Threads
+     *
+     * Successful Response
+     */
+    200: {
+        [key: string]: unknown;
+    };
+};
+
+export type GetBdAgentsThreadsResponse = GetBdAgentsThreadsResponses[keyof GetBdAgentsThreadsResponses];
+
+export type DeleteBdAgentsThreadsThreadIdData = {
+    body?: never;
+    path: {
+        /**
+         * Thread Id
+         */
+        thread_id: string;
+    };
+    query?: never;
+    url: '/api/v1/bd/agents/threads/{thread_id}';
+};
+
+export type DeleteBdAgentsThreadsThreadIdErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type DeleteBdAgentsThreadsThreadIdError = DeleteBdAgentsThreadsThreadIdErrors[keyof DeleteBdAgentsThreadsThreadIdErrors];
+
+export type DeleteBdAgentsThreadsThreadIdResponses = {
+    /**
+     * Response Delete Bd Agents Threads Thread Id
+     *
+     * Successful Response
+     */
+    200: {
+        [key: string]: unknown;
+    };
+};
+
+export type DeleteBdAgentsThreadsThreadIdResponse = DeleteBdAgentsThreadsThreadIdResponses[keyof DeleteBdAgentsThreadsThreadIdResponses];
+
+export type PostBdAgentsThreadsThreadIdBranchData = {
+    body: BranchRequest;
+    path: {
+        /**
+         * Thread Id
+         */
+        thread_id: string;
+    };
+    query?: never;
+    url: '/api/v1/bd/agents/threads/{thread_id}/branch';
+};
+
+export type PostBdAgentsThreadsThreadIdBranchErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type PostBdAgentsThreadsThreadIdBranchError = PostBdAgentsThreadsThreadIdBranchErrors[keyof PostBdAgentsThreadsThreadIdBranchErrors];
+
+export type PostBdAgentsThreadsThreadIdBranchResponses = {
+    /**
+     * Response Post Bd Agents Threads Thread Id Branch
+     *
+     * Successful Response
+     */
+    200: {
+        [key: string]: unknown;
+    };
+};
+
+export type PostBdAgentsThreadsThreadIdBranchResponse = PostBdAgentsThreadsThreadIdBranchResponses[keyof PostBdAgentsThreadsThreadIdBranchResponses];
+
+export type PostBdAgentsTurnsTurnIdCancelData = {
+    body?: never;
+    path: {
+        /**
+         * Turn Id
+         */
+        turn_id: number;
+    };
+    query?: never;
+    url: '/api/v1/bd/agents/turns/{turn_id}/cancel';
+};
+
+export type PostBdAgentsTurnsTurnIdCancelErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type PostBdAgentsTurnsTurnIdCancelError = PostBdAgentsTurnsTurnIdCancelErrors[keyof PostBdAgentsTurnsTurnIdCancelErrors];
+
+export type PostBdAgentsTurnsTurnIdCancelResponses = {
+    /**
+     * Response Post Bd Agents Turns Turn Id Cancel
+     *
+     * Successful Response
+     */
+    200: {
+        [key: string]: unknown;
+    };
+};
+
+export type PostBdAgentsTurnsTurnIdCancelResponse = PostBdAgentsTurnsTurnIdCancelResponses[keyof PostBdAgentsTurnsTurnIdCancelResponses];
+
+export type GetBdAgentsUsageThreadIdData = {
+    body?: never;
+    path: {
+        /**
+         * Thread Id
+         */
+        thread_id: string;
+    };
+    query?: never;
+    url: '/api/v1/bd/agents/usage/{thread_id}';
+};
+
+export type GetBdAgentsUsageThreadIdErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type GetBdAgentsUsageThreadIdError = GetBdAgentsUsageThreadIdErrors[keyof GetBdAgentsUsageThreadIdErrors];
+
+export type GetBdAgentsUsageThreadIdResponses = {
+    /**
+     * Response Get Bd Agents Usage Thread Id
+     *
+     * Successful Response
+     */
+    200: {
+        [key: string]: unknown;
+    };
+};
+
+export type GetBdAgentsUsageThreadIdResponse = GetBdAgentsUsageThreadIdResponses[keyof GetBdAgentsUsageThreadIdResponses];
 
 export type GetBdDistillCapabilitiesData = {
     body?: never;
@@ -2979,6 +3440,44 @@ export type PostBdDistillBookIdRunsRunIdRagIndexResponses = {
 };
 
 export type PostBdDistillBookIdRunsRunIdRagIndexResponse = PostBdDistillBookIdRunsRunIdRagIndexResponses[keyof PostBdDistillBookIdRunsRunIdRagIndexResponses];
+
+export type PostBdDistillBookIdRunsRunIdReplayNodeIdData = {
+    body?: never;
+    path: {
+        /**
+         * Book Id
+         */
+        book_id: string;
+        /**
+         * Run Id
+         */
+        run_id: string;
+        /**
+         * Node Id
+         */
+        node_id: string;
+    };
+    query?: never;
+    url: '/api/v1/bd/distill/{book_id}/runs/{run_id}/replay/{node_id}';
+};
+
+export type PostBdDistillBookIdRunsRunIdReplayNodeIdErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type PostBdDistillBookIdRunsRunIdReplayNodeIdError = PostBdDistillBookIdRunsRunIdReplayNodeIdErrors[keyof PostBdDistillBookIdRunsRunIdReplayNodeIdErrors];
+
+export type PostBdDistillBookIdRunsRunIdReplayNodeIdResponses = {
+    /**
+     * Successful Response
+     */
+    202: RunStart;
+};
+
+export type PostBdDistillBookIdRunsRunIdReplayNodeIdResponse = PostBdDistillBookIdRunsRunIdReplayNodeIdResponses[keyof PostBdDistillBookIdRunsRunIdReplayNodeIdResponses];
 
 export type GetBdDistillBookIdRunsRunIdReportData = {
     body?: never;
@@ -3539,6 +4038,78 @@ export type GetBdIngestionBookIdAgenticRunsAgenticRunIdPagesPageNoResponses = {
 
 export type GetBdIngestionBookIdAgenticRunsAgenticRunIdPagesPageNoResponse = GetBdIngestionBookIdAgenticRunsAgenticRunIdPagesPageNoResponses[keyof GetBdIngestionBookIdAgenticRunsAgenticRunIdPagesPageNoResponses];
 
+export type GetBdIngestionBookIdAgenticRunsAgenticRunIdProcessedBookData = {
+    body?: never;
+    path: {
+        /**
+         * Book Id
+         */
+        book_id: string;
+        /**
+         * Agentic Run Id
+         */
+        agentic_run_id: string;
+    };
+    query?: never;
+    url: '/api/v1/bd/ingestion/{book_id}/agentic/runs/{agentic_run_id}/processed-book';
+};
+
+export type GetBdIngestionBookIdAgenticRunsAgenticRunIdProcessedBookErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type GetBdIngestionBookIdAgenticRunsAgenticRunIdProcessedBookError = GetBdIngestionBookIdAgenticRunsAgenticRunIdProcessedBookErrors[keyof GetBdIngestionBookIdAgenticRunsAgenticRunIdProcessedBookErrors];
+
+export type GetBdIngestionBookIdAgenticRunsAgenticRunIdProcessedBookResponses = {
+    /**
+     * Successful Response
+     */
+    200: ProcessedBookResponse;
+};
+
+export type GetBdIngestionBookIdAgenticRunsAgenticRunIdProcessedBookResponse = GetBdIngestionBookIdAgenticRunsAgenticRunIdProcessedBookResponses[keyof GetBdIngestionBookIdAgenticRunsAgenticRunIdProcessedBookResponses];
+
+export type PostBdIngestionBookIdAgenticRunsAgenticRunIdReplayNodeIdData = {
+    body?: never;
+    path: {
+        /**
+         * Book Id
+         */
+        book_id: string;
+        /**
+         * Agentic Run Id
+         */
+        agentic_run_id: string;
+        /**
+         * Node Id
+         */
+        node_id: string;
+    };
+    query?: never;
+    url: '/api/v1/bd/ingestion/{book_id}/agentic/runs/{agentic_run_id}/replay/{node_id}';
+};
+
+export type PostBdIngestionBookIdAgenticRunsAgenticRunIdReplayNodeIdErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type PostBdIngestionBookIdAgenticRunsAgenticRunIdReplayNodeIdError = PostBdIngestionBookIdAgenticRunsAgenticRunIdReplayNodeIdErrors[keyof PostBdIngestionBookIdAgenticRunsAgenticRunIdReplayNodeIdErrors];
+
+export type PostBdIngestionBookIdAgenticRunsAgenticRunIdReplayNodeIdResponses = {
+    /**
+     * Successful Response
+     */
+    202: AgenticRunStart;
+};
+
+export type PostBdIngestionBookIdAgenticRunsAgenticRunIdReplayNodeIdResponse = PostBdIngestionBookIdAgenticRunsAgenticRunIdReplayNodeIdResponses[keyof PostBdIngestionBookIdAgenticRunsAgenticRunIdReplayNodeIdResponses];
+
 export type PostBdIngestionBookIdAgenticRunsAgenticRunIdResumeData = {
     body?: never;
     path: {
@@ -3957,6 +4528,44 @@ export type PostBdRagBookIdRunsRunIdIndexCancelResponses = {
 
 export type PostBdRagBookIdRunsRunIdIndexCancelResponse = PostBdRagBookIdRunsRunIdIndexCancelResponses[keyof PostBdRagBookIdRunsRunIdIndexCancelResponses];
 
+export type PostBdRagBookIdRunsRunIdIndexReplayNodeIdData = {
+    body?: never;
+    path: {
+        /**
+         * Book Id
+         */
+        book_id: string;
+        /**
+         * Run Id
+         */
+        run_id: string;
+        /**
+         * Node Id
+         */
+        node_id: string;
+    };
+    query?: never;
+    url: '/api/v1/bd/rag/{book_id}/runs/{run_id}/index/replay/{node_id}';
+};
+
+export type PostBdRagBookIdRunsRunIdIndexReplayNodeIdErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type PostBdRagBookIdRunsRunIdIndexReplayNodeIdError = PostBdRagBookIdRunsRunIdIndexReplayNodeIdErrors[keyof PostBdRagBookIdRunsRunIdIndexReplayNodeIdErrors];
+
+export type PostBdRagBookIdRunsRunIdIndexReplayNodeIdResponses = {
+    /**
+     * Successful Response
+     */
+    202: RagIndexStatus;
+};
+
+export type PostBdRagBookIdRunsRunIdIndexReplayNodeIdResponse = PostBdRagBookIdRunsRunIdIndexReplayNodeIdResponses[keyof PostBdRagBookIdRunsRunIdIndexReplayNodeIdResponses];
+
 export type GetDdCatalogData = {
     body?: never;
     path?: never;
@@ -4010,6 +4619,112 @@ export type GetDdCatalogSlugResponses = {
 };
 
 export type GetDdCatalogSlugResponse = GetDdCatalogSlugResponses[keyof GetDdCatalogSlugResponses];
+
+export type GetDdDebugBenchmarksRoundIdData = {
+    body?: never;
+    path: {
+        /**
+         * Round Id
+         */
+        round_id: string;
+    };
+    query?: never;
+    url: '/api/v1/dd/debug/benchmarks/{round_id}';
+};
+
+export type GetDdDebugBenchmarksRoundIdErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type GetDdDebugBenchmarksRoundIdError = GetDdDebugBenchmarksRoundIdErrors[keyof GetDdDebugBenchmarksRoundIdErrors];
+
+export type GetDdDebugBenchmarksRoundIdResponses = {
+    /**
+     * Response Get Dd Debug Benchmarks Round Id
+     *
+     * Successful Response
+     */
+    200: {
+        [key: string]: unknown;
+    };
+};
+
+export type GetDdDebugBenchmarksRoundIdResponse = GetDdDebugBenchmarksRoundIdResponses[keyof GetDdDebugBenchmarksRoundIdResponses];
+
+export type GetDdDebugBenchmarksRoundIdRunIdData = {
+    body?: never;
+    path: {
+        /**
+         * Round Id
+         */
+        round_id: string;
+        /**
+         * Run Id
+         */
+        run_id: string;
+    };
+    query?: never;
+    url: '/api/v1/dd/debug/benchmarks/{round_id}/{run_id}';
+};
+
+export type GetDdDebugBenchmarksRoundIdRunIdErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type GetDdDebugBenchmarksRoundIdRunIdError = GetDdDebugBenchmarksRoundIdRunIdErrors[keyof GetDdDebugBenchmarksRoundIdRunIdErrors];
+
+export type GetDdDebugBenchmarksRoundIdRunIdResponses = {
+    /**
+     * Response Get Dd Debug Benchmarks Round Id Run Id
+     *
+     * Successful Response
+     */
+    200: {
+        [key: string]: unknown;
+    };
+};
+
+export type GetDdDebugBenchmarksRoundIdRunIdResponse = GetDdDebugBenchmarksRoundIdRunIdResponses[keyof GetDdDebugBenchmarksRoundIdRunIdResponses];
+
+export type PostDdDebugBenchmarksSlugData = {
+    body: TierBenchmarkBody;
+    path: {
+        /**
+         * Slug
+         */
+        slug: string;
+    };
+    query?: never;
+    url: '/api/v1/dd/debug/benchmarks/{slug}';
+};
+
+export type PostDdDebugBenchmarksSlugErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type PostDdDebugBenchmarksSlugError = PostDdDebugBenchmarksSlugErrors[keyof PostDdDebugBenchmarksSlugErrors];
+
+export type PostDdDebugBenchmarksSlugResponses = {
+    /**
+     * Response Post Dd Debug Benchmarks Slug
+     *
+     * Successful Response
+     */
+    200: {
+        [key: string]: unknown;
+    };
+};
+
+export type PostDdDebugBenchmarksSlugResponse = PostDdDebugBenchmarksSlugResponses[keyof PostDdDebugBenchmarksSlugResponses];
 
 export type PostDdDebugFinalizeSlugData = {
     body?: never;
@@ -4121,6 +4836,183 @@ export type PostDdDebugPostSlugResponses = {
 };
 
 export type PostDdDebugPostSlugResponse = PostDdDebugPostSlugResponses[keyof PostDdDebugPostSlugResponses];
+
+export type GetDdDebugProvenanceData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v1/dd/debug/provenance';
+};
+
+export type GetDdDebugProvenanceResponses = {
+    /**
+     * Response Get Dd Debug Provenance
+     *
+     * Successful Response
+     */
+    200: {
+        [key: string]: unknown;
+    };
+};
+
+export type GetDdDebugProvenanceResponse = GetDdDebugProvenanceResponses[keyof GetDdDebugProvenanceResponses];
+
+export type GetDdDebugReplaysEvaluationRoundIdData = {
+    body?: never;
+    path: {
+        /**
+         * Evaluation Round Id
+         */
+        evaluation_round_id: string;
+    };
+    query?: never;
+    url: '/api/v1/dd/debug/replays/{evaluation_round_id}';
+};
+
+export type GetDdDebugReplaysEvaluationRoundIdErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type GetDdDebugReplaysEvaluationRoundIdError = GetDdDebugReplaysEvaluationRoundIdErrors[keyof GetDdDebugReplaysEvaluationRoundIdErrors];
+
+export type GetDdDebugReplaysEvaluationRoundIdResponses = {
+    /**
+     * Response Get Dd Debug Replays Evaluation Round Id
+     *
+     * Successful Response
+     */
+    200: {
+        [key: string]: unknown;
+    };
+};
+
+export type GetDdDebugReplaysEvaluationRoundIdResponse = GetDdDebugReplaysEvaluationRoundIdResponses[keyof GetDdDebugReplaysEvaluationRoundIdResponses];
+
+export type GetDdDebugReplaysEvaluationRoundIdReplayIdData = {
+    body?: never;
+    path: {
+        /**
+         * Evaluation Round Id
+         */
+        evaluation_round_id: string;
+        /**
+         * Replay Id
+         */
+        replay_id: string;
+    };
+    query?: never;
+    url: '/api/v1/dd/debug/replays/{evaluation_round_id}/{replay_id}';
+};
+
+export type GetDdDebugReplaysEvaluationRoundIdReplayIdErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type GetDdDebugReplaysEvaluationRoundIdReplayIdError = GetDdDebugReplaysEvaluationRoundIdReplayIdErrors[keyof GetDdDebugReplaysEvaluationRoundIdReplayIdErrors];
+
+export type GetDdDebugReplaysEvaluationRoundIdReplayIdResponses = {
+    /**
+     * Response Get Dd Debug Replays Evaluation Round Id Replay Id
+     *
+     * Successful Response
+     */
+    200: {
+        [key: string]: unknown;
+    };
+};
+
+export type GetDdDebugReplaysEvaluationRoundIdReplayIdResponse = GetDdDebugReplaysEvaluationRoundIdReplayIdResponses[keyof GetDdDebugReplaysEvaluationRoundIdReplayIdResponses];
+
+export type GetDdDebugReplaysEvaluationRoundIdReplayIdPagesPageIdxData = {
+    body?: never;
+    path: {
+        /**
+         * Evaluation Round Id
+         */
+        evaluation_round_id: string;
+        /**
+         * Replay Id
+         */
+        replay_id: string;
+        /**
+         * Page Idx
+         */
+        page_idx: number;
+    };
+    query?: {
+        /**
+         * Version
+         */
+        version?: 'source' | 'input' | 'output';
+    };
+    url: '/api/v1/dd/debug/replays/{evaluation_round_id}/{replay_id}/pages/{page_idx}';
+};
+
+export type GetDdDebugReplaysEvaluationRoundIdReplayIdPagesPageIdxErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type GetDdDebugReplaysEvaluationRoundIdReplayIdPagesPageIdxError = GetDdDebugReplaysEvaluationRoundIdReplayIdPagesPageIdxErrors[keyof GetDdDebugReplaysEvaluationRoundIdReplayIdPagesPageIdxErrors];
+
+export type GetDdDebugReplaysEvaluationRoundIdReplayIdPagesPageIdxResponses = {
+    /**
+     * Response Get Dd Debug Replays Evaluation Round Id Replay Id Pages Page Idx
+     *
+     * Successful Response
+     */
+    200: {
+        [key: string]: unknown;
+    };
+};
+
+export type GetDdDebugReplaysEvaluationRoundIdReplayIdPagesPageIdxResponse = GetDdDebugReplaysEvaluationRoundIdReplayIdPagesPageIdxResponses[keyof GetDdDebugReplaysEvaluationRoundIdReplayIdPagesPageIdxResponses];
+
+export type PostDdDebugReplaysSourceRoundIdSourceRunIdData = {
+    body: IngestionReplayBody;
+    path: {
+        /**
+         * Source Round Id
+         */
+        source_round_id: string;
+        /**
+         * Source Run Id
+         */
+        source_run_id: string;
+    };
+    query?: never;
+    url: '/api/v1/dd/debug/replays/{source_round_id}/{source_run_id}';
+};
+
+export type PostDdDebugReplaysSourceRoundIdSourceRunIdErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type PostDdDebugReplaysSourceRoundIdSourceRunIdError = PostDdDebugReplaysSourceRoundIdSourceRunIdErrors[keyof PostDdDebugReplaysSourceRoundIdSourceRunIdErrors];
+
+export type PostDdDebugReplaysSourceRoundIdSourceRunIdResponses = {
+    /**
+     * Response Post Dd Debug Replays Source Round Id Source Run Id
+     *
+     * Successful Response
+     */
+    200: {
+        [key: string]: unknown;
+    };
+};
+
+export type PostDdDebugReplaysSourceRoundIdSourceRunIdResponse = PostDdDebugReplaysSourceRoundIdSourceRunIdResponses[keyof PostDdDebugReplaysSourceRoundIdSourceRunIdResponses];
 
 export type PostDdDebugResolveSlugData = {
     body?: never;
@@ -4680,6 +5572,48 @@ export type DeleteDdIngestionSlugAgenticRunsRunIdResponses = {
 };
 
 export type DeleteDdIngestionSlugAgenticRunsRunIdResponse = DeleteDdIngestionSlugAgenticRunsRunIdResponses[keyof DeleteDdIngestionSlugAgenticRunsRunIdResponses];
+
+export type PostDdIngestionSlugAgenticRunsRunIdReplayNodeIdData = {
+    body?: never;
+    path: {
+        /**
+         * Slug
+         */
+        slug: string;
+        /**
+         * Run Id
+         */
+        run_id: string;
+        /**
+         * Node Id
+         */
+        node_id: string;
+    };
+    query?: never;
+    url: '/api/v1/dd/ingestion/{slug}/agentic/runs/{run_id}/replay/{node_id}';
+};
+
+export type PostDdIngestionSlugAgenticRunsRunIdReplayNodeIdErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type PostDdIngestionSlugAgenticRunsRunIdReplayNodeIdError = PostDdIngestionSlugAgenticRunsRunIdReplayNodeIdErrors[keyof PostDdIngestionSlugAgenticRunsRunIdReplayNodeIdErrors];
+
+export type PostDdIngestionSlugAgenticRunsRunIdReplayNodeIdResponses = {
+    /**
+     * Response Post Dd Ingestion Slug Agentic Runs Run Id Replay Node Id
+     *
+     * Successful Response
+     */
+    202: {
+        [key: string]: unknown;
+    };
+};
+
+export type PostDdIngestionSlugAgenticRunsRunIdReplayNodeIdResponse = PostDdIngestionSlugAgenticRunsRunIdReplayNodeIdResponses[keyof PostDdIngestionSlugAgenticRunsRunIdReplayNodeIdResponses];
 
 export type PostDdIngestionSlugAgenticRunsRunIdResumeData = {
     body?: never;
@@ -5303,6 +6237,44 @@ export type GetDdPipelinePlannerThreadIdEventsResponses = {
     200: unknown;
 };
 
+export type PostDdPipelinePlannerThreadIdReplayNodeIdData = {
+    body?: never;
+    path: {
+        /**
+         * Thread Id
+         */
+        thread_id: string;
+        /**
+         * Node Id
+         */
+        node_id: string;
+    };
+    query?: never;
+    url: '/api/v1/dd/pipeline/planner/{thread_id}/replay/{node_id}';
+};
+
+export type PostDdPipelinePlannerThreadIdReplayNodeIdErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type PostDdPipelinePlannerThreadIdReplayNodeIdError = PostDdPipelinePlannerThreadIdReplayNodeIdErrors[keyof PostDdPipelinePlannerThreadIdReplayNodeIdErrors];
+
+export type PostDdPipelinePlannerThreadIdReplayNodeIdResponses = {
+    /**
+     * Response Post Dd Pipeline Planner Thread Id Replay Node Id
+     *
+     * Successful Response
+     */
+    200: {
+        [key: string]: unknown;
+    };
+};
+
+export type PostDdPipelinePlannerThreadIdReplayNodeIdResponse = PostDdPipelinePlannerThreadIdReplayNodeIdResponses[keyof PostDdPipelinePlannerThreadIdReplayNodeIdResponses];
+
 export type PostDdPipelinePlannerThreadIdResumeData = {
     body?: never;
     path: {
@@ -5762,6 +6734,44 @@ export type GetDdPipelineSynthThreadIdEventsResponses = {
      */
     200: unknown;
 };
+
+export type PostDdPipelineSynthThreadIdReplayNodeIdData = {
+    body?: never;
+    path: {
+        /**
+         * Thread Id
+         */
+        thread_id: string;
+        /**
+         * Node Id
+         */
+        node_id: string;
+    };
+    query?: never;
+    url: '/api/v1/dd/pipeline/synth/{thread_id}/replay/{node_id}';
+};
+
+export type PostDdPipelineSynthThreadIdReplayNodeIdErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type PostDdPipelineSynthThreadIdReplayNodeIdError = PostDdPipelineSynthThreadIdReplayNodeIdErrors[keyof PostDdPipelineSynthThreadIdReplayNodeIdErrors];
+
+export type PostDdPipelineSynthThreadIdReplayNodeIdResponses = {
+    /**
+     * Response Post Dd Pipeline Synth Thread Id Replay Node Id
+     *
+     * Successful Response
+     */
+    200: {
+        [key: string]: unknown;
+    };
+};
+
+export type PostDdPipelineSynthThreadIdReplayNodeIdResponse = PostDdPipelineSynthThreadIdReplayNodeIdResponses[keyof PostDdPipelineSynthThreadIdReplayNodeIdResponses];
 
 export type PostDdPipelineSynthThreadIdResumeData = {
     body?: never;
@@ -7029,6 +8039,44 @@ export type PostYcsContentVideosPipelineResponses = {
 };
 
 export type PostYcsContentVideosPipelineResponse = PostYcsContentVideosPipelineResponses[keyof PostYcsContentVideosPipelineResponses];
+
+export type PostYcsContentVideosPipelineExtractIdReplayNodeIdData = {
+    body?: never;
+    path: {
+        /**
+         * Extract Id
+         */
+        extract_id: string;
+        /**
+         * Node Id
+         */
+        node_id: string;
+    };
+    query?: never;
+    url: '/api/v1/ycs/content/videos/pipeline/{extract_id}/replay/{node_id}';
+};
+
+export type PostYcsContentVideosPipelineExtractIdReplayNodeIdErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type PostYcsContentVideosPipelineExtractIdReplayNodeIdError = PostYcsContentVideosPipelineExtractIdReplayNodeIdErrors[keyof PostYcsContentVideosPipelineExtractIdReplayNodeIdErrors];
+
+export type PostYcsContentVideosPipelineExtractIdReplayNodeIdResponses = {
+    /**
+     * Response Post Ycs Content Videos Pipeline Extract Id Replay Node Id
+     *
+     * Successful Response
+     */
+    202: {
+        [key: string]: unknown;
+    };
+};
+
+export type PostYcsContentVideosPipelineExtractIdReplayNodeIdResponse = PostYcsContentVideosPipelineExtractIdReplayNodeIdResponses[keyof PostYcsContentVideosPipelineExtractIdReplayNodeIdResponses];
 
 export type PostYcsContentVideosPipelineExtractIdRerunData = {
     body?: never;

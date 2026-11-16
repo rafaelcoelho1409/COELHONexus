@@ -236,51 +236,53 @@ function AskConversation({
 
   return (
     <div className="flex flex-col gap-4">
-      <AskToolbar
-        mode={mode}
-        onMode={setMode}
-        scope={locked ? lockedScope : scope}
-        scopeLocked={locked}
-        onScope={setScope}
-        threadId={threadId}
-        threadTitle={turns[0]?.question ?? ""}
-        onSwitchThread={(id) => (running ? busyNotice("switch threads") : onOpenThread(id))}
-        onDeleteThread={(id) => void onDeleteThread(id)}
-        onNewThread={() => (running ? busyNotice("start a new thread") : onNewThread())}
-        onSources={() => {
-          if (sourcesTurn === null) setSourcesTurn(lastSourcedTurn(turns));
-          setHighlight(null);
-          setSheet("sources");
-        }}
-        onUsage={() => setSheet("usage")}
-      />
+      <div className="grid gap-4 lg:grid-cols-[minmax(20rem,35fr)_minmax(0,65fr)] lg:gap-x-6">
+        <div className="min-w-0 lg:col-start-2 lg:row-start-1">
+          <AskToolbar
+            mode={mode}
+            onMode={setMode}
+            scope={locked ? lockedScope : scope}
+            scopeLocked={locked}
+            onScope={setScope}
+            threadId={threadId}
+            threadTitle={turns[0]?.question ?? ""}
+            onSwitchThread={(id) => (running ? busyNotice("switch threads") : onOpenThread(id))}
+            onDeleteThread={(id) => void onDeleteThread(id)}
+            onNewThread={() => (running ? busyNotice("start a new thread") : onNewThread())}
+            onSources={() => {
+              if (sourcesTurn === null) setSourcesTurn(lastSourcedTurn(turns));
+              setHighlight(null);
+              setSheet("sources");
+            }}
+            onUsage={() => setSheet("usage")}
+          />
+        </div>
 
-      <fieldset className="m-0 grid grid-cols-2 gap-2 border-0 p-0 lg:hidden">
-        <legend className="sr-only">Ask workspace view</legend>
-        <ActionButton
-          type="button"
-          aria-pressed={mobilePane === "conversation"}
-          onClick={() => setMobilePane("conversation")}
-          className="justify-center"
-        >
-          <MessageSquare aria-hidden data-icon="inline-start" />
-          Conversation
-        </ActionButton>
-        <ActionButton
-          type="button"
-          aria-pressed={mobilePane === "graph"}
-          onClick={() => setMobilePane("graph")}
-          className="justify-center"
-        >
-          <Workflow aria-hidden data-icon="inline-start" />
-          Graph
-        </ActionButton>
-      </fieldset>
+        <fieldset className="m-0 grid grid-cols-2 gap-2 border-0 p-0 lg:hidden">
+          <legend className="sr-only">Ask workspace view</legend>
+          <ActionButton
+            type="button"
+            aria-pressed={mobilePane === "conversation"}
+            onClick={() => setMobilePane("conversation")}
+            className="justify-center"
+          >
+            <MessageSquare aria-hidden data-icon="inline-start" />
+            Conversation
+          </ActionButton>
+          <ActionButton
+            type="button"
+            aria-pressed={mobilePane === "graph"}
+            onClick={() => setMobilePane("graph")}
+            className="justify-center"
+          >
+            <Workflow aria-hidden data-icon="inline-start" />
+            Graph
+          </ActionButton>
+        </fieldset>
 
-      <div className="grid gap-6 lg:grid-cols-[minmax(20rem,35fr)_minmax(0,65fr)]">
         <aside
           aria-label="Adaptive Agentic RAG graph"
-          className={`${mobilePane === "graph" ? "block" : "hidden"} min-w-0 lg:block`}
+          className={`${mobilePane === "graph" ? "block" : "hidden"} min-w-0 lg:col-start-1 lg:row-span-2 lg:row-start-1 lg:block`}
         >
           <div className="lg:sticky lg:top-[calc(var(--chrome-top)+1.5rem)] lg:max-h-[calc(100dvh-var(--chrome-top)-2.5rem)] lg:overflow-y-auto lg:pr-1">
             <YcsAskAgenticGraph turn={turns.at(-1) ?? null} />
@@ -288,7 +290,7 @@ function AskConversation({
         </aside>
         {/* Tall enough that the message box sits at the bottom of the screen even before there is a conversation. */}
         <div
-          className={`${mobilePane === "conversation" ? "flex" : "hidden"} min-h-[calc(100dvh-23rem)] min-w-0 flex-col sm:min-h-[calc(100dvh-18rem)] lg:flex`}
+          className={`${mobilePane === "conversation" ? "flex" : "hidden"} min-h-[calc(100dvh-23rem)] min-w-0 flex-col sm:min-h-[calc(100dvh-18rem)] lg:col-start-2 lg:row-start-2 lg:flex`}
         >
           {!hydrated ? <p className="text-sm text-muted-foreground">Loading the conversation…</p> : null}
           {hydrateError ? (

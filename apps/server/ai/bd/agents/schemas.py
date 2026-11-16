@@ -1,8 +1,9 @@
 """Pydantic contracts exchanged by Book Distiller ingestion agents."""
 from __future__ import annotations
 
+import math
 from enum import StrEnum
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import (
     BaseModel,
@@ -16,6 +17,7 @@ from pydantic import (
 
 NonEmptyText = Annotated[str, StringConstraints(strip_whitespace = True, min_length = 1)]
 Confidence = Annotated[float, Field(ge = 0.0, le = 1.0, allow_inf_nan = False)]
+VisualChartAxis = Annotated[str, StringConstraints(strip_whitespace = True, min_length = 1, max_length = 120)] | float
 
 
 class PageKind(StrEnum):
@@ -252,6 +254,204 @@ class PatchVerificationBatch(BaseModel):
     model_config = ConfigDict(extra = "forbid")
 
     verifications: list[PatchVerification] = Field(default_factory = list, max_length = 32)
+
+
+class VisualKind(StrEnum):
+    DIAGRAM = "diagram"
+    TABLE = "table"
+    CHART = "chart"
+    EQUATION = "equation"
+    CODE = "code"
+    TEXT = "text"
+    TIMELINE = "timeline"
+    MAP = "map"
+
+
+class VisualDiagramNode(BaseModel):
+    model_config = ConfigDict(extra = "forbid")
+
+    id: Annotated[str, StringConstraints(strip_whitespace = True, min_length = 1, max_length = 40)]
+    label: Annotated[str, StringConstraints(strip_whitespace = True, min_length = 1, max_length = 240)]
+
+
+class VisualDiagramEdge(BaseModel):
+    model_config = ConfigDict(extra = "forbid")
+
+    source: Annotated[str, StringConstraints(strip_whitespace = True, min_length = 1, max_length = 40)]
+    target: Annotated[str, StringConstraints(strip_whitespace = True, min_length = 1, max_length = 40)]
+    label: Annotated[str, StringConstraints(strip_whitespace = True, max_length = 160)] = ""
+
+
+class VisualTimelineEvent(BaseModel):
+    model_config = ConfigDict(extra = "forbid")
+
+    period: Annotated[str, StringConstraints(strip_whitespace = True, min_length = 1, max_length = 120)]
+    label: Annotated[str, StringConstraints(strip_whitespace = True, min_length = 1, max_length = 240)]
+
+
+class VisualChartDatum(BaseModel):
+    """One explicitly legible chart row; application code maps it to a safe Vega-Lite spec."""
+
+    model_config = ConfigDict(extra = "forbid")
+
+    x: VisualChartAxis
+    y: VisualChartAxis | None = None
+    value: float | None = None
+    series: Annotated[str, StringConstraints(strip_whitespace = True, max_length = 120)] = ""
+
+    @field_validator("x", "y", "value")
+    @classmethod
+    def _validate_finite_numbers(cls, value: str | float | None) -> str | float | None:
+        if isinstance(value, float) and not math.isfinite(value):
+            raise ValueError("chart values must be finite")
+        return value
+
+
+class VisualMapCoordinate(BaseModel):
+    """A geographic coordinate transcribed from an explicit source label or coordinate list."""
+
+    model_config = ConfigDict(extra = "forbid")
+
+    longitude: float = Field(ge = -180, le = 180, allow_inf_nan = False)
+    latitude: float = Field(ge = -90, le = 90, allow_inf_nan = False)
+
+
+class VisualMapFeature(BaseModel):
+    """A bounded GeoJSON geometry whose coordinates must be explicit in the source."""
+
+    model_config = ConfigDict(extra = "forbid")
+
+    label: Annotated[str, StringConstraints(strip_whitespace = True, max_length = 160)] = ""
+    category: Annotated[str, StringConstraints(strip_whitespace = True, max_length = 100)] = ""
+    geometry_type: Literal["Point", "LineString", "Polygon"]
+    coordinates: list[VisualMapCoordinate] = Field(min_length = 1, max_length = 500)
+
+    @model_validator(mode = "after")
+    def _validate_geometry(self) -> VisualMapFeature:
+        count = len(self.coordinates)
+        if self.geometry_type == "Point" and count != 1:
+            raise ValueError("a point feature requires exactly one coordinate")
+        if self.geometry_type == "LineString" and count < 2:
+            raise ValueError("a line feature requires at least two coordinates")
+        if self.geometry_type == "Polygon":
+            if count < 4 or self.coordinates[0] != self.coordinates[-1]:
+                raise ValueError("a polygon ring requires four coordinates and must be closed")
+        return self
+
+
+class VisualExtractionResult(BaseModel):
+    """Constrained transcription of one source figure; renderable Markdown is built by trusted code."""
+
+    model_config = ConfigDict(extra = "forbid")
+
+    decision: Literal["convert", "retain"]
+    kind: VisualKind | None = None
+    confidence: Confidence
+    rationale: Annotated[str, StringConstraints(strip_whitespace = True, min_length = 1, max_length = 500)]
+    diagram_direction: Literal["TD", "LR", "BT", "RL"] = "TD"
+    diagram_nodes: list[VisualDiagramNode] = Field(default_factory = list, max_length = 60)
+    diagram_edges: list[VisualDiagramEdge] = Field(default_factory = list, max_length = 120)
+    table_headers: list[Annotated[str, StringConstraints(max_length = 300)]] = Field(default_factory = list, max_length = 30)
+    table_rows: list[list[Annotated[str, StringConstraints(max_length = 500)]]] = Field(
+        default_factory = list,
+        max_length = 120,
+    )
+    chart_title: Annotated[str, StringConstraints(strip_whitespace = True, max_length = 200)] = ""
+    chart_type: Literal["bar", "line", "area", "scatter", "pie", "heatmap"] = "bar"
+    chart_x_label: Annotated[str, StringConstraints(strip_whitespace = True, max_length = 120)] = ""
+    chart_y_label: Annotated[str, StringConstraints(strip_whitespace = True, max_length = 120)] = ""
+    chart_categories: list[Annotated[str, StringConstraints(strip_whitespace = True, min_length = 1, max_length = 100)]] = Field(
+        default_factory = list,
+        max_length = 40,
+    )
+    chart_values: list[float] = Field(default_factory = list, max_length = 40)
+    chart_rows: list[VisualChartDatum] = Field(default_factory = list, max_length = 120)
+    map_title: Annotated[str, StringConstraints(strip_whitespace = True, max_length = 200)] = ""
+    map_features: list[VisualMapFeature] = Field(default_factory = list, max_length = 40)
+    equation_latex: Annotated[str, StringConstraints(strip_whitespace = True, max_length = 3000)] = ""
+    code_language: Annotated[str, StringConstraints(strip_whitespace = True, max_length = 32)] = ""
+    code_text: Annotated[str, StringConstraints(max_length = 8000)] = ""
+    text_title: Annotated[str, StringConstraints(strip_whitespace = True, max_length = 160)] = ""
+    transcribed_text: Annotated[str, StringConstraints(max_length = 12000)] = ""
+    text_format: Literal["prose", "code"] = "prose"
+    timeline_title: Annotated[str, StringConstraints(strip_whitespace = True, max_length = 200)] = ""
+    timeline_events: list[VisualTimelineEvent] = Field(default_factory = list, max_length = 60)
+
+    @model_validator(mode = "after")
+    def _validate_conversion_payload(self) -> VisualExtractionResult:
+        if self.decision == "retain":
+            return self
+        if self.kind is None:
+            raise ValueError("a conversion must identify its visual kind")
+        if self.kind == VisualKind.DIAGRAM:
+            identifiers = [node.id for node in self.diagram_nodes]
+            if len(identifiers) < 2 or len(identifiers) != len(set(identifiers)):
+                raise ValueError("a diagram must have at least two nodes with unique identifiers")
+            if not self.diagram_edges or any(
+                edge.source not in identifiers or edge.target not in identifiers
+                for edge in self.diagram_edges
+            ):
+                raise ValueError("diagram edges must connect supplied nodes")
+        elif self.kind == VisualKind.TABLE:
+            if not self.table_headers or not self.table_rows:
+                raise ValueError("a table conversion must include headers and rows")
+            if len(self.table_headers) > 20 or any(len(row) != len(self.table_headers) for row in self.table_rows):
+                raise ValueError("table rows must match the supplied header count")
+        elif self.kind == VisualKind.CHART:
+            if self.chart_rows:
+                if self.chart_type == "scatter":
+                    valid = all(
+                        isinstance(row.x, (int, float))
+                        and not isinstance(row.x, bool)
+                        and isinstance(row.y, (int, float))
+                        and not isinstance(row.y, bool)
+                        and row.value is None
+                        for row in self.chart_rows
+                    )
+                elif self.chart_type == "heatmap":
+                    valid = all(
+                        isinstance(row.x, str)
+                        and row.x.strip()
+                        and isinstance(row.y, str)
+                        and row.y.strip()
+                        and row.value is not None
+                        and not row.series
+                        for row in self.chart_rows
+                    )
+                else:
+                    valid = all(
+                        isinstance(row.x, (str, int, float))
+                        and (not isinstance(row.x, str) or row.x.strip())
+                        and row.y is None
+                        and row.value is not None
+                        and (self.chart_type != "pie" or not row.series)
+                        for row in self.chart_rows
+                    )
+                if not valid or any(
+                    row.value is not None and not math.isfinite(row.value)
+                    for row in self.chart_rows
+                ):
+                    raise ValueError("chart rows do not match the selected chart type")
+            elif (
+                self.chart_type not in {"bar", "line", "area", "pie"}
+                or not self.chart_categories
+                or len(self.chart_categories) != len(self.chart_values)
+                or any(not math.isfinite(value) for value in self.chart_values)
+            ):
+                raise ValueError("a chart requires finite values in a supported data shape")
+        elif self.kind == VisualKind.EQUATION and not self.equation_latex:
+            raise ValueError("an equation conversion must include LaTeX")
+        elif self.kind == VisualKind.CODE and not self.code_text.strip():
+            raise ValueError("a code conversion must include visible source text")
+        elif self.kind == VisualKind.TEXT and not self.transcribed_text.strip():
+            raise ValueError("a text conversion must include visible source text")
+        elif self.kind == VisualKind.TIMELINE and len(self.timeline_events) < 2:
+            raise ValueError("a timeline conversion must include at least two visible events")
+        elif self.kind == VisualKind.MAP:
+            coordinate_count = sum(len(feature.coordinates) for feature in self.map_features)
+            if not self.map_features or coordinate_count > 500:
+                raise ValueError("a map conversion requires bounded, explicit geographic features")
+        return self
 
 
 class PageAuditResponse(BaseModel):

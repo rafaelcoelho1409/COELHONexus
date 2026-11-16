@@ -374,7 +374,7 @@ async def read_display_page(
     *,
     storage: infra.minio.service.MinIOStorage | None = None,
     source: str | None = None,
-) -> tuple[str | None, str]:
+) -> tuple[str | None, str, list[str]]:
     """Return a completed automatic AI page when available, otherwise the immutable Docling page.
 
     `source` pins one side for comparison: "docling" always reads the raw page; "agentic" reads the AI page or nothing."""
@@ -383,17 +383,49 @@ async def read_display_page(
     if source != "docling":
         run = await read_current_ingestion_ai_run(book_id, storage = storage)
         if run is not None and page_number in run["progress"]["processed_pages"]:
-            normalized_key = domains.bd.ingestion.storage.keys.agentic_page_key(
+            artifact = next((item for item in run["pages"] if item["page_number"] == page_number), None)
+            normalized_key = artifact.get("enriched_key") if artifact is not None else None
+            visual_key = domains.bd.ingestion.storage.keys.agentic_visual_page_key(
                 book_id, run["agentic_run_id"], page_number,
             )
             try:
-                return await storage.read_text(normalized_key), "agentic"
+                if normalized_key is None and await storage.exists(visual_key):
+                    markdown = await storage.read_text(visual_key)
+                    artifacts_key = domains.bd.ingestion.storage.keys.agentic_visual_artifacts_key(
+                        book_id, run["agentic_run_id"], page_number,
+                    )
+                    converted = []
+                    if await storage.exists(artifacts_key):
+                        artifacts = json.loads(await storage.read_text(artifacts_key))
+                        converted = [
+                            item["figure_name"] for item in artifacts.get("conversions", [])
+                            if isinstance(item, dict) and item.get("converted") is True
+                            and isinstance(item.get("figure_name"), str)
+                        ]
+                    return markdown, "agentic", converted
+                if normalized_key is None:
+                    normalized_key = (
+                        artifact["normalized_key"]
+                        if artifact is not None else domains.bd.ingestion.storage.keys.agentic_page_key(
+                            book_id, run["agentic_run_id"], page_number,
+                        )
+                    )
+                converted = artifact.get("converted_figures", []) if artifact is not None else []
+                markdown = await storage.read_text(normalized_key)
+                expected_sha256 = (
+                    artifact.get("enriched_sha256") or artifact.get("normalized_sha256")
+                    if artifact is not None else None
+                )
+                if expected_sha256 and hashlib.sha256(markdown.encode("utf-8")).hexdigest() != expected_sha256:
+                    if source == "agentic":
+                        return None, "agentic", []
+                return markdown, "agentic", converted
             except FileNotFoundError:
                 pass
         if source == "agentic":
-            return None, "agentic"
+            return None, "agentic", []
     markdown = await domains.bd.ingestion.storage.service.read_page(storage, book_id, page_number)
-    return markdown, "docling"
+    return markdown, "docling", []
 
 
 async def read_page_quality(
@@ -1124,7 +1156,7 @@ async def queue_ingestion_ai_node_replay(
                 f"Cannot replay {node_id} yet: {predecessor} has not completed. "
                 f"Resume the run from its saved checkpoint or replay {predecessor}."
             )
-        await ai.langgraph.service.checkpoint_before_node(graph, graph_config, node_id)
+        await infra.postgres.service.checkpoint_before_node(graph, graph_config, node_id)
 
         if node_id == "reconcile_contents":
             await domains.bd.ingestion.ai.processed_book.service.clear_manifest_for_replay(
@@ -1154,6 +1186,11 @@ async def queue_ingestion_ai_node_replay(
         progress["active_audit_pages"] = []
         progress["active_repair_pages"] = []
         progress["active_classification_pages"] = []
+        if "enrich_visuals" in descendants:
+            progress["visual_candidate_count"] = 0
+            progress["visual_completed_count"] = 0
+            progress["visual_converted_count"] = 0
+            progress["visual_failed_count"] = 0
         manifest["progress"] = progress
         manifest["status"] = domains.bd.ingestion.ai.schemas.AgenticRunStatus.QUEUED.value
         manifest["updated_at"] = max(time.time(), manifest["created_at"])
@@ -1163,11 +1200,13 @@ async def queue_ingestion_ai_node_replay(
 
         prefix = domains.bd.ingestion.storage.keys.agentic_prefix(book_id, agentic_run_id)
         artifacts_by_node = {
-            "audit_batch": ("pages/", "assessments/", "patch-proposals/", "book-metadata.json", "quality-report.json", "content-selection/", "processed-book/"),
-            "classify_content": ("pages/", "patch-proposals/", "book-metadata.json", "quality-report.json", "content-selection/", "processed-book/"),
-            "plan_repairs": ("pages/", "patch-proposals/", "book-metadata.json", "quality-report.json", "processed-book/"),
-            "repair_pages": ("pages/", "patch-proposals/", "book-metadata.json", "quality-report.json", "processed-book/"),
-            "normalize_metadata": ("book-metadata.json", "quality-report.json", "processed-book/"),
+            "audit_batch": ("pages/", "assessments/", "patch-proposals/", "book-metadata.json", "quality-report.json", "content-selection/", "visual-enrichment/pages/", "processed-book/"),
+            "classify_content": ("pages/", "patch-proposals/", "book-metadata.json", "quality-report.json", "content-selection/", "visual-enrichment/pages/", "processed-book/"),
+            "plan_repairs": ("pages/", "patch-proposals/", "book-metadata.json", "quality-report.json", "processed-book/", "visual-enrichment/pages/"),
+            "repair_pages": ("pages/", "patch-proposals/", "book-metadata.json", "quality-report.json", "processed-book/", "visual-enrichment/pages/"),
+            "normalize_metadata": ("book-metadata.json", "quality-report.json", "processed-book/", "visual-enrichment/pages/"),
+            # Keep validated per-figure responses for reuse; the input fingerprint decides if changed context requires a fresh call.
+            "enrich_visuals": ("visual-enrichment/pages/", "processed-book/"),
             "materialize_processed_book": ("processed-book/",),
             "reconcile_contents": (),
             "publish": ("quality-report.json",),
@@ -1276,6 +1315,7 @@ def _extraction_request(
                 "page": page.get("page"),
                 "key": page.get("key"),
                 "pictures": page.get("pictures", 0),
+                "figures": page.get("figures", []),
             }
             for page in pages
         ],
@@ -1537,6 +1577,21 @@ async def run_ingestion_ai(
                     manifest_fields["selected_page_count"] = selected_count
                     manifest_fields["excluded_page_count"] = excluded_count
                     should_persist = True
+            elif kind in {"visual_enrichment_progress", "visual_figure"}:
+                for field, event_field in (
+                    ("visual_candidate_count", "candidate_count"),
+                    ("visual_completed_count", "completed_count"),
+                    ("visual_converted_count", "converted_count"),
+                    ("visual_failed_count", "failed_count"),
+                ):
+                    value = event.get(event_field)
+                    if type(value) is int and value >= 0:
+                        progress_state[field] = value
+                should_persist = (
+                    kind == "visual_enrichment_progress"
+                    or progress_state["visual_completed_count"] >= progress_state["visual_candidate_count"]
+                    or progress_state["visual_completed_count"] % 10 == 0
+                )
             progress_state = domains.bd.ingestion.ai.schemas.AgenticRunProgress.model_validate(
                 progress_state,
             ).model_dump(mode = "json")
@@ -1584,6 +1639,24 @@ async def run_ingestion_ai(
             metadata_normalizer = ai.bd.agents.ingestion.metadata_normalizer.agent.metadata_normalizer()
         if content_classifier is None:
             content_classifier = ai.bd.agents.ingestion.content_classifier.agent.content_classifier()
+
+        visual_extractor = None
+        read_source_figure = None
+        if any(page_ref.get("figures") for page_ref in source_page_refs):
+            try:
+                visual_extractor = ai.bd.agents.ingestion.visual_extractor.agent.visual_extractor()
+
+                async def read_source_figure(name: str) -> bytes:
+                    key = domains.bd.ingestion.storage.keys.figure_key(book_id, name, extraction_id)
+                    return await storage.read_bytes(key)
+            except Exception as error:
+                logger.warning(
+                    "[bd-visual-enrichment] extractor unavailable for %s/%s: %s",
+                    book_id,
+                    agentic_run_id,
+                    type(error).__name__,
+                )
+                visual_extractor = None
 
         async def write_artifact(key: str, content: str, content_type: str) -> None:
             if execution_check is not None:
@@ -1657,6 +1730,8 @@ async def run_ingestion_ai(
             finding_verifier = finding_verifier,
             patch_verifier = patch_verifier,
             read_source_page_image = read_source_page_image,
+            visual_extractor = visual_extractor,
+            read_source_figure = read_source_figure,
         )
         config = {"configurable": {
             "thread_id": f"bd-ingestion-agentic:{book_id}:{extraction_id}:{agentic_run_id}",
@@ -1669,7 +1744,7 @@ async def run_ingestion_ai(
             if replay_from_node is not None:
                 if replay_from_node not in domains.bd.ingestion.ai.params.GRAPH_NODES:
                     raise ValueError(f"unknown saved ingestion replay node {replay_from_node!r}")
-                replay_config = await ai.langgraph.service.checkpoint_before_node(
+                replay_config = await infra.postgres.service.checkpoint_before_node(
                     graph, config, replay_from_node,
                 )
                 descendants = set(domains.bd.ingestion.ai.params.REPLAY_DESCENDANTS[replay_from_node])
@@ -1717,7 +1792,7 @@ async def run_ingestion_ai(
                 if manifest_fields.get("workflow_version") != domains.bd.ingestion.ai.versions.WORKFLOW_VERSION:
                     raise ValueError(
                         "This run uses an older ingestion graph checkpoint. Wipe this run and start a new "
-                        "Agentic AI run to use the updated pre-repair content selection."
+                        "Agentic AI run to use the current graph structure."
                     )
                 graph_input = None
                 pending_nodes = tuple(snapshot.next)

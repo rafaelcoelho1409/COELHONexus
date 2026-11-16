@@ -545,7 +545,7 @@ async def replay_synth_from_node(thread_id: str, node_id: str) -> dict:
         if dict(snapshot.values).get("status") in {"running", "queued"}:
             await domains.dd.pipeline.runtime.dispatch.service.release_synth_start(slug)
             raise HTTPException(status_code = 409, detail = "stop the active Synth run before replaying a node")
-        await ai.langgraph.service.checkpoint_before_node(graph, config, node_id)
+        await infra.postgres.service.checkpoint_before_node(graph, config, node_id)
         async_result = domains.dd.pipeline.ai.task.replay_synth_from_node.delay(thread_id, node_id)
         infra.opentelemetry.service.tag_celery_task(async_result.id)
         await domains.dd.pipeline.runtime.progress.service.emit_progress(
