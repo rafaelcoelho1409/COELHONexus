@@ -207,6 +207,9 @@ def validate_proposals(
                 raise ValueError("patch evidence must come from the supplied Markdown page")
             if evidence.page_number != page_number or evidence.excerpt not in markdown:
                 raise ValueError("patch evidence is not an exact excerpt from the supplied page")
+        proposal = _expand_detached_heading_plural_suffix(proposal, markdown)
+        if allowed_context is not None and proposal.target_text not in allowed_context:
+            raise ValueError("expanded patch target is outside the supplied repair context")
         seen_issue_ids.add(proposal.issue_id)
         proposals.append(proposal)
 
@@ -391,6 +394,8 @@ def source_verification_candidates(
         end = start + len(proposal.target_text)
         if _is_protected_patch(proposal, markdown, start, end):
             continue
+        if _is_deterministic_split_word_repair(proposal, markdown, start, end):
+            continue
         candidates.append(proposal)
     return candidates
 
@@ -423,6 +428,58 @@ def source_reading_confirms_patch(
     return bool(split_word and split_word.group(1) + split_word.group(2) == replacement_focus)
 
 
+def source_reading_replacement(
+    proposal: agents.schemas.PatchProposal,
+    source_reading: str,
+    markdown: str,
+) -> str | None:
+    """Build a bounded alternative patch from a literal source reading when only spacing/punctuation differs."""
+    if (
+        proposal.issue_code not in {
+            agents.schemas.IssueCode.SPLIT_WORD,
+            agents.schemas.IssueCode.FUSED_MARKER,
+            agents.schemas.IssueCode.TEXT_CORRUPTION,
+        }
+        or proposal.risk != agents.schemas.PatchRisk.LOW
+        or proposal.confidence < domains.bd.ingestion.ai.params.VERIFIED_PATCH_MIN_CONFIDENCE
+        or len(_occurrences(markdown, proposal.target_text)) != 1
+    ):
+        return None
+
+    start = markdown.find(proposal.target_text)
+    end = start + len(proposal.target_text)
+    if _is_protected_patch(proposal, markdown, start, end):
+        return None
+
+    source_reading = patterns.WHITESPACE_RE.sub(" ", source_reading).strip()
+    target_focus, replacement_focus = patch_verification_focus(proposal)
+    if not source_reading or not replacement_focus:
+        return None
+    if source_reading == patterns.WHITESPACE_RE.sub(" ", target_focus).strip():
+        return None
+    if len(source_reading) > max(128, len(target_focus) * 3):
+        return None
+    if any(
+        not character.isalnum()
+        and not character.isspace()
+        and not unicodedata.category(character).startswith("P")
+        for character in source_reading
+    ):
+        return None
+
+    # The visual reading may supply a missing space or punctuation mark, but it must preserve the
+    # complete character sequence of both the extracted span and the specialist's lexical proposal.
+    source_characters = _alphanumeric_characters(source_reading)
+    if not source_characters or source_characters != _alphanumeric_characters(target_focus):
+        return None
+    if source_characters != _alphanumeric_characters(replacement_focus):
+        return None
+    if source_reading == replacement_focus or proposal.replacement.count(replacement_focus) != 1:
+        return None
+
+    return proposal.replacement.replace(replacement_focus, source_reading, 1)
+
+
 def patch_verification_focus(proposal: agents.schemas.PatchProposal) -> tuple[str, str]:
     """Return the minimal changed word span, excluding unchanged context from image matching."""
     return _changed_words(proposal.target_text, proposal.replacement)
@@ -452,6 +509,8 @@ def _is_auto_applicable(
     )
     if mechanically_safe:
         return True
+    if _is_deterministic_split_word_repair(proposal, markdown, start, end):
+        return True
     return (
         source_verified
         and proposal.risk == agents.schemas.PatchRisk.LOW
@@ -479,6 +538,65 @@ def _is_protected_patch(
         or _inside_code(markdown, start)
         or _inside_path_or_address(markdown, start, end)
     )
+
+
+def _is_deterministic_split_word_repair(
+    proposal: agents.schemas.PatchProposal,
+    markdown: str,
+    start: int,
+    end: int,
+) -> bool:
+    """Apply only high-confidence split-word proposals that delete whitespace and preserve every character."""
+    return (
+        proposal.issue_code == agents.schemas.IssueCode.SPLIT_WORD
+        and proposal.risk == agents.schemas.PatchRisk.LOW
+        and proposal.confidence >= domains.bd.ingestion.ai.params.AUTO_APPLY_CONFIDENCE
+        and _is_spacing_repair(proposal, markdown, start, end)
+        and re.sub(r"\s+", "", proposal.target_text) == re.sub(r"\s+", "", proposal.replacement)
+        and len(re.findall(r"\s", proposal.replacement)) < len(re.findall(r"\s", proposal.target_text))
+        and not _is_protected_patch(proposal, markdown, start, end)
+    )
+
+
+def _expand_detached_heading_plural_suffix(
+    proposal: agents.schemas.PatchProposal,
+    markdown: str,
+) -> agents.schemas.PatchProposal:
+    """Include a detached uppercase plural S when the cited heading proves it belongs to the split word."""
+    if (
+        proposal.issue_code != agents.schemas.IssueCode.SPLIT_WORD
+        or not proposal.replacement.isalpha()
+        or not proposal.replacement.isupper()
+        or re.sub(r"\s+", "", proposal.target_text) != proposal.replacement
+        or len(starts := _occurrences(markdown, proposal.target_text)) != 1
+    ):
+        return proposal
+
+    start = starts[0]
+    end = start + len(proposal.target_text)
+    line_start = markdown.rfind("\n", 0, start) + 1
+    line_end = markdown.find("\n", end)
+    line_end = len(markdown) if line_end < 0 else line_end
+    heading_prefix = markdown[line_start:start]
+    detached_suffix = markdown[end:line_end]
+    if (
+        re.fullmatch(r"[ \t]*#{1,6}[ \t]+", heading_prefix) is None
+        or (suffix_match := re.fullmatch(r"([ \t]+)S[ \t]*", detached_suffix)) is None
+    ):
+        return proposal
+
+    extended_target = proposal.target_text + suffix_match.group(0)
+    if not any(extended_target in evidence.excerpt for evidence in proposal.evidence):
+        return proposal
+    extended_replacement = proposal.replacement + "S"
+    if re.sub(r"\s+", "", extended_target) != extended_replacement:
+        return proposal
+    return proposal.model_copy(update = {
+        "target_text": extended_target,
+        "replacement": extended_replacement,
+        "context_after": "",
+        "rationale": f"{proposal.rationale} The detached uppercase plural suffix is included from the cited heading.",
+    })
 
 
 def apply_mechanical_fixes(markdown: str) -> tuple[str, dict[str, int]]:
@@ -779,6 +897,11 @@ def _changed_words(target: str, replacement: str) -> tuple[str, str]:
     while tail > 0 and not target[len(target) - tail].isspace():
         tail -= 1
     return target[head:len(target) - tail], replacement[head:len(replacement) - tail]
+
+
+def _alphanumeric_characters(text: str) -> str:
+    """Keep source letters and digits in order while ignoring visual spacing and punctuation."""
+    return "".join(character.casefold() for character in text if character.isalnum())
 
 
 def _inserts_space(target: str, replacement: str) -> bool:

@@ -164,12 +164,22 @@ class ProcessedBookPage(BaseModel):
 
 
 class ProcessedContentsEntry(BaseModel):
+    entry_id: str = ""
+    parent_entry_id: str | None = None
     level: int
     title: str
     processed_page_number: int
     source_page_number: int
     confidence: float
     review_required: bool
+    provenance: Literal[
+        "source_outline",
+        "processed_page_heading",
+        "section_path",
+        "source_outline_and_page_heading",
+        "source_outline_and_section_path",
+    ] = "source_outline"
+    source_outline_index: int | None = None
 
 
 class ProcessedBookResponse(BaseModel):

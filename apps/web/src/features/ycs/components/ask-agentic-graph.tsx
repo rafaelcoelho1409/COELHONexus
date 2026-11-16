@@ -276,7 +276,7 @@ export function YcsAskAgenticGraph({ turn }: { turn: AskTurn | null }) {
           ))}
         </fieldset>
 
-        <div className="mt-3 min-w-0 overflow-auto rounded-sm border border-border bg-background p-2">
+        <div className="mt-3 min-w-0 overflow-auto rounded-sm border border-border bg-background p-1">
           {mode === "graph" ? (
             <AskAgenticFlow nodes={nodes} onOpen={setSelectedId} />
           ) : (

@@ -9,6 +9,8 @@ export function ChapterTree({
   isExtracted,
   onOpenPage,
   pageLabels,
+  heading = "Chapters",
+  emptyMessage = "This book has no outline.",
 }: {
   tree: readonly ChapterNode[];
   activePage: number | null;
@@ -16,15 +18,17 @@ export function ChapterTree({
   isExtracted: (page: number) => boolean;
   onOpenPage: (page: number) => void;
   pageLabels?: ReadonlyMap<number, number>;
+  heading?: string;
+  emptyMessage?: string;
 }) {
   const activeChapter = activeChapterIndex(tree, activePage);
   return (
     <section aria-labelledby="chapters-title">
       <h3 id="chapters-title" className="mono-label">
-        Chapters
+        {heading}
       </h3>
       {tree.length === 0 ? (
-        <p className="mt-2 text-sm text-muted-foreground">This book has no outline.</p>
+        <p className="mt-2 text-sm text-muted-foreground">{emptyMessage}</p>
       ) : (
         <ol className="mt-2 max-h-64 overflow-auto">
           {tree.map((chapter, index) => {

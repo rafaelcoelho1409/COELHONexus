@@ -31,28 +31,29 @@ const TEXT_WIDTH: Record<ReaderLayout["width"], string> = {
 
 export function BookReadingMode({
   title,
-  unitLabel,
   position,
-  page,
-  previousPage,
-  nextPage,
+  positionKey,
+  hasPrevious,
+  hasNext,
   navigation,
   outline,
   layout,
   onLayout,
   startId,
-  onPage,
+  onPrevious,
+  onNext,
   onSearch,
   onExit,
+  embedded = false,
   children,
 }: {
   title: string;
-  unitLabel: string;
-  /** Where the page is in the book: "3 / 275". */
+  /** Where the page is in the book, including generated front matter. */
   position: string;
-  page: number;
-  previousPage: number | null;
-  nextPage: number | null;
+  /** Changes for either a source-backed page or a generated contents page. */
+  positionKey: string;
+  hasPrevious: boolean;
+  hasNext: boolean;
   /** The chapters and the page list, for the left column. */
   navigation: ReactNode;
   /** "On this page", for the right column; null when the page has none. */
@@ -61,15 +62,18 @@ export function BookReadingMode({
   onLayout: (patch: Partial<ReaderLayout>) => void;
   /** The heading the reader was at on the page: the window opens there. */
   startId: string | null;
-  onPage: (page: number) => void;
+  onPrevious: () => void;
+  onNext: () => void;
   onSearch: () => void;
   onExit: () => void;
+  /** Render inside the BD Pages workspace instead of over the whole app. */
+  embedded?: boolean;
   children: ReactNode;
 }) {
   const ref = useModalDialog();
   const titleId = useId();
   const [scroller, setScroller] = useState<HTMLElement | null>(null);
-  const previousPageRef = useRef(page);
+  const previousPageRef = useRef(positionKey);
   const openedAt = useRef(startId);
 
   // Open where the reader was, with the text focused so the arrow and page keys scroll it.
@@ -80,13 +84,123 @@ export function BookReadingMode({
 
   // Another page starts at its top.
   useEffect(() => {
-    if (previousPageRef.current === page) return;
-    previousPageRef.current = page;
+    if (previousPageRef.current === positionKey) return;
+    previousPageRef.current = positionKey;
     scroller?.scrollTo?.({ top: 0 });
-  }, [page, scroller]);
+  }, [positionKey, scroller]);
 
   const wide = layout.width === "wide";
   const hasOutline = outline !== null;
+  const showContents = embedded || layout.readingContents;
+
+  const reader = (
+    <div className="flex h-full min-h-0 flex-col">
+      <header className="relative flex shrink-0 items-center gap-1 border-b border-border px-2 py-1.5 sm:gap-2 sm:px-3">
+        <BookReadingProgress scroller={scroller} className="absolute inset-x-0 -bottom-px z-10 h-0.5" />
+        {!embedded ? (
+          <ActionButton
+            iconOnly
+            className="hidden md:inline-flex"
+            aria-expanded={layout.readingContents}
+            aria-label={layout.readingContents ? "Hide contents" : "Show contents"}
+            title={layout.readingContents ? "Hide contents" : "Show contents"}
+            onClick={() => onLayout({ readingContents: !layout.readingContents })}
+          >
+            {layout.readingContents ? <PanelLeftClose aria-hidden /> : <PanelLeftOpen aria-hidden />}
+          </ActionButton>
+        ) : null}
+        <div className="min-w-0 flex-1 px-1">
+          <h2 id={titleId} className="truncate text-sm font-medium">
+            {title}
+          </h2>
+          <p className="text-xs text-muted-foreground">{position}</p>
+        </div>
+        <ActionButton
+          iconOnly
+          aria-label="Previous page"
+          title="Previous page"
+          disabled={!hasPrevious}
+          onClick={onPrevious}
+        >
+          <ChevronLeft aria-hidden />
+        </ActionButton>
+        <ActionButton iconOnly aria-label="Next page" title="Next page" disabled={!hasNext} onClick={onNext}>
+          <ChevronRight aria-hidden />
+        </ActionButton>
+        <ActionButton iconOnly aria-label="Search this book" title="Search this book" onClick={onSearch}>
+          <Search aria-hidden />
+        </ActionButton>
+        {!embedded ? (
+          <ActionButton
+            className="hidden sm:inline-flex"
+            aria-pressed={wide}
+            title="Let the text run across most of the screen"
+            onClick={() => onLayout({ width: wide ? "comfortable" : "wide" })}
+          >
+            <MoveHorizontal aria-hidden />
+            Wide
+          </ActionButton>
+        ) : null}
+        {!embedded && hasOutline ? (
+          <ActionButton
+            iconOnly
+            className="hidden lg:inline-flex"
+            aria-expanded={layout.readingOutline}
+            aria-label={layout.readingOutline ? "Hide outline" : "Show outline"}
+            title={layout.readingOutline ? "Hide outline" : "Show outline"}
+            onClick={() => onLayout({ readingOutline: !layout.readingOutline })}
+          >
+            {layout.readingOutline ? <PanelRightClose aria-hidden /> : <PanelRightOpen aria-hidden />}
+          </ActionButton>
+        ) : null}
+        {!embedded ? (
+          <ActionButton aria-label="Exit reading mode" onClick={onExit}>
+            <Minimize2 aria-hidden />
+            <span className="hidden sm:inline">Exit</span>
+          </ActionButton>
+        ) : null}
+      </header>
+
+      <div className={`flex min-h-0 flex-1 ${embedded ? "flex-col md:flex-row" : ""}`}>
+        {showContents ? (
+          <aside
+            className={
+              embedded
+                ? "max-h-40 shrink-0 overflow-y-auto border-b border-border p-3 md:max-h-none md:w-72 md:border-b-0 md:border-r"
+                : "hidden w-72 shrink-0 overflow-y-auto border-r border-border p-3 md:block"
+            }
+          >
+            {navigation}
+          </aside>
+        ) : null}
+        <section
+          ref={setScroller}
+          // biome-ignore lint/a11y/noNoninteractiveTabindex: the reading area scrolls, so keyboard users must be able to focus it (WCAG 2.1.1)
+          tabIndex={0}
+          aria-label="Book text"
+          className="min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain focus-visible:-outline-offset-2 focus-visible:outline-2 focus-visible:outline-ring"
+        >
+          <div className={`mx-auto px-5 py-8 sm:px-8 ${TEXT_WIDTH[layout.width]}`}>{children}</div>
+        </section>
+        {!embedded && layout.readingOutline && hasOutline ? (
+          <aside className="hidden w-64 shrink-0 overflow-y-auto border-l border-border p-3 lg:block">
+            {outline}
+          </aside>
+        ) : null}
+      </div>
+    </div>
+  );
+
+  if (embedded) {
+    return (
+      <section
+        aria-labelledby={titleId}
+        className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background text-foreground"
+      >
+        {reader}
+      </section>
+    );
+  }
 
   return (
     <dialog
@@ -98,97 +212,7 @@ export function BookReadingMode({
       }}
       className="fixed inset-0 m-0 h-dvh max-h-none w-dvw max-w-none overflow-hidden border-0 bg-background p-0 text-foreground"
     >
-      <div className="flex h-full flex-col">
-        <header className="relative flex shrink-0 items-center gap-1 border-b border-border px-2 py-1.5 sm:gap-2 sm:px-3">
-          <BookReadingProgress scroller={scroller} className="absolute inset-x-0 -bottom-px z-10 h-0.5" />
-          <ActionButton
-            iconOnly
-            className="hidden md:inline-flex"
-            aria-expanded={layout.readingContents}
-            aria-label={layout.readingContents ? "Hide contents" : "Show contents"}
-            title={layout.readingContents ? "Hide contents" : "Show contents"}
-            onClick={() => onLayout({ readingContents: !layout.readingContents })}
-          >
-            {layout.readingContents ? <PanelLeftClose aria-hidden /> : <PanelLeftOpen aria-hidden />}
-          </ActionButton>
-          <div className="min-w-0 flex-1 px-1">
-            <h2 id={titleId} className="truncate text-sm font-medium">
-              {title}
-            </h2>
-            <p className="text-xs text-muted-foreground">
-              {unitLabel} {position}
-            </p>
-          </div>
-          <ActionButton
-            iconOnly
-            aria-label="Previous page"
-            title="Previous page"
-            disabled={previousPage === null}
-            onClick={() => previousPage !== null && onPage(previousPage)}
-          >
-            <ChevronLeft aria-hidden />
-          </ActionButton>
-          <ActionButton
-            iconOnly
-            aria-label="Next page"
-            title="Next page"
-            disabled={nextPage === null}
-            onClick={() => nextPage !== null && onPage(nextPage)}
-          >
-            <ChevronRight aria-hidden />
-          </ActionButton>
-          <ActionButton iconOnly aria-label="Search this book" title="Search this book" onClick={onSearch}>
-            <Search aria-hidden />
-          </ActionButton>
-          <ActionButton
-            className="hidden sm:inline-flex"
-            aria-pressed={wide}
-            title="Let the text run across most of the screen"
-            onClick={() => onLayout({ width: wide ? "comfortable" : "wide" })}
-          >
-            <MoveHorizontal aria-hidden />
-            Wide
-          </ActionButton>
-          {hasOutline ? (
-            <ActionButton
-              iconOnly
-              className="hidden lg:inline-flex"
-              aria-expanded={layout.readingOutline}
-              aria-label={layout.readingOutline ? "Hide outline" : "Show outline"}
-              title={layout.readingOutline ? "Hide outline" : "Show outline"}
-              onClick={() => onLayout({ readingOutline: !layout.readingOutline })}
-            >
-              {layout.readingOutline ? <PanelRightClose aria-hidden /> : <PanelRightOpen aria-hidden />}
-            </ActionButton>
-          ) : null}
-          <ActionButton aria-label="Exit reading mode" onClick={onExit}>
-            <Minimize2 aria-hidden />
-            <span className="hidden sm:inline">Exit</span>
-          </ActionButton>
-        </header>
-
-        <div className="flex min-h-0 flex-1">
-          {layout.readingContents ? (
-            <aside className="hidden w-72 shrink-0 overflow-y-auto border-r border-border p-3 md:block">
-              {navigation}
-            </aside>
-          ) : null}
-          <section
-            ref={setScroller}
-            // biome-ignore lint/a11y/noNoninteractiveTabindex: the reading area scrolls, so keyboard users must be able to focus it (WCAG 2.1.1)
-            tabIndex={0}
-            aria-label="Book text"
-            className="min-w-0 flex-1 overflow-y-auto overscroll-contain focus-visible:-outline-offset-2 focus-visible:outline-2 focus-visible:outline-ring"
-          >
-            <div className={`mx-auto px-5 py-8 sm:px-8 ${TEXT_WIDTH[layout.width]}`}>{children}</div>
-          </section>
-          {layout.readingOutline && hasOutline ? (
-            <aside className="hidden w-64 shrink-0 overflow-y-auto border-l border-border p-3 lg:block">
-              {outline}
-            </aside>
-          ) : null}
-        </div>
-      </div>
+      {reader}
     </dialog>
   );
 }

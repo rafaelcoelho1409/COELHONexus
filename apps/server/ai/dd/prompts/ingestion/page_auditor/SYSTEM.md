@@ -58,7 +58,8 @@ For `duplicate_boilerplate` and `duplicate_section`, `evidence` is one copy and 
 - GitBook template blocks and content inside them (`{% stepper %}`, `{% step %}`, `{% tab %}`, `{% columns %}`, `{% column %}`, `{% file %}`, `{% code %}`, `{% embed %}`, and their matching end tags). These are intentional export syntax, including when a heading appears inside a step or tab.
 - Repeated GitBook markers by themselves (`{% code %}`, `{% endcode %}`, `{% step %}`, `{% endstep %}`, `{% columns %}`, `{% endcolumns %}`) are structural syntax, not duplicate page content.
 - Repeated descriptions under separate Sphinx autodoc terms (functions, methods, attributes, exceptions or classes) are scoped to those entries. Keep them when each term needs the same behavior or exception documented.
-- Repeated parameter descriptions under separate source-linked API entries are scoped to those entries. Keep them when each entry documents its own class or method.
+- Repeated parameter descriptions under distinct API class, function or method entries are scoped to those entries, even when the export has no source links. Keep them and do not label them as formatting defects. If the same parameter block is repeated within one API entry, report it only as `duplicate_section`, with both exact copies as `evidence` and `other_evidence`.
+- A prerequisite repeated immediately before separate commands or actions in an ordered procedure can be operational context for each step. Keep it when each repetition guards the step that follows; report it only when it is detached furniture or duplicated within the same step.
 - The same “usage example” link under different integration headings is contextual. A “featured” or “top” table overlapping an “all” table is an intentional subset, not a duplicate section.
 - Code examples that share a template but vary one or more model configurations are provider variants. Keep each when it demonstrates a supported model choice.
 - An indented continuation line under a numbered or bulleted list item is valid Markdown wrapping, not a broken list.
@@ -72,6 +73,7 @@ For `duplicate_boilerplate` and `duplicate_section`, `evidence` is one copy and 
 - Punctuation such as a colon in a valid ATX heading (`## Step 1: Read the guide`) is ordinary heading text. Backslash-escaped identifiers inside headings still render literally.
 - Bold or other inline emphasis inside a valid ATX heading is valid Markdown; do not label it malformed or inconsistent.
 - Backslash-escaped underscores in model names, quantization labels, filenames and similar identifiers (for example, `IQ1\\_S`) render as literal underscores and are valid Markdown.
+- A trailing backslash before a prose line ending is a valid Markdown hard line break. Upstream exporters can also preserve repeated backslash markers; a difference in their count alone does not prove a rendering defect. Report one only when the supplied Markdown itself shows a concrete broken structure or stray literal character, not a speculative rendering difference.
 - Anything inside a code fence or console output, including a commented-out line (`# ws.delete_project(...)`), its escapes, quotes and line length. Code is content.
 - A `---` line at the very top of the page, before the anchor or first heading: it is the separator the bundle was split on, not front matter.
 - Stored page images at `/api/v1/dd/ingestion/<slug>/artifacts/<path>`: valid references. Report an image only when its Markdown syntax is malformed.
@@ -80,6 +82,7 @@ For `duplicate_boilerplate` and `duplicate_section`, `evidence` is one copy and 
 ## Evidence and calibration
 
 - `evidence` must be a concise, exact Markdown substring (under 250 characters when possible, never over 2,000). Quote the affected text once; explain it in `description`. Never paraphrase.
+- When a finding claims that two forms are inconsistent, its evidence must show both forms in context; one isolated form cannot prove a difference. For duplicate findings, use the two exact copies in `evidence` and `other_evidence` and confirm they belong to the same scope before reporting.
 - Match every character-specific claim in `description` to the exact characters in `evidence`. For example, evidence containing `\&` cannot support a claim about an escaped underscore; omit a finding when its cited text does not show the claimed defect.
 - Do not put a quoted source literal in `description` unless those exact characters appear in `evidence`. If the source excerpt is insufficient to prove a character-level claim, omit it.
 - Keep descriptions factual: say what is wrong and how it affects this page. Do not prescribe a fix and do not claim the source is factually incorrect.

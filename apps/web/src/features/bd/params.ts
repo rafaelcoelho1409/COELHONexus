@@ -49,6 +49,9 @@ export const BOOK_SEARCH_BATCH_SIZE = 8;
 export const BOOK_SEARCH_MAX_HITS = 30;
 export const BOOK_SEARCH_STALE_MS = 60_000;
 
+/** Generated contents shown before the source-backed pages of the processed-book reader. */
+export const CONTENTS_ENTRIES_PER_PAGE = 32;
+
 /** A cancel lands between 5-page slices; measured on a real 314-page book, that took 15–95 s (a slice of
  * table-of-contents pages took 96 s). The UI stops saying "Cancelling…" after this long even if the terminal event
  * has not arrived; the stream stays connected, so the event is still applied when it comes. */

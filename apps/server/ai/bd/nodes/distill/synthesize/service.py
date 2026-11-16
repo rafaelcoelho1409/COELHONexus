@@ -440,7 +440,11 @@ async def prepare_chapters(
                 "title": title,
                 "first_page": first_page,
                 "last_page": last_page,
-                "section_path": [title],
+                "section_path": chapter.get("section_path")
+                if isinstance(chapter.get("section_path"), list)
+                and all(isinstance(item, str) for item in chapter["section_path"])
+                and chapter["section_path"]
+                else [title],
                 "refs": selected_refs,
             })
             assigned_unit_ids.update(ref["unit_id"] for ref in selected_refs)

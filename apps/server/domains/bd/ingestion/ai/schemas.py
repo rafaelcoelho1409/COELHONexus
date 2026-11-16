@@ -71,7 +71,7 @@ class ContentSelectionManifest(BaseModel):
 
     model_config = ConfigDict(extra = "forbid")
 
-    schema_version: Literal["1.0"] = "1.0"
+    schema_version: Literal["1.0", "1.1"] = "1.1"
     classifier_version: NonEmptyText
     book_id: SafeSegment
     extraction_run_id: SafeSegment
@@ -105,16 +105,26 @@ class ProcessedBookPage(BaseModel):
 
 
 class ProcessedContentsEntry(BaseModel):
-    """One reconciled contents item; source page identity is retained for citations and review."""
+    """One canonical contents item with hierarchy, page mapping, and source provenance."""
 
     model_config = ConfigDict(extra = "forbid")
 
+    entry_id: str = Field(default = "", max_length = 64)
+    parent_entry_id: str | None = Field(default = None, max_length = 64)
     level: int = Field(ge = 1, le = 8, strict = True)
     title: NonEmptyText = Field(max_length = 300)
     processed_page_number: int = Field(gt = 0, strict = True)
     source_page_number: int = Field(gt = 0, strict = True)
     confidence: float = Field(ge = 0, le = 1, allow_inf_nan = False)
     review_required: bool = False
+    provenance: Literal[
+        "source_outline",
+        "processed_page_heading",
+        "section_path",
+        "source_outline_and_page_heading",
+        "source_outline_and_section_path",
+    ] = "source_outline"
+    source_outline_index: int | None = Field(default = None, ge = 0, strict = True)
 
 
 class ProcessedBookManifest(BaseModel):
@@ -153,6 +163,17 @@ class ProcessedBookManifest(BaseModel):
             raise ValueError("contents entries must point to included source pages")
         if any(page_map[entry.source_page_number] != entry.processed_page_number for entry in self.contents):
             raise ValueError("contents page numbers must match the processed page map")
+        entries_by_id = {}
+        for entry in self.contents:
+            if not entry.entry_id:
+                continue
+            if entry.entry_id in entries_by_id:
+                raise ValueError("contents entry identifiers must be unique")
+            if entry.parent_entry_id is not None:
+                parent = entries_by_id.get(entry.parent_entry_id)
+                if parent is None or parent.level >= entry.level:
+                    raise ValueError("contents parent identifiers must refer to an earlier, higher-level entry")
+            entries_by_id[entry.entry_id] = entry
         return self
 
 

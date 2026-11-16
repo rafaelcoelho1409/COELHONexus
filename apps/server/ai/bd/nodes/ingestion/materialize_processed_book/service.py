@@ -72,10 +72,7 @@ async def materialize_processed_book(
             "source_key": reference.get("key"),
             "source_sha256": result.get("source_sha256"),
         })
-    source_manifest = {
-        "pages": state["source_page_refs"],
-        "outline": state.get("source_outline", []),
-    }
+    source_manifest = {"pages": state["source_page_refs"]}
     candidate = await domains.bd.ingestion.ai.processed_book.service.make_candidate(
         source_manifest,
         selection,

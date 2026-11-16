@@ -17,7 +17,7 @@ from langchain_openai import ChatOpenAI
 
 
 def contents_reconciler(model = None):
-    """Build a read-only structured agent; application code validates every chosen page candidate."""
+    """Build a read-only resolver for ambiguous matches; application code validates every page choice."""
     if model is None:
         model = domains.settings.chat.service.build_chat_model(
             max_tokens = 5000,

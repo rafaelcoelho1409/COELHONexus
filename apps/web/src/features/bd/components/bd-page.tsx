@@ -19,7 +19,13 @@ export function BookPagesPage() {
 function BookDistillerWorkspace({ view }: { view: "pipeline" | "materials" }) {
   return (
     <BdOverlaysProvider>
-      <div className="mx-auto w-full max-w-6xl p-4">
+      <div
+        className={
+          view === "materials"
+            ? "bd-pages-workspace flex min-h-0 flex-1 flex-col"
+            : "mx-auto w-full max-w-6xl p-4"
+        }
+      >
         <Suspense fallback={<p className="text-sm text-muted-foreground">Loading…</p>}>
           <IngestionStage view={view} />
         </Suspense>

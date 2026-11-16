@@ -67,6 +67,7 @@ async def prepare_units(
         raise ValueError("the ingestion QA page count does not match the Distill run")
 
     selection_by_page = None
+    processed_structure = None
     if state.get("content_selection_key"):
         selection_content = await storage.read_text(state["content_selection_key"])
         if hashlib.sha256(selection_content.encode("utf-8")).hexdigest() != state["content_selection_sha256"]:
@@ -103,6 +104,10 @@ async def prepare_units(
             (item.source_page_number, item.processed_page_number)
             for item in processed_book.pages
         ]
+        processed_structure = domains.bd.distill.domain.processed_contents_structure(
+            [item.model_dump(mode = "json") for item in processed_book.contents],
+            [item.model_dump(mode = "json") for item in processed_book.pages],
+        )
     else:
         selected_pages = [
             page for page in qa_manifest.pages
@@ -138,9 +143,12 @@ async def prepare_units(
         raw_page = page_by_number.get(qa_page.page_number)
         if raw_page is None:
             raise ValueError(f"source manifest has no page {qa_page.page_number}")
-        section_path = raw_page.get("section_path")
-        if not isinstance(section_path, list) or not all(isinstance(item, str) for item in section_path):
-            section_path = []
+        if processed_structure is not None:
+            section_path = processed_structure[0].get(source_page_number, [])
+        else:
+            section_path = raw_page.get("section_path")
+            if not isinstance(section_path, list) or not all(isinstance(item, str) for item in section_path):
+                section_path = []
         source_page = {
             "page_number": qa_page.page_number,
             "processed_page_number": processed_page_number,
@@ -196,20 +204,24 @@ async def prepare_units(
     return {
         "source_pages": source_pages,
         "unit_refs": unit_refs,
-        "source_chapters": [
-            {
-                "title": chapter["title"],
-                "first_page": chapter["first_page"],
-                "last_page": chapter["last_page"],
-            }
-            for chapter in source_manifest.get("chapters", [])
-            if isinstance(chapter, dict)
-            and isinstance(chapter.get("title"), str)
-            and type(chapter.get("first_page")) is int
-            and type(chapter.get("last_page")) is int
-            and chapter["first_page"] > 0
-            and chapter["last_page"] >= chapter["first_page"]
-        ],
+        "source_chapters": (
+            processed_structure[1]
+            if processed_structure is not None
+            else [
+                {
+                    "title": chapter["title"],
+                    "first_page": chapter["first_page"],
+                    "last_page": chapter["last_page"],
+                }
+                for chapter in source_manifest.get("chapters", [])
+                if isinstance(chapter, dict)
+                and isinstance(chapter.get("title"), str)
+                and type(chapter.get("first_page")) is int
+                and type(chapter.get("last_page")) is int
+                and chapter["first_page"] > 0
+                and chapter["last_page"] >= chapter["first_page"]
+            ]
+        ),
         "title": str(source_manifest.get("title") or source_manifest.get("filename") or "Learning Guide"),
     }
 

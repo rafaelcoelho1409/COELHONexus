@@ -345,7 +345,7 @@ async def update_agentic_content_selection(
     response_model = schemas.ProcessedBookResponse,
 )
 async def get_processed_book(book_id: str, agentic_run_id: str) -> dict:
-    """Read selected pages with compact numbering and the reconciled contents map."""
+    """Read selected pages with compact numbering and the canonical contents tree."""
     try:
         async with infra.redis.service.client() as redis:
             async with redis.lock(

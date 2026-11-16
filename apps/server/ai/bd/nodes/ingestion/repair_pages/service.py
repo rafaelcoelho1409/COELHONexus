@@ -9,6 +9,7 @@ import base64
 import hashlib
 import inspect
 import json
+import logging
 from collections.abc import Awaitable, Callable, Coroutine, Iterable
 from typing import Any, Protocol
 
@@ -18,6 +19,7 @@ from pydantic import ValidationError
 
 PageReader = Callable[[str], str | None | Awaitable[str | None]]
 ArtifactWriter = Callable[[str, str, str], Any]
+logger = logging.getLogger(__name__)
 
 
 class Specialist(Protocol):
@@ -96,14 +98,14 @@ async def verify_source_patches(
     run_id: str,
     verifier: PatchVerifier | None,
     read_source_page_image: graphs.ingestion.entities.SourcePageImageReader | None,
-) -> tuple[set[str], list[dict[str, object]], list[str], int]:
+) -> tuple[set[str], dict[str, str], list[dict[str, object]], list[str], int]:
     """Confirm eligible corrections against the original page image; any doubt leaves text unchanged."""
     candidates = domain.source_verification_candidates(markdown, proposals)
     if not candidates:
-        return set(), [], [], 0
+        return set(), {}, [], [], 0
 
-    def unavailable(reason: str) -> tuple[set[str], list[dict[str, object]], list[str], int]:
-        return set(), [{
+    def unavailable(reason: str) -> tuple[set[str], dict[str, str], list[dict[str, object]], list[str], int]:
+        return set(), {}, [{
             "issue_id": proposal.issue_id,
             "status": "unavailable",
             "reason": reason,
@@ -217,6 +219,12 @@ async def verify_source_patches(
                             validation_reason(error) if isinstance(error, ValidationError) else str(error),
                         )
         except Exception as error:
+            logger.exception(
+                "[bd-page-repair] visual verifier failed page=%d issue_ids=%s error_type=%s",
+                page_number,
+                [proposal.issue_id for proposal in batch_candidates],
+                type(error).__name__,
+            )
             reason = f"visual verifier failed ({type(error).__name__})"
             failed_checks.update({proposal.issue_id: reason for proposal in batch_candidates})
             return
@@ -238,6 +246,7 @@ async def verify_source_patches(
     await verify_with_recovery(candidates)
 
     verified_issue_ids = set()
+    verified_replacements: dict[str, str] = {}
     results = []
     for proposal in candidates:
         if proposal.issue_id in failed_checks:
@@ -269,8 +278,19 @@ async def verify_source_patches(
             status = "source_mismatch"
             reason = "The literal source reading matches the extracted text, so the proposed correction was not applied."
         elif check.verdict == agents.schemas.PatchVerificationVerdict.CONTRADICTED:
-            status = "source_mismatch"
-            reason = check.reason
+            source_replacement = domain.source_reading_replacement(
+                proposal,
+                check.source_reading,
+                markdown,
+            )
+            if source_replacement is not None:
+                verified_issue_ids.add(proposal.issue_id)
+                verified_replacements[proposal.issue_id] = source_replacement
+                status = "source_reading_applied"
+                reason = "The exact source reading supplied a minimal replacement with the visible punctuation and spacing."
+            else:
+                status = "source_mismatch"
+                reason = check.reason
         elif check.verdict == agents.schemas.PatchVerificationVerdict.CONFIRMED:
             status = "reading_mismatch"
             reason = check.reason
@@ -284,6 +304,8 @@ async def verify_source_patches(
             "source_verdict": check.verdict.value,
             "target_focus": target_focus,
             "replacement_focus": replacement_focus,
+            "candidate_replacement": proposal.replacement,
+            "applied_replacement": verified_replacements.get(proposal.issue_id),
             "reason": reason,
             "source_image_sha256": image_sha256,
         })
@@ -300,7 +322,7 @@ async def verify_source_patches(
         warnings.append(
             f"{rejected_count} text patch candidate(s) were left unchanged because the source image did not confirm them."
         )
-    return verified_issue_ids, results, warnings, unavailable_count
+    return verified_issue_ids, verified_replacements, results, warnings, unavailable_count
 
 
 async def repair_pages(
@@ -464,7 +486,13 @@ async def repair_pages(
             proposals = [proposal for batch, _, _, _ in responses for proposal in batch]
             audit_warnings = list(audits[page_number].get("warnings", []))
             errors = [error for _, error, _, _ in responses if error]
-            source_verified_ids, source_verification_results, source_verification_warnings, source_verification_unavailable_count = (
+            (
+                source_verified_ids,
+                source_verified_replacements,
+                source_verification_results,
+                source_verification_warnings,
+                source_verification_unavailable_count,
+            ) = (
                 await verify_source_patches(
                     proposals,
                     markdown = markdown,
@@ -474,6 +502,18 @@ async def repair_pages(
                     read_source_page_image = read_source_page_image,
                 )
             )
+            if source_verified_replacements:
+                proposals = [
+                    proposal.model_copy(update = {
+                        "replacement": source_verified_replacements[proposal.issue_id],
+                        "rationale": (
+                            f"{proposal.rationale} The exact source-page reading supplied the applied punctuation and spacing."
+                        ),
+                    })
+                    if proposal.issue_id in source_verified_replacements
+                    else proposal
+                    for proposal in proposals
+                ]
             audit_warnings.extend(source_verification_warnings)
             if oversized:
                 errors.append(

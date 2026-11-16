@@ -1340,7 +1340,6 @@ async def run_ingestion_ai(
     structure_repair: Any | None = None,
     metadata_normalizer: Any | None = None,
     content_classifier: Any | None = None,
-    contents_reconciler: Any | None = None,
     finding_verifier: Any | None = None,
     patch_verifier: Any | None = None,
     checkpointer: Any | None = None,
@@ -1579,8 +1578,6 @@ async def run_ingestion_ai(
             metadata_normalizer = ai.bd.agents.ingestion.metadata_normalizer.agent.metadata_normalizer()
         if content_classifier is None:
             content_classifier = ai.bd.agents.ingestion.content_classifier.agent.content_classifier()
-        if contents_reconciler is None:
-            contents_reconciler = ai.bd.agents.ingestion.contents_reconciler.agent.contents_reconciler()
 
         async def write_artifact(key: str, content: str, content_type: str) -> None:
             if execution_check is not None:
@@ -1633,7 +1630,6 @@ async def run_ingestion_ai(
             "run_created_at": now,
             "expected_page_count": len(source_page_refs),
             "source_page_refs": source_page_refs,
-            "source_outline": source_manifest.get("outline", []) if isinstance(source_manifest.get("outline"), list) else [],
             "page_refs": [],
             "page_audits": [],
             "work_items": [],
@@ -1650,7 +1646,6 @@ async def run_ingestion_ai(
             specialists = {"text_repair": text_repair, "structure": structure_repair},
             metadata_normalizer = metadata_normalizer,
             content_classifier = content_classifier,
-            contents_reconciler = contents_reconciler,
             progress_callback = report_progress,
             cancel_check = check_cancel_requested if cancel_check is not None else None,
             finding_verifier = finding_verifier,

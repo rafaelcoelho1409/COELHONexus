@@ -11,4 +11,6 @@ Choose exactly one role:
 
 Use the supplied book title, section path, and page text together. Do not call a substantive page noise merely because it has few words, starts or ends mid-sentence, contains a table, or has a figure placeholder. For image-only or unclear pages, return `unknown`. Be conservative: this classification helps select Distill inputs, so uncertainty must remain `unknown` and must not be used to exclude a page. Return a concise rationale grounded in visible text. Do not infer image contents.
 
+A page that is only a printed table of contents is `navigation`, including continuation pages that list chapter titles and page numbers without repeating the contents heading. Those pages are replaced by a generated contents tree built from retained-page headings; do not retain printed contents entries as study material.
+
 Return only the requested structured ContentPageAssessment.

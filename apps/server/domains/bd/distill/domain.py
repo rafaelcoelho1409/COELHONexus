@@ -14,6 +14,7 @@ from pydantic import ValidationError
 from . import entities, params, schemas
 
 _WHITESPACE_RE = re.compile(r"\s+")
+_DISTILL_CHAPTER_HEADING = re.compile(r"^(?:chapter|appendix)\s+", re.I)
 _BOOK_SYNTHESIS_OUTPUT_ALIASES = {"connections": "cross_chapter_connections"}
 _BOOK_SYNTHESIS_OUTPUT_ITEMS = {
     "key_takeaways": "Key takeaway",
@@ -357,6 +358,78 @@ def group_by_section(
         path = tuple(part.strip() for part in ref["section_path"] if part.strip()) or ("Unassigned material",)
         groups.setdefault(path, []).append(ref)
     return sorted(groups.items(), key = lambda item: min(ref["page_number"] for ref in item[1]))
+
+
+def processed_contents_structure(
+    contents: list[dict[str, Any]],
+    pages: list[dict[str, Any]],
+) -> tuple[dict[int, list[str]], list[dict[str, Any]]]:
+    """Derive Distill section paths and chapter ranges from the displayed processed-book contents."""
+    page_rows = sorted(
+        (
+            page for page in pages
+            if type(page.get("source_page_number")) is int
+            and type(page.get("processed_page_number")) is int
+        ),
+        key = lambda page: page["processed_page_number"],
+    )
+    if not page_rows:
+        return {}, []
+
+    entries = [
+        (index, entry) for index, entry in enumerate(contents)
+        if isinstance(entry.get("title"), str)
+        and entry["title"].strip()
+        and type(entry.get("processed_page_number")) is int
+        and type(entry.get("source_page_number")) is int
+    ]
+    entries.sort(key = lambda row: (row[1]["processed_page_number"], row[0]))
+
+    stack: list[tuple[int, list[str]]] = []
+    events: list[tuple[int, list[str]]] = []
+    chapter_candidates: list[tuple[int, dict[str, Any], list[str]]] = []
+    for _, entry in entries:
+        requested_level = entry.get("level", 1)
+        level = max(1, min(requested_level if type(requested_level) is int else 1, 8))
+        while stack and stack[-1][0] >= level:
+            stack.pop()
+        path = [*stack[-1][1], entry["title"].strip()] if stack else [entry["title"].strip()]
+        stack.append((level, path))
+        processed_page_number = entry["processed_page_number"]
+        events.append((processed_page_number, path))
+        if level == 1 or _DISTILL_CHAPTER_HEADING.match(entry["title"].strip()):
+            chapter_candidates.append((entry["source_page_number"], entry, path))
+
+    section_paths: dict[int, list[str]] = {}
+    event_index = 0
+    active_path: list[str] = []
+    for page in page_rows:
+        while event_index < len(events) and events[event_index][0] <= page["processed_page_number"]:
+            active_path = events[event_index][1]
+            event_index += 1
+        section_paths[page["source_page_number"]] = list(active_path)
+
+    titled_chapters = [
+        row for row in chapter_candidates
+        if _DISTILL_CHAPTER_HEADING.match(row[1]["title"].strip())
+    ]
+    selected_chapters = titled_chapters or [row for row in chapter_candidates if row[1].get("level") == 1]
+    chapter_starts_by_page = {page: (entry, path) for page, entry, path in selected_chapters}
+    chapter_starts = sorted(chapter_starts_by_page.items())
+    last_source_page = max(page["source_page_number"] for page in page_rows)
+    chapters = []
+    for index, (first_page, (entry, path)) in enumerate(chapter_starts):
+        next_first_page = chapter_starts[index + 1][0] if index + 1 < len(chapter_starts) else None
+        last_page = next_first_page - 1 if next_first_page is not None else last_source_page
+        if last_page < first_page:
+            continue
+        chapters.append({
+            "title": entry["title"].strip(),
+            "section_path": path,
+            "first_page": first_page,
+            "last_page": min(last_page, last_source_page),
+        })
+    return section_paths, chapters
 
 
 def validate_synthesis_unit_ids(unit_ids: Iterable[str], available_ids: set[str]) -> list[str]:

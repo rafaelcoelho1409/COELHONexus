@@ -108,6 +108,9 @@ async def make_candidate(
         page_evidence = {
             "source_page_number": selected_page.page_number,
             "evidence": domain.heading_evidence(content, section_path),
+            "headings": domain.markdown_headings(content),
+            "section_path": section_path,
+            "role": selected_page.role,
         }
         return page, page_evidence
 
@@ -117,28 +120,6 @@ async def make_candidate(
     ))
     pages = [page for page, _ in built_pages]
     evidence = [page_evidence for _, page_evidence in built_pages]
-    raw_outline = source_manifest.get("outline", [])
-    outline = [
-        item for item in raw_outline
-        if isinstance(item, dict)
-        and isinstance(item.get("title"), str)
-        and item["title"].strip()
-        and type(item.get("page")) is int
-        and item["page"] > 0
-        and item["page"] <= selection.expected_page_count
-    ] if isinstance(raw_outline, list) else []
-    if not outline:
-        seen = set()
-        for page in evidence:
-            for level, title in enumerate(page["evidence"], start = 1):
-                title_key = title.casefold().strip()
-                if title_key and title_key not in seen:
-                    seen.add(title_key)
-                    outline.append({
-                        "level": min(level, 8),
-                        "title": title,
-                        "page": page["source_page_number"],
-                    })
     return schemas.ProcessedBookCandidate(
         book_id = selection.book_id,
         extraction_run_id = selection.extraction_run_id,
@@ -148,7 +129,8 @@ async def make_candidate(
         selection_revision = selection.revision,
         expected_source_page_count = selection.expected_page_count,
         pages = pages,
-        contents_candidates = domain.contents_candidates(outline, evidence),
+        heading_candidates = domain.canonical_heading_candidates(evidence),
+        heading_candidates_built = True,
         created_at = time.time(),
     )
 
@@ -331,28 +313,15 @@ async def ensure_for_selection(
         qa_manifest.pages,
         storage,
     )
-    if current is not None:
-        prior_entries = [item.model_dump(mode = "json") for item in current[0].contents]
-        prior_status = current[0].contents_status
-        agent_version = current[0].contents_agent_version
-    else:
-        prior_entries = []
-        outline = source_manifest.get("outline", [])
-        if isinstance(outline, list):
-            prior_entries = [{
-                "level": item.get("level", 1),
-                "title": item.get("title", ""),
-                "source_page_number": item.get("page"),
-                "confidence": 0.25,
-                "review_required": True,
-            } for item in outline if isinstance(item, dict)]
-        prior_status = "needs_review"
-        agent_version = "legacy-source-outline"
-    mapped_contents, contents_status = domain.remap_contents(
-        prior_entries, [page.model_dump(mode = "json") for page in candidate.pages],
+    canonical_contents, contents_status = domain.build_canonical_contents(
+        [item.model_dump(mode = "json") for item in candidate.heading_candidates],
+        [page.model_dump(mode = "json") for page in candidate.pages],
     )
-    if prior_status != "complete":
-        contents_status = "needs_review" if mapped_contents else "unavailable"
     return await publish_manifest(
-        candidate, mapped_contents, contents_status, agent_version, storage, move_pointer = False,
+        candidate,
+        canonical_contents,
+        contents_status,
+        domains.bd.ingestion.ai.versions.CONTENTS_RECONCILER_VERSION,
+        storage,
+        move_pointer = False,
     )

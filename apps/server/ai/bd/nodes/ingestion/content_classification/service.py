@@ -126,6 +126,15 @@ async def classify_content(
                 rationale = "The ingestion quality audit classified this page as blank."
                 decision_source = "content_policy"
                 selected = "exclude"
+            elif domain.is_source_contents_page(markdown, source_ref.get("section_path", [])):
+                role = "navigation"
+                confidence = 1.0
+                rationale = (
+                    "This page contains the book's printed table of contents; the processed book generates a "
+                    "replacement contents tree."
+                )
+                decision_source = "content_policy"
+                selected = "exclude"
             elif page_kind == "image_only":
                 role = "unknown"
                 confidence = 0.0
@@ -196,11 +205,19 @@ async def classify_content(
     rows.sort(key = lambda page: page["page_number"])
     selected_count = sum(page["disposition"] == "include" for page in rows)
     if selected_count == 0:
-        for page in rows:
+        fallback_pages = [
+            page for page in rows
+            if page["role"] not in {"navigation", "legal", "noise"}
+        ]
+        if not fallback_pages:
+            raise ValueError(
+                "content classification found no substantive pages to keep after excluding navigation and non-book matter"
+            )
+        for page in fallback_pages:
             page.update(
                 disposition = "include",
                 decision_source = "conservative_fallback",
-                rationale = "No page met the conservative inclusion threshold; all pages were retained for review.",
+                rationale = "No page met the normal inclusion threshold; ambiguous substantive pages were retained for review.",
             )
 
     manifest = domains.bd.ingestion.ai.schemas.ContentSelectionManifest(

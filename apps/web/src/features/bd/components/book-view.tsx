@@ -5,6 +5,7 @@
  * in the rest and keeps it live. */
 
 import {
+  BookOpen,
   ChevronLeft,
   ChevronRight,
   Maximize2,
@@ -21,7 +22,7 @@ import { apiErrorMessage } from "@/shared/lib/api-error";
 import { useScrollSpy } from "@/shared/lib/use-scroll-spy";
 import { bookUnits, fmtBytes, isLive } from "../domain/books";
 import { chapterTree } from "../domain/outline";
-import { mergePages, neighbourReviewPage, pageFlags, shownPage } from "../domain/pages";
+import { mergePages, neighbourReviewPage, pageFlags } from "../domain/pages";
 import type { BookSnapshot } from "../entities";
 import { readRememberedPage, rememberPage } from "../hooks/remembered-page";
 import { useAgenticRun } from "../hooks/use-agentic-run";
@@ -42,18 +43,20 @@ import { useBookRun } from "../hooks/use-book-run";
 import { useBdOverlays } from "../hooks/use-overlays";
 import { usePageContent } from "../hooks/use-page-content";
 import { useReaderLayout } from "../hooks/use-reader-layout";
-import type { BookViewId } from "../params";
+import { CONTENTS_ENTRIES_PER_PAGE, type BookViewId } from "../params";
 import { ActionButton } from "./action-button";
 import { AgenticPipelineOverview, AgenticProgressBar, AgenticUsageSheet } from "./agentic-pipeline";
 import { BookReadingMode } from "./book-reading-mode";
 import { BookReadingProgress } from "./book-reading-progress";
 import { BookSearch } from "./book-search";
 import { ChapterTree } from "./chapter-tree";
+import { GeneratedContentsPage } from "./generated-contents-page";
 import { PageList } from "./page-list";
 import { PageOutline } from "./page-outline";
 import { PageReader } from "./page-reader";
 import { RunProgress } from "./run-progress";
 import { StatusChip } from "./status-chip";
+import { ToggleGroup } from "./toggle-group";
 
 /** The page's grid from 1024px up for each way of folding the two side columns (whole class names, so Tailwind sees them). */
 const COLUMNS = {
@@ -66,6 +69,18 @@ const COLUMNS = {
 /** A column that stays in view while the page scrolls, and scrolls on its own when it is taller than the screen. */
 const STICKY_COLUMN =
   "lg:sticky lg:top-[calc(var(--chrome-top)+1.5rem)] lg:max-h-[calc(100dvh-var(--chrome-top)-2.5rem)] lg:self-start lg:overflow-y-auto";
+const PAGES_NAV_OPTIONS = [
+  { id: "contents", label: "Contents" },
+  { id: "pages", label: "Processed pages" },
+] as const;
+
+type ReaderPosition = { kind: "contents"; index: number } | { kind: "page"; page: number };
+
+function sameReaderPosition(left: ReaderPosition, right: ReaderPosition): boolean {
+  if (left.kind !== right.kind) return false;
+  if (left.kind === "contents") return right.kind === "contents" && left.index === right.index;
+  return right.kind === "page" && left.page === right.page;
+}
 
 export function BookView({
   bookId,
@@ -81,18 +96,33 @@ export function BookView({
   const snapshot = useSnapshot(bookId);
   if (snapshot.isPending && !snapshot.data) {
     return (
-      <p role="status" className="text-sm text-muted-foreground">
+      <p
+        role="status"
+        className={
+          activeView === "materials"
+            ? "flex min-h-0 flex-1 items-center justify-center text-sm text-muted-foreground"
+            : "text-sm text-muted-foreground"
+        }
+      >
         Opening the book…
       </p>
     );
   }
   if (!snapshot.data) {
     return (
-      <section role="status" aria-live="polite" className="rounded-md border border-border bg-card p-4 text-sm">
+      <section
+        role="status"
+        aria-live="polite"
+        className={
+          activeView === "materials"
+            ? "flex min-h-0 flex-1 flex-col justify-center rounded-md border border-border bg-card p-4 text-sm"
+            : "rounded-md border border-border bg-card p-4 text-sm"
+        }
+      >
         <p className="font-medium text-foreground">The book could not be loaded right now.</p>
         <p className="mt-1 text-muted-foreground">
-          Its saved data may be temporarily unavailable while an Agentic AI run rebuilds it. The run can continue;
-          retry to load the latest book state.
+          Its saved data may be temporarily unavailable while an Agentic AI run rebuilds it. The run can
+          continue; retry to load the latest book state.
         </p>
         <p className="mt-1 text-muted-foreground">{apiErrorMessage(snapshot.error)}</p>
         <div className="mt-3">
@@ -200,6 +230,13 @@ function BookDetail({
         ? rows.map((row, index) => [row.page, index + 1] as const)
         : [],
   );
+  const contentsEntries =
+    activeView === "materials" && agentic.status === "done" ? (processedBook.data?.contents ?? []) : [];
+  const contentsPageCount = Math.ceil(contentsEntries.length / CONTENTS_ENTRIES_PER_PAGE);
+  const readerPositions: ReaderPosition[] = [
+    ...Array.from({ length: contentsPageCount }, (_, index) => ({ kind: "contents" as const, index })),
+    ...rows.map((item) => ({ kind: "page" as const, page: item.page })),
+  ];
   const extracted = new Set(rows.map((row) => row.page));
   const title = (state.title ?? manifest.title).trim() || manifest.filename;
   const nPages = state.nPages ?? manifest.n_pages;
@@ -216,35 +253,82 @@ function BookDetail({
       title: entry.title,
       page: entry.source_page_number,
     })) ?? [];
+  const processedChapters = processedOutline
+    .filter((entry) => entry.level === 1)
+    .map((entry, index, chapters) => {
+      const nextStartPage = chapters[index + 1]?.page;
+      const lastSourcePage = processedBook.data?.pages.at(-1)?.source_page_number ?? entry.page;
+      return {
+        title: entry.title,
+        first_page: entry.page,
+        last_page: Math.max(entry.page, (nextStartPage ?? lastSourcePage + 1) - 1),
+      };
+    });
   const tree =
-    activeView === "materials" && processedBook.data && processedOutline.length > 0
-      ? chapterTree([], processedOutline)
+    activeView === "materials" && agentic.status === "done"
+      ? processedBook.data
+        ? chapterTree(processedChapters, processedOutline)
+        : []
       : originalTree;
 
   // Follow the newest page while the run is live when the book is opened; a reader's own choice turns it off.
-  const [view, setView] = useState<{ follow: boolean; picked: number | null }>(() => {
+  const [view, setView] = useState<{ follow: boolean; picked: ReaderPosition | null }>(() => {
     const remembered = live ? null : readRememberedPage(bookId, manifest.n_pages);
     const cited =
       initialPage !== null && rows.some((candidate) => candidate.page === initialPage) ? initialPage : null;
+    const rememberedPage =
+      remembered !== null && rows.some((candidate) => candidate.page === remembered) ? remembered : null;
+    const sourcePage = cited ?? rememberedPage;
     return {
-      follow: live && cited === null,
+      follow: live && sourcePage === null,
       picked:
-        cited ??
-        (remembered !== null && rows.some((candidate) => candidate.page === remembered) ? remembered : null),
+        sourcePage !== null
+          ? { kind: "page", page: sourcePage }
+          : activeView === "materials" && !live
+            ? { kind: "contents", index: 0 }
+            : null,
     };
   });
-  const page = shownPage(view, view.follow ? (rows.at(-1)?.page ?? state.newest) : state.newest, rows);
+  const requestedPosition = view.follow ? null : view.picked;
+  const fallbackSourcePage = rows.at(-1)?.page ?? state.newest;
+  const fallbackPosition: ReaderPosition | null = view.follow
+    ? fallbackSourcePage === null
+      ? null
+      : { kind: "page", page: fallbackSourcePage }
+    : (readerPositions[0] ?? null);
+  const requestedPositionAvailable =
+    requestedPosition !== null &&
+    readerPositions.some((candidate) => sameReaderPosition(candidate, requestedPosition));
+  const pendingContentsPosition =
+    activeView === "materials" &&
+    agentic.status === "done" &&
+    processedBook.isPending &&
+    requestedPosition?.kind === "contents"
+      ? requestedPosition
+      : null;
+  const currentPosition = requestedPositionAvailable
+    ? requestedPosition
+    : (pendingContentsPosition ?? fallbackPosition);
+  const page = currentPosition?.kind === "page" ? currentPosition.page : null;
+  const contentsPageIndex = currentPosition?.kind === "contents" ? currentPosition.index : null;
+  const showingContents = contentsPageIndex !== null;
   const row = rows.find((candidate) => candidate.page === page);
   const { layout, update: updateLayout } = useReaderLayout();
   // The reading window: null while closed, else the heading the reader was at on the page.
-  const [reading, setReading] = useState<{ startId: string | null } | null>(null);
+  const [reading, setReading] = useState<{ startId: string | null } | null>(() =>
+    activeView === "materials" ? { startId: null } : null,
+  );
+  const [pagesNavigation, setPagesNavigation] = useState<"contents" | "pages">("contents");
   const [searchOpen, setSearchOpen] = useState(false);
   const [usageOpen, setUsageOpen] = useState(false);
   const [replayPendingNodeId, setReplayPendingNodeId] = useState<string | null>(null);
   const [replayError, setReplayError] = useState<string | null>(null);
-  const currentIndex = rows.findIndex((candidate) => candidate.page === page);
-  const previousPage = currentIndex > 0 ? (rows[currentIndex - 1]?.page ?? null) : null;
-  const nextPage = currentIndex >= 0 ? (rows[currentIndex + 1]?.page ?? null) : null;
+  const currentIndex = readerPositions.findIndex(
+    (candidate) => currentPosition !== null && sameReaderPosition(candidate, currentPosition),
+  );
+  const previousPosition = currentIndex > 0 ? (readerPositions[currentIndex - 1] ?? null) : null;
+  const nextPosition =
+    currentIndex >= 0 ? (readerPositions[currentIndex + 1] ?? null) : (readerPositions[0] ?? null);
 
   // The page's text and everything drawn from it is read once here: the article, the outline column and the reading
   // window all show the same copy. The outline watches the headings of whichever of them is on screen.
@@ -413,13 +497,34 @@ function BookDetail({
       onError: (error) => notice(apiErrorMessage(error), "error"),
     });
   };
-  const choosePage = (target: number) => {
-    rememberPage(bookId, target);
+  const choosePosition = (target: ReaderPosition) => {
+    if (target.kind === "page") rememberPage(bookId, target.page);
     setView({ follow: false, picked: target });
   };
+  const choosePage = (target: number) => choosePosition({ kind: "page", page: target });
+  const contentsPage =
+    contentsEntries.length > 0 && contentsPageIndex !== null ? (
+      <GeneratedContentsPage
+        bookTitle={title}
+        entries={contentsEntries}
+        pageIndex={contentsPageIndex}
+        pageCount={contentsPageCount}
+        onOpenPage={choosePage}
+      />
+    ) : processedBook.isPending ? (
+      <p role="status" className="rounded-md border border-border bg-card p-6 text-sm text-muted-foreground">
+        Loading the generated table of contents…
+      </p>
+    ) : null;
+  const goToPreviousPosition = () => {
+    if (previousPosition !== null) choosePosition(previousPosition);
+  };
+  const goToNextPosition = () => {
+    if (nextPosition !== null) choosePosition(nextPosition);
+  };
   const openReadingMode = () => {
-    if (page === null) return;
-    choosePage(page);
+    if (currentPosition === null) return;
+    choosePosition(currentPosition);
     setReading({ startId: activeHeading });
   };
   // Leaving the reading window lands the page on the heading the reader reached in it (the page's text is drawn again first).
@@ -427,38 +532,76 @@ function BookDetail({
     flushSync(() => setReading(null));
     if (activeHeading) document.getElementById(activeHeading)?.scrollIntoView?.({ block: "start" });
   };
-  const navigation = (
-    <>
-      <div className="rounded-md border border-border bg-card p-3">
-        <ChapterTree
-          tree={tree}
-          activePage={page}
-          unitLabel={units.singular}
-          pageLabels={processedNumbers}
-          isExtracted={(candidate) => extracted.has(candidate)}
-          onOpenPage={choosePage}
-        />
-      </div>
-      <div className="rounded-md border border-border bg-card p-3">
-        <PageList
-          rows={rows}
-          total={total}
-          units={units}
-          shown={page}
-          following={view.follow}
-          live={live}
-          flags={flags}
-          selection={contentSelection.data ?? null}
-          selectionPending={agentic.status === "done" && contentSelection.isPending}
-          selectionError={agentic.status === "done" && contentSelection.isError}
-          processedNumbers={processedNumbers}
-          showExcludedPages={false}
-          onFollow={(follow) => setView({ follow, picked: null })}
-          onPick={choosePage}
-        />
-      </div>
-    </>
+  const contentsNavigation = (
+    <div className="rounded-md border border-border bg-card p-3">
+      {contentsPageCount > 0 ? (
+        <ActionButton
+          className="mb-3 w-full justify-start"
+          onClick={() => choosePosition({ kind: "contents", index: 0 })}
+        >
+          <BookOpen aria-hidden />
+          Read table of contents
+        </ActionButton>
+      ) : null}
+      <ChapterTree
+        tree={tree}
+        activePage={page}
+        unitLabel={units.singular}
+        heading={activeView === "materials" && agentic.status === "done" ? "Contents" : "Chapters"}
+        emptyMessage={
+          activeView === "materials" && agentic.status === "done"
+            ? "No headings were found in the processed pages."
+            : "This book has no outline."
+        }
+        pageLabels={processedNumbers}
+        isExtracted={(candidate) => extracted.has(candidate)}
+        onOpenPage={choosePage}
+      />
+    </div>
   );
+  const processedPagesNavigation = (
+    <div className="rounded-md border border-border bg-card p-3">
+      <PageList
+        rows={rows}
+        total={total}
+        units={units}
+        shown={page}
+        following={view.follow}
+        live={live}
+        flags={flags}
+        selection={contentSelection.data ?? null}
+        selectionPending={agentic.status === "done" && contentSelection.isPending}
+        selectionError={agentic.status === "done" && contentSelection.isError}
+        processedNumbers={processedNumbers}
+        showExcludedPages={false}
+        onFollow={(follow) =>
+          setView({
+            follow,
+            picked: follow || fallbackSourcePage === null ? null : { kind: "page", page: fallbackSourcePage },
+          })
+        }
+        onPick={choosePage}
+      />
+    </div>
+  );
+  const navigation =
+    activeView === "materials" ? (
+      <div className="flex min-h-0 min-w-0 flex-col gap-3">
+        <ToggleGroup
+          fullWidth
+          legend="Pages sidebar"
+          options={PAGES_NAV_OPTIONS}
+          value={pagesNavigation}
+          onChange={setPagesNavigation}
+        />
+        {pagesNavigation === "contents" ? contentsNavigation : processedPagesNavigation}
+      </div>
+    ) : (
+      <>
+        {contentsNavigation}
+        {processedPagesNavigation}
+      </>
+    );
   const currentProcessedPage =
     page === null
       ? 0
@@ -470,8 +613,14 @@ function BookDetail({
       : nPages > 0
         ? nPages
         : total || rows.length;
-  const position = `${currentProcessedPage} / ${displayedPageCount}`;
   const unitLabel = `${units.singular[0]?.toUpperCase()}${units.singular.slice(1)}`;
+  const position =
+    contentsPageIndex !== null
+      ? contentsPageCount > 0
+        ? `Contents ${contentsPageIndex + 1} / ${contentsPageCount}`
+        : "Contents"
+      : `${unitLabel} ${currentProcessedPage} / ${displayedPageCount}`;
+  const positionKey = showingContents ? `contents:${contentsPageIndex}` : `page:${page ?? "empty"}`;
   const outlineView = hasOutline ? <PageOutline entries={content.outline} activeId={activeHeading} /> : null;
   const showOutlineColumn = layout.outline && hasOutline;
   const columns = layout.contents
@@ -494,8 +643,8 @@ function BookDetail({
         iconOnly
         aria-label={`Previous ${units.singular}`}
         title={`Previous ${units.singular}`}
-        disabled={previousPage === null}
-        onClick={() => previousPage !== null && choosePage(previousPage)}
+        disabled={previousPosition === null}
+        onClick={goToPreviousPosition}
       >
         <ChevronLeft aria-hidden />
       </ActionButton>
@@ -503,8 +652,8 @@ function BookDetail({
         iconOnly
         aria-label={`Next ${units.singular}`}
         title={`Next ${units.singular}`}
-        disabled={nextPage === null}
-        onClick={() => nextPage !== null && choosePage(nextPage)}
+        disabled={nextPosition === null}
+        onClick={goToNextPosition}
       >
         <ChevronRight aria-hidden />
       </ActionButton>
@@ -551,10 +700,14 @@ function BookDetail({
         </ActionButton>
       ) : null}
       <ActionButton
-        aria-haspopup="dialog"
-        title={`Read this ${units.singular} on the whole screen`}
+        aria-haspopup={activeView === "materials" ? undefined : "dialog"}
+        title={
+          activeView === "materials"
+            ? `Read this ${units.singular} in reading mode`
+            : `Read this ${units.singular} on the whole screen`
+        }
         onClick={openReadingMode}
-        disabled={page === null}
+        disabled={currentPosition === null}
       >
         <Maximize2 aria-hidden />
         Reading mode
@@ -563,8 +716,11 @@ function BookDetail({
   );
 
   return (
-    <section aria-label={title} className="min-w-0">
-      <BookReadingProgress />
+    <section
+      aria-label={title}
+      className={activeView === "materials" ? "flex min-h-0 min-w-0 flex-1 flex-col" : "min-w-0"}
+    >
+      {activeView === "materials" ? null : <BookReadingProgress />}
       {activeView !== "materials" ? (
         <header className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0">
@@ -588,7 +744,7 @@ function BookDetail({
         </header>
       ) : null}
 
-      <div aria-live="polite" className="mt-3 text-sm">
+      <div aria-live="polite" className={activeView === "materials" && reading ? "text-sm" : "mt-3 text-sm"}>
         {cancelling && live ? (
           <p className="text-warning-text">
             {units.singular === "page"
@@ -753,7 +909,11 @@ function BookDetail({
           }
         />
       </section>
-      <section aria-label="Pages" hidden={activeView !== "materials"} className="mt-4">
+      <section
+        aria-label="Pages"
+        hidden={activeView !== "materials"}
+        className={activeView === "materials" && reading ? "flex min-h-0 flex-1 flex-col" : "mt-4"}
+      >
         {agentic.status === "done" && processedBook.isError ? (
           <p role="status" className="mb-3 text-sm text-warning-text">
             The processed page map is unavailable. Showing selected pages in original source order.
@@ -762,8 +922,9 @@ function BookDetail({
         {processedBook.data && processedBook.data.contents_status !== "complete" ? (
           <p role="status" className="mb-3 text-sm text-warning-text">
             {processedBook.data.contents_status === "unavailable"
-              ? "The contents outline could not be reconciled. Processed pages and source citations are preserved."
-              : "Some contents page links need review. Processed pages and source citations are preserved."}
+              ? "No contents tree could be generated from retained-page headings. " +
+                "Processed pages and source citations are preserved."
+              : "Some generated contents links need review. Processed pages and source citations are preserved."}
           </p>
         ) : null}
         {!reading ? (
@@ -785,26 +946,30 @@ function BookDetail({
             ) : null}
 
             {/* In the reading window the text is drawn there, not here: one copy at a time, so a heading's id is never twice on the page. */}
-            <PageReader
-              bookId={bookId}
-              bookMetadata={{
-                status,
-                sizeBytes: manifest.size_bytes,
-                pageCount: displayedPageCount,
-              }}
-              page={page}
-              row={row}
-              nPages={displayedPageCount}
-              processedPageNumber={
-                activeView === "materials" && agentic.status === "done" ? currentProcessedPage : undefined
-              }
-              processedPageCount={
-                activeView === "materials" && agentic.status === "done" ? displayedPageCount : undefined
-              }
-              units={units}
-              content={content}
-              toolbar={toolbar}
-            />
+            {showingContents ? (
+              contentsPage
+            ) : (
+              <PageReader
+                bookId={bookId}
+                bookMetadata={{
+                  status,
+                  sizeBytes: manifest.size_bytes,
+                  pageCount: displayedPageCount,
+                }}
+                page={page}
+                row={row}
+                nPages={displayedPageCount}
+                processedPageNumber={
+                  activeView === "materials" && agentic.status === "done" ? currentProcessedPage : undefined
+                }
+                processedPageCount={
+                  activeView === "materials" && agentic.status === "done" ? displayedPageCount : undefined
+                }
+                units={units}
+                content={content}
+                toolbar={toolbar}
+              />
+            )}
 
             {showOutlineColumn ? (
               <div className="hidden lg:block">
@@ -812,39 +977,51 @@ function BookDetail({
               </div>
             ) : null}
           </div>
-        ) : page !== null ? (
+        ) : currentPosition !== null ? (
           <BookReadingMode
             title={title}
-            unitLabel={unitLabel}
             position={position}
-            page={page}
-            previousPage={previousPage}
-            nextPage={nextPage}
+            positionKey={positionKey}
+            hasPrevious={previousPosition !== null}
+            hasNext={nextPosition !== null}
             navigation={navigation}
             outline={outlineView}
             layout={layout}
             onLayout={updateLayout}
             startId={reading.startId}
-            onPage={choosePage}
+            onPrevious={goToPreviousPosition}
+            onNext={goToNextPosition}
             onSearch={() => setSearchOpen(true)}
             onExit={exitReading}
+            embedded={activeView === "materials"}
           >
-            <PageReader
-              bookId={bookId}
-              page={page}
-              row={row}
-              nPages={displayedPageCount}
-              processedPageNumber={
-                activeView === "materials" && agentic.status === "done" ? currentProcessedPage : undefined
-              }
-              processedPageCount={
-                activeView === "materials" && agentic.status === "done" ? displayedPageCount : undefined
-              }
-              units={units}
-              content={content}
-              framed={false}
-            />
+            {showingContents ? (
+              contentsPage
+            ) : (
+              <PageReader
+                bookId={bookId}
+                page={page}
+                row={row}
+                nPages={displayedPageCount}
+                processedPageNumber={
+                  activeView === "materials" && agentic.status === "done" ? currentProcessedPage : undefined
+                }
+                processedPageCount={
+                  activeView === "materials" && agentic.status === "done" ? displayedPageCount : undefined
+                }
+                units={units}
+                content={content}
+                framed={false}
+              />
+            )}
           </BookReadingMode>
+        ) : activeView === "materials" ? (
+          <p
+            role="status"
+            className="flex min-h-0 flex-1 items-center justify-center p-6 text-sm text-muted-foreground"
+          >
+            No extracted pages are available to read yet.
+          </p>
         ) : null}
 
         {searchOpen ? (

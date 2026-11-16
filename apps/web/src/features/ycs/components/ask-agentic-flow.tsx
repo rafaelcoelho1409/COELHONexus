@@ -20,28 +20,38 @@ import {
 import type { AskAgenticNode, AskAgenticNodeStatus } from "./ask-agentic-types";
 import { StatusBadge } from "./status-badge";
 
-const FLOW_WIDTH = 356;
-const FLOW_HEIGHT = 836;
-const NODE_WIDTH = 144;
-const NODE_HEIGHT = 88;
+const FLOW_WIDTH = 280;
+const FLOW_HEIGHT = 620;
+const NODE_WIDTH = 120;
+const NODE_HEIGHT = 68;
 const END_WIDTH = 56;
 const END_HEIGHT = 32;
 
 const POSITIONS: Record<string, { x: number; y: number; width?: number }> = {
-  prepare: { x: 8, y: 8, width: 312 },
-  direct_answer: { x: 8, y: 134 },
-  run_standard: { x: 176, y: 134 },
-  plan_research: { x: 176, y: 324 },
-  run_subagents: { x: 176, y: 440 },
-  synthesize: { x: 176, y: 556 },
-  critic: { x: 176, y: 672 },
+  prepare: { x: 8, y: 8, width: 248 },
+  direct_answer: { x: 8, y: 100 },
+  run_standard: { x: 144, y: 100 },
+  plan_research: { x: 144, y: 232 },
+  run_subagents: { x: 144, y: 310 },
+  synthesize: { x: 144, y: 388 },
+  critic: { x: 144, y: 466 },
 };
 
 const END_POSITIONS = {
-  end_conversation: { x: 52, y: 266, label: "END: direct answer completed" },
-  end_standard: { x: 220, y: 266, label: "END: standard video RAG completed" },
-  end_deep: { x: 220, y: 794, label: "END: deep research completed" },
+  end_conversation: { x: 40, y: 184, label: "END: direct answer completed" },
+  end_standard: { x: 176, y: 184, label: "END: standard video RAG completed" },
+  end_deep: { x: 176, y: 550, label: "END: deep research completed" },
 } as const;
+
+const FLOW_LABELS: Readonly<Record<string, string>> = {
+  prepare: "Prepare & route",
+  direct_answer: "Direct answer",
+  run_standard: "Video RAG",
+  plan_research: "Plan research",
+  run_subagents: "Research agents",
+  synthesize: "Synthesize",
+  critic: "Review answer",
+};
 
 const STATUS: Record<
   AskAgenticNodeStatus,
@@ -57,6 +67,7 @@ const STATUS: Record<
 type AskFlowNodeData = {
   id: string;
   label: string;
+  accessibleLabel: string;
   status: AskAgenticNodeStatus;
   width: number;
   onOpen: () => void;
@@ -86,7 +97,7 @@ function AskFlowNodeCard({ data }: NodeProps<AskFlowNode>) {
         <Handle id="fallback-in" type="target" position={Position.Left} isConnectable={false} />
       ) : null}
       <fieldset
-        aria-label={data.label + " — " + state.label}
+        aria-label={data.accessibleLabel + " — " + state.label}
         data-status={data.status}
         style={{ width: data.width, height: NODE_HEIGHT, pointerEvents: "none" }}
         className={
@@ -95,17 +106,17 @@ function AskFlowNodeCard({ data }: NodeProps<AskFlowNode>) {
           (data.status === "skipped" ? " opacity-65" : "")
         }
       >
-        <legend className="sr-only">{data.label + " — " + state.label}</legend>
+        <legend className="sr-only">{data.accessibleLabel + " — " + state.label}</legend>
         <button
           type="button"
           onClick={data.onOpen}
-          aria-label={"Open " + data.label + " node details — " + state.label}
+          aria-label={"Open " + data.accessibleLabel + " node details — " + state.label}
           aria-haspopup="dialog"
           style={{ pointerEvents: "auto" }}
-          className="nodrag nopan absolute inset-0 z-10 flex min-h-0 flex-col items-start justify-center overflow-hidden rounded-md border-0 bg-transparent px-2.5 py-2 text-left text-foreground hover:bg-muted/20 focus-visible:outline-2 focus-visible:outline-ring"
+          className="nodrag nopan absolute inset-0 z-10 flex min-h-0 flex-col items-start justify-center overflow-hidden rounded-md border-0 bg-transparent px-2 py-1 text-left text-foreground hover:bg-muted/20 focus-visible:outline-2 focus-visible:outline-ring"
         >
           <span className="line-clamp-2 text-xs font-medium leading-4">{data.label}</span>
-          <StatusBadge tone={state.tone} label={state.label} className="mt-1 gap-1 text-xs" />
+          <StatusBadge tone={state.tone} label={state.label} className="mt-0.5 gap-1 text-xs" />
         </button>
       </fieldset>
       {data.id === "prepare" ? (
@@ -220,7 +231,8 @@ export function AskAgenticFlow({
       height: NODE_HEIGHT,
       data: {
         id: node.id,
-        label: node.label,
+        label: FLOW_LABELS[node.id] ?? node.label,
+        accessibleLabel: node.label,
         status: node.status,
         width: position.width ?? NODE_WIDTH,
         onOpen: () => onOpen(node.id),

@@ -152,20 +152,23 @@ export function PageReader({
             </p>
           </div>
           {toolbar}
+          {chips.length > 0 ? (
+            <ul
+              aria-label={`What the ${units.singular} contains`}
+              className="ml-auto flex max-w-full flex-wrap justify-end gap-2"
+            >
+              {chips.map((chip) => (
+                <li
+                  key={chip}
+                  className="whitespace-nowrap rounded-sm border border-border px-2 py-0.5 text-xs text-muted-foreground"
+                >
+                  {chip}
+                </li>
+              ))}
+            </ul>
+          ) : null}
         </div>
         {trail ? <p className="mt-2 w-full break-words text-sm text-muted-foreground">{trail}</p> : null}
-        {chips.length > 0 ? (
-          <ul aria-label={`What the ${units.singular} contains`} className="mt-2 flex flex-wrap gap-2">
-            {chips.map((chip) => (
-              <li
-                key={chip}
-                className="rounded-sm border border-border px-2 py-0.5 text-xs text-muted-foreground"
-              >
-                {chip}
-              </li>
-            ))}
-          </ul>
-        ) : null}
         <PageQualityPanel bookId={bookId} page={page} unit={unitName} enabled={hasAi} defaultOpen={framed} />
       </header>
       <div className="flex flex-wrap items-center justify-between gap-2">

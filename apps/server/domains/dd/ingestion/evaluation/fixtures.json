@@ -218,7 +218,9 @@
       "labels": ["audit_no_findings", "source_preservation"],
       "expected": {
         "audit_status": "completed",
-        "repair_status": "not_needed"
+        "repair_status": "not_needed",
+        "forbidden_descriptions": ["inconsistent escaping of backslashes"],
+        "max_accepted_repairs": 0
       },
       "human_rubric": "The current audit found no actionable issue on this page, so no repair call is needed. Preserve the source unchanged. This fixture does not exercise the repair structured-output retry."
     },
@@ -356,9 +358,10 @@
           "4. Download and build `xformers` (Optional)",
           "Xformers is optional, but it is definitely faster and uses less memory."
         ],
+        "forbidden_descriptions": ["The reminder to check the active environment prefix is repeated"],
         "max_accepted_repairs": 0
       },
-      "human_rubric": "The repeated cu128 note and xformers instructions are needed under both the uv and conda/mamba install choices; do not report these cross-choice repeats or remove them. A repeated environment reminder within one choice remains reviewable. Preserve the source and accept no automatic edits."
+      "human_rubric": "The repeated cu128 note and xformers instructions are needed under both the uv and conda/mamba install choices. The environment reminder is repeated immediately before distinct install/build commands, where it guards each ordered step. Preserve these contextual repetitions and accept no automatic edits."
     },
     {
       "id": "optimum-r3-page-0-source-duplicate",
@@ -368,6 +371,14 @@
       "page_idx": 0,
       "labels": ["upstream_api_content", "source_preservation"],
       "expected": {
+        "expected_issue_categories": ["duplicate_section"],
+        "forbidden_descriptions": [
+          "across different function sections",
+          "in multiple function sections",
+          "inconsistent spacing in the type annotation",
+          "across different method sections",
+          "in multiple method sections"
+        ],
         "max_accepted_repairs": 0
       },
       "human_rubric": "The upstream API reference repeats library_name documentation across distinct method contexts and also repeats one parameter description within the same method. Preserve all API text, keep same-entry duplication visible for review, and never remove it automatically."

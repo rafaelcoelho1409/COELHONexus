@@ -1,4 +1,4 @@
-"""AI reconciliation of the table of contents against selected source pages."""
+"""Generate a standardized contents tree from the retained processed pages."""
 from . import node, service
 
 __all__ = ["node", "service"]

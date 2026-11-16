@@ -18,6 +18,9 @@ const RESOLUTION_STYLE = {
 function autonomousPatchStatus(status: string | null | undefined): string {
   if (status === "source_mismatch") return "Source image disagreed; original retained: ";
   if (status === "reading_mismatch") return "Source reading was not exact; original retained: ";
+  if (status === "source_reading_applied") {
+    return "Source reading supported this correction, but a later safety check retained the original: ";
+  }
   if (status === "confirmed") return "Source confirmed it, but safety checks kept the original: ";
   if (status === "uncertain") return "Source image was unclear; original retained: ";
   if (status === "unavailable") return "Source verification was unavailable; original retained: ";

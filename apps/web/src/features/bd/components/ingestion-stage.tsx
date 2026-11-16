@@ -25,7 +25,7 @@ export function IngestionStage({ view = "pipeline" }: { view?: BookViewId }) {
   const library = useLibrary();
   const selectedBook = library.data?.find((book) => book.book_id === bookId);
   const selectedTitle = selectedBook?.title.trim() || selectedBook?.filename;
-  const openingKey = `${bookId}-${initialPage ?? ""}-${refreshKey}`;
+  const openingKey = `${view}-${bookId}-${initialPage ?? ""}-${refreshKey}`;
   const open = (id: string | null) =>
     router.push(view === "materials" ? bookPagesHref(id) : bookHref(id), { scroll: false });
   const refresh = (id: string) => {
@@ -34,7 +34,7 @@ export function IngestionStage({ view = "pipeline" }: { view?: BookViewId }) {
   };
 
   return (
-    <div className="min-w-0">
+    <div className={view === "materials" ? "flex min-h-0 min-w-0 flex-1 flex-col" : "min-w-0"}>
       <ContextBar
         start={
           <>
@@ -72,7 +72,7 @@ export function IngestionStage({ view = "pipeline" }: { view?: BookViewId }) {
           ) : undefined
         }
       />
-      <div className="min-w-0">
+      <div className={view === "materials" ? "flex min-h-0 min-w-0 flex-1 flex-col" : "min-w-0"}>
         {bookId ? (
           <BookView
             key={openingKey}
@@ -84,7 +84,11 @@ export function IngestionStage({ view = "pipeline" }: { view?: BookViewId }) {
         ) : (
           <section
             aria-label="No book open"
-            className="rounded-md border border-border bg-card p-6 text-sm text-muted-foreground"
+            className={
+              view === "materials"
+                ? "flex min-h-0 flex-1 items-center justify-center rounded-md border border-border bg-card p-6 text-center text-sm text-muted-foreground"
+                : "rounded-md border border-border bg-card p-6 text-sm text-muted-foreground"
+            }
           >
             <p className="font-medium text-foreground">No book open.</p>
             <p className="mt-1">

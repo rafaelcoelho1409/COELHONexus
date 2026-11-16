@@ -213,17 +213,17 @@ export function LearningGuideReader({ report, quality }: { report: LearningGuide
       {reading ? (
         <BookReadingMode
           title={`Learning Guide · ${report.title}`}
-          unitLabel="Study page"
           position={position}
-          page={currentIndex + 1}
-          previousPage={previousPage}
-          nextPage={nextPage}
+          positionKey={`study:${page.id}`}
+          hasPrevious={previousPage !== null}
+          hasNext={nextPage !== null}
           navigation={navigation}
           outline={outlineView}
           layout={layout}
           onLayout={updateLayout}
           startId={reading.startId}
-          onPage={(target) => choosePage(target - 1)}
+          onPrevious={() => previousPage !== null && choosePage(previousPage - 1)}
+          onNext={() => nextPage !== null && choosePage(nextPage - 1)}
           onSearch={() => {
             updateLayout({ readingContents: true });
             window.requestAnimationFrame(() => searchInput.current?.focus());

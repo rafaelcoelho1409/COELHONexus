@@ -1,4 +1,4 @@
-"""Thin LangGraph wrapper for table-of-contents reconciliation."""
+"""Thin LangGraph wrapper for canonical contents construction."""
 from __future__ import annotations
 from . import service
 from .... import graphs
@@ -18,7 +18,6 @@ async def reconcile_contents(
             runtime.context.read_page,
             runtime.context.write_artifact,
             runtime.context.artifact_exists,
-            runtime.context.contents_reconciler,
             runtime.context.cancel_check,
         ),
     )

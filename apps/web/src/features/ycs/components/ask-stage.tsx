@@ -277,7 +277,7 @@ function AskConversation({
         </ActionButton>
       </fieldset>
 
-      <div className="grid gap-6 lg:grid-cols-[minmax(16rem,35fr)_minmax(0,65fr)]">
+      <div className="grid gap-6 lg:grid-cols-[minmax(20rem,35fr)_minmax(0,65fr)]">
         <aside
           aria-label="Adaptive Agentic RAG graph"
           className={`${mobilePane === "graph" ? "block" : "hidden"} min-w-0 lg:block`}

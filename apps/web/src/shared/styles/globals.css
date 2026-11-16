@@ -265,6 +265,34 @@
 }
 
 @layer utilities {
+  /* BD Pages is a reader workspace: the three navigation bars take their natural height, then the reader uses the
+     rest of the viewport. Keep the same centered width and side gutters as the other Nexus tabs. */
+  body:has(.bd-pages-workspace) {
+    display: flex;
+    height: 100dvh;
+    min-height: 100dvh;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  body:has(.bd-pages-workspace) #main {
+    display: flex;
+    width: 100%;
+    max-width: 72rem;
+    min-height: 0;
+    flex: 1;
+    flex-direction: column;
+    margin-inline: auto;
+    padding-block: 0;
+    padding-inline: 1rem;
+  }
+
+  @media (min-width: 40rem) {
+    body:has(.bd-pages-workspace) #main {
+      padding-inline: 1.5rem;
+    }
+  }
+
   .animate-status {
     animation: status-pulse 3s ease-in-out infinite;
   }
