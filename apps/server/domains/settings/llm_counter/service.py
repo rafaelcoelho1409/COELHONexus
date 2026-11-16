@@ -139,9 +139,11 @@ async def bump_current_failure(exc: BaseException) -> None:
             pipe = r.pipeline(transaction = False)
             if attribution.stage:
                 pipe.hset(counters_k, "stage", attribution.stage)
+            kind = domain.failure_kind(exc)
             pipe.hincrby(counters_k, f"node:{node_id}:errors", 1)
+            pipe.hincrby(counters_k, f"node:{node_id}:errkind:{kind}", 1)
             pipe.hincrby(counters_k, "total:errors", 1)
-            pipe.hincrby(counters_k, f"errkind:{domain.failure_kind(exc)}", 1)
+            pipe.hincrby(counters_k, f"errkind:{kind}", 1)
             pipe.expire(counters_k, params.COUNTER_TTL_S)
             await pipe.execute()
     except Exception as e:
@@ -205,8 +207,9 @@ async def snapshot(ns: str, run_id: str) -> bool:
         return False
     total = (payload or {}).get("total") or {}
     calls = int(total.get("calls") or 0)
-    if calls <= 0:
-        logger.info(f"[llm-counter] snapshot skipped ns={ns} run={run_id} (zero calls)")
+    errors = int(total.get("errors") or 0)
+    if calls <= 0 and errors <= 0:
+        logger.info(f"[llm-counter] snapshot skipped ns={ns} run={run_id} (zero calls and errors)")
         return False
     try:
         await infra.minio.service.get_storage().write(
@@ -216,13 +219,65 @@ async def snapshot(ns: str, run_id: str) -> bool:
         )
         by_node_errors = {n: v.get("errors", 0) for n, v in ((payload or {}).get("by_node") or {}).items() if v.get("errors")}
         logger.info(
-            f"[llm-counter] snapshot persisted ns={ns} run={run_id} calls={calls} errors={int(total.get('errors') or 0)} "
+            f"[llm-counter] snapshot persisted ns={ns} run={run_id} calls={calls} errors={errors} "
             f"by_node_errors={by_node_errors} kinds={(payload or {}).get('error_kinds') or {}}"
         )
         return True
     except Exception as e:
         logger.warning(f"[llm-counter] snapshot write failed ns={ns} run={run_id}: {type(e).__name__}: {e}")
         return False
+
+
+async def retain_nodes(ns: str, run_id: str, node_ids: set[str]) -> None:
+    """Keep usage only for the supplied nodes and rebuild run totals and snapshots from them."""
+    if not ns or not run_id:
+        return
+
+    counters_k = keys.counters_key(ns, run_id)
+    async with infra.redis.service.client() as redis:
+        counters = domain.decode_hash(await redis.hgetall(counters_k))
+        _, _, by_node = domain.split_counters(counters)
+        removed_nodes = set(by_node) - node_ids
+        removed_fields = [
+            field
+            for field in counters
+            if field.startswith("node:") and field.split(":", 2)[1] in removed_nodes
+        ]
+        legacy_error_fields = [field for field in counters if field.startswith("errkind:")]
+
+        retained = {node_id: fields for node_id, fields in by_node.items() if node_id in node_ids}
+        totals = {
+            field: sum(node.get(field, 0) for node in retained.values())
+            for field in (*domain.COUNT_FIELDS, "errors")
+        }
+        error_kinds: dict[str, int] = {}
+        for fields in retained.values():
+            for field, value in fields.items():
+                if field.startswith("errkind:"):
+                    kind = field.removeprefix("errkind:")
+                    error_kinds[kind] = error_kinds.get(kind, 0) + value
+
+        pipe = redis.pipeline()
+        if removed_fields:
+            pipe.hdel(counters_k, *removed_fields)
+        if legacy_error_fields:
+            pipe.hdel(counters_k, *legacy_error_fields)
+        pipe.hset(counters_k, mapping = {f"total:{field}": value for field, value in totals.items()})
+        if error_kinds:
+            pipe.hset(counters_k, mapping = {f"errkind:{kind}": value for kind, value in error_kinds.items()})
+        pipe.expire(counters_k, params.COUNTER_TTL_S)
+        if removed_nodes:
+            pipe.delete(*(keys.models_key(ns, run_id, node_id) for node_id in removed_nodes))
+        await pipe.execute()
+
+    spec = params.NAMESPACES.get(ns, params.DEFAULT_NAMESPACE)
+    if not spec.snapshot:
+        return
+
+    storage = infra.minio.service.get_storage()
+    await storage.delete(keys.snapshot_key(ns, run_id))
+    if totals["calls"] > 0 or totals["errors"] > 0:
+        await snapshot(ns, run_id)
 
 
 async def delete_run(ns: str, run_id: str) -> None:

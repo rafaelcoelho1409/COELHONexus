@@ -1,6 +1,6 @@
-"""Ingestion publication node, deterministic rules, and service."""
+"""Ingestion publication graph node and application service."""
 from __future__ import annotations
 
-from . import domain, node, service
+from . import node, service
 
-__all__ = ["domain", "node", "service"]
+__all__ = ["node", "service"]

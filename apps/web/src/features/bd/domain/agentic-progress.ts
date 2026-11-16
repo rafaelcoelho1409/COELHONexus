@@ -116,11 +116,11 @@ export const AGENTIC_NODE_DETAILS: Record<AgenticNodeId, AgenticNodeDetails> = {
   enrich_visuals: {
     title: "Convert source figures",
     subtitle:
-      "Transcribes selected-page figures with the configured vision model and replaces only high-confidence conversions in the processed Markdown.",
+      "Transcribes selected source figures with the configured vision model and replaces only supported, high-confidence conversions in the processed Markdown.",
     kind: "Vision extraction + deterministic Markdown serialization",
     actions: [
       "Reads source figure crops from the immutable Docling extraction and uses nearby repaired page text as context.",
-      "Converts flow diagrams to Mermaid, tables to GFM, explicitly labeled charts to Mermaid XY charts, equations to KaTeX LaTeX, and legible code samples to fenced code.",
+      "Converts diagrams and timelines to Mermaid, tables to GFM, supported charts and coordinate-explicit maps to constrained Vega-Lite, equations to KaTeX-compatible LaTeX, legible code to fenced blocks, and text figures to Markdown prose.",
       "Keeps the original image in the figure gallery and leaves the inline image unchanged whenever the source is incomplete or uncertain.",
       "Persists each successful figure response so an interrupted run can resume without repeating completed vision calls.",
     ],
@@ -238,6 +238,15 @@ function pageSelectionCounts(progress: AgenticProgress, total?: number) {
   };
 }
 
+function retainedVisualCount(progress: AgenticProgress): number {
+  return Math.max(
+    0,
+    (progress.visual_completed_count ?? 0) -
+      (progress.visual_converted_count ?? 0) -
+      (progress.visual_failed_count ?? 0),
+  );
+}
+
 function repairedSelectionCount(
   progress: AgenticProgress,
   status: AgenticNodeStatus,
@@ -308,7 +317,12 @@ export function agenticNodeCaption(
     const converted = progress.visual_converted_count ?? 0;
     const failed = progress.visual_failed_count ?? 0;
     return candidates > 0
-      ? `${completed} of ${candidates} processed · ${converted} converted · ${failed} failed`
+      ? [
+          `${completed} of ${candidates} processed`,
+          `${converted} converted`,
+          `${retainedVisualCount(progress)} retained`,
+          `${failed} failed`,
+        ].join(" · ")
       : "No eligible figures on selected pages";
   }
   if (nodeId === "audit_batch") {
@@ -352,7 +366,12 @@ export function agenticNodeKpi(
     const converted = progress.visual_converted_count ?? 0;
     const candidates = progress.visual_candidate_count ?? 0;
     const failed = progress.visual_failed_count ?? 0;
-    return `${converted} converted · ${failed} failed · ${candidates} figures`;
+    return [
+      `${converted} converted`,
+      `${retainedVisualCount(progress)} retained`,
+      `${failed} failed`,
+      `${candidates} figures`,
+    ].join(" · ");
   }
   if (nodeId === "audit_batch") return `${progress.audited_pages.length} ${unitPlural} audited`;
   if (nodeId === "repair_pages") {
@@ -364,7 +383,7 @@ export function agenticNodeKpi(
     return `${selected} selected · ${excluded} excluded from Distill`;
   }
   if (nodeId === "publish" && summary) {
-    return `${summary.deliveredPages} delivered · ${summary.reviewPages} need review`;
+    return `${summary.deliveredPages} delivered · ${summary.reviewPages} need review · ${summary.unverifiedPages} audit unverified`;
   }
   return null;
 }
@@ -378,7 +397,12 @@ export function agenticNodeLiveLine(
 ): string | null {
   if (status !== "running" || total <= 0) return null;
   if (nodeId === "enrich_visuals") {
-    return `${progress.visual_completed_count ?? 0}/${progress.visual_candidate_count ?? 0} processed · ${progress.visual_converted_count ?? 0} converted · ${progress.visual_failed_count ?? 0} failed`;
+    return [
+      `${progress.visual_completed_count ?? 0}/${progress.visual_candidate_count ?? 0} processed`,
+      `${progress.visual_converted_count ?? 0} converted`,
+      `${retainedVisualCount(progress)} retained`,
+      `${progress.visual_failed_count ?? 0} failed`,
+    ].join(" · ");
   }
   const [done, active] =
     nodeId === "audit_batch"

@@ -18,18 +18,34 @@ def ingestion_graph(checkpointer: Any | None = None):
         states.IngestionRunState,
         context_schema = entities.IngestionDependencies,
     )
-    workflow.add_node("audit_batch", nodes.ingestion.audit_batch.node.audit_pages)
-    workflow.add_node("classify_content", nodes.ingestion.content_classification.node.classify_content)
-    workflow.add_node("plan_repairs", nodes.ingestion.plan_repairs.node.plan_repairs)
-    workflow.add_node("repair_pages", nodes.ingestion.repair_pages.node.repair_pages)
-    workflow.add_node("normalize_metadata", nodes.ingestion.metadata_normalization.node.normalize_metadata)
-    workflow.add_node("enrich_visuals", nodes.ingestion.visual_enrichment.node.enrich_visuals)
+    workflow.add_node(
+        "audit_batch", 
+        nodes.ingestion.audit_batch.node.audit_pages)
+    workflow.add_node(
+        "classify_content", 
+        nodes.ingestion.content_classification.node.classify_content)
+    workflow.add_node(
+        "plan_repairs", 
+        nodes.ingestion.plan_repairs.node.plan_repairs)
+    workflow.add_node(
+        "repair_pages", 
+        nodes.ingestion.repair_pages.node.repair_pages)
+    workflow.add_node(
+        "normalize_metadata", 
+        nodes.ingestion.metadata_normalization.node.normalize_metadata)
+    workflow.add_node(
+        "enrich_visuals", 
+        nodes.ingestion.visual_enrichment.node.enrich_visuals)
     workflow.add_node(
         "materialize_processed_book",
         nodes.ingestion.materialize_processed_book.node.materialize_processed_book,
     )
-    workflow.add_node("reconcile_contents", nodes.ingestion.reconcile_contents.node.reconcile_contents)
-    workflow.add_node("publish", nodes.ingestion.publish.node.publish)
+    workflow.add_node(
+        "reconcile_contents", 
+        nodes.ingestion.reconcile_contents.node.reconcile_contents)
+    workflow.add_node(
+        "publish", 
+        nodes.ingestion.publish.node.publish)
     workflow.add_edge(START, "audit_batch")
     workflow.add_edge("audit_batch", "classify_content")
     workflow.add_edge("classify_content", "plan_repairs")

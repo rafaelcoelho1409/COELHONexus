@@ -159,6 +159,7 @@ export function useRefreshBook() {
       keepGoing,
     );
     void queryClient.invalidateQueries({ queryKey: getBdIngestionActiveQueryKey() }, keepGoing);
+    void queryClient.invalidateQueries({ queryKey: ["bd-agentic-usage", bookId] }, keepGoing);
   };
 }
 

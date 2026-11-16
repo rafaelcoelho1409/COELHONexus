@@ -55,8 +55,14 @@ def text_patch_verifier(model = None):
         ],
         response_format = schemas.PatchVerificationBatch,
         permissions = [
-            FilesystemPermission(operations = ["read"], paths = ["/**"], mode = "deny"),
-            FilesystemPermission(operations = ["write"], paths = ["/**"], mode = "deny"),
+            FilesystemPermission(
+                operations = ["read"], 
+                paths = ["/**"], 
+                mode = "deny"),
+            FilesystemPermission(
+                operations = ["write"], 
+                paths = ["/**"], 
+                mode = "deny"),
         ],
         backend = StateBackend(),
         name = "bd_text_patch_verifier",

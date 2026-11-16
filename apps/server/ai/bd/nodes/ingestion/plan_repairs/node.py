@@ -1,6 +1,6 @@
 """Thin LangGraph node for deterministic specialist routing."""
 from __future__ import annotations
-from . import domain
+import domains
 from .... import graphs
 
 from langgraph.runtime import Runtime
@@ -13,5 +13,5 @@ async def plan_repairs(
     return await graphs.service.run_node(
         runtime.context.progress_callback,
         "plan_repairs",
-        lambda: domain.plan_repairs(graph_state),
+        lambda: domains.bd.ingestion.ai.repair_planning.domain.plan_repairs(graph_state),
     )

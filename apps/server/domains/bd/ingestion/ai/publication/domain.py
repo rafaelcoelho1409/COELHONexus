@@ -1,8 +1,9 @@
-"""Independent checks of a finished run's pages, made by code before the run is published."""
+"""Pure validation and summary rules for ingestion publication."""
 from __future__ import annotations
-import domains
 
 import hashlib
+
+from . import params
 
 
 def alphanumeric_count(text: str) -> int:
@@ -10,12 +11,7 @@ def alphanumeric_count(text: str) -> int:
 
 
 def lost_alphanumeric(source: str, normalized: str) -> int:
-    """How many letters and digits the normalized page lost beyond what the run is allowed to remove.
-
-    Normalization may change spaces, hyphens, invisible characters, leader dots and table padding, none of which are
-    letters or digits; a repair may also join or split words without changing a letter. A page that ends up with clearly
-    fewer letters and digits than its source has lost text, whatever stage did it."""
-    params = domains.bd.ingestion.ai.params
+    """Count likely content loss while allowing formatting-only normalization."""
     source_count = alphanumeric_count(source)
     lost = source_count - alphanumeric_count(normalized)
     allowed = max(params.VERIFY_LOSS_MIN_CHARS, int(source_count * params.VERIFY_LOSS_RATIO))

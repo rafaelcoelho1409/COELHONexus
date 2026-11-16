@@ -1,12 +1,11 @@
 """Validation and prompt-payload construction for page audits, and the second reader's checks of their findings."""
 from __future__ import annotations
 import domains
-from . import errors, params
+from . import errors, params, patterns
 from .... import agents
 
 import json
 import hashlib
-import re
 import unicodedata
 from collections.abc import Iterator
 from typing import Any
@@ -270,11 +269,11 @@ def _evidence_supports_issue_code(
         # `&amp;` is how Markdown writes an ampersand and renders as one; models still file it, then call it "not a finding".
         return False
     if issue_code == agents.schemas.IssueCode.TABLE_OR_INDEX_LAYOUT:
-        patterns = domains.bd.ingestion.ai.inventory.patterns
+        inventory_patterns = domains.bd.ingestion.ai.inventory.patterns
         return (
-            bool(re.search(r"(?m)^\s*\|[^\n]*\|\s*$", excerpt))
+            bool(patterns.MARKDOWN_TABLE_LINE_RE.search(excerpt))
             or "\t" in excerpt
-            or bool(patterns.TOC_LEADER_ROW_RE.search(excerpt))
+            or bool(inventory_patterns.TOC_LEADER_ROW_RE.search(excerpt))
         )
     if issue_code == agents.schemas.IssueCode.STRUCTURE:
         # Models report "a figure with a caption" as a layout finding; a caption line alone is normal Docling output.
@@ -284,22 +283,18 @@ def _evidence_supports_issue_code(
 
 def _evidence_shows_split_word(excerpt: str, description: str) -> bool:
     """Require the cited text itself to show a broken token, not just a claim about line wrapping."""
-    patterns = domains.bd.ingestion.ai.inventory.patterns
-    if patterns.HEADING_FRAGMENT_RE.search(excerpt):
+    inventory_patterns = domains.bd.ingestion.ai.inventory.patterns
+    if inventory_patterns.HEADING_FRAGMENT_RE.search(excerpt):
         return True
-    if re.search(r"\b[A-Za-z]{2,}[-‐‑][ \t]*\n[ \t]*[A-Za-z]{2,}\b", excerpt):
+    if patterns.SPLIT_WORD_LINE_BREAK_RE.search(excerpt):
         return True
     # A missing second hyphen in common `*-of-*` compounds is a visible extraction defect (`denial-ofservice`).
-    if re.search(r"\b[A-Za-z]{3,}-of[A-Za-z]{4,}\b", excerpt, re.IGNORECASE):
+    if patterns.MISSING_OF_HYPHEN_RE.search(excerpt):
         return True
 
-    quoted_terms = re.findall(r"['\"“`]([A-Za-z][A-Za-z'’\-]{3,})['\"”`]", description)
+    quoted_terms = patterns.QUOTED_TERM_RE.findall(description)
     for term in quoted_terms:
-        if not term.isalpha() and not re.fullmatch(r"[A-Za-z]+(?:['’][A-Za-z]+)?(?:-[A-Za-z]+)*", term):
-            continue
-        spaced_term = r"\b" + r"\s*".join(re.escape(character) for character in term) + r"\b"
-        match = re.search(spaced_term, excerpt, re.IGNORECASE)
-        if match and re.search(r"\s", match.group()):
+        if patterns.has_spaced_word_form(excerpt, term):
             return True
     return False
 
@@ -308,14 +303,10 @@ def _is_technical_literal(excerpt: str, markdown: str) -> bool:
     """Do not flag opaque code/data literals as damaged prose when page context identifies them as such."""
     start = markdown.find(excerpt)
     context = markdown[max(0, start - 600):start + len(excerpt) + 600] if start >= 0 else excerpt
-    technical_context = re.search(
-        r"\b(?:encrypted|ciphertext|encoded|obfuscated|code sample|sample code|source code|payload|hash|checksum)\b",
-        context,
-        re.IGNORECASE,
-    )
+    technical_context = patterns.TECHNICAL_CONTEXT_RE.search(context)
     if not technical_context:
         return False
-    compact = re.sub(r"\s+", "", excerpt)
+    compact = patterns.WHITESPACE_RUN_RE.sub("", excerpt)
     if not compact:
         return False
     non_word = sum(not character.isalnum() for character in compact)

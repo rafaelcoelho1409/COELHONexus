@@ -53,7 +53,9 @@ describe("agentic progress display", () => {
     const summary = { deliveredPages: 8, reviewPages: 2, unverifiedPages: 1 };
     expect(agenticNodeKpi(progress, "audit_batch", "done", "pages", summary)).toBe("3 pages audited");
     expect(agenticNodeKpi(progress, "repair_pages", "done", "sections", summary)).toBe("2 sections repaired");
-    expect(agenticNodeKpi(progress, "publish", "done", "pages", summary)).toBe("8 delivered · 2 need review");
+    expect(agenticNodeKpi(progress, "publish", "done", "pages", summary)).toBe(
+      "8 delivered · 2 need review · 1 audit unverified",
+    );
     expect(agenticNodeKpi(progress, "publish", "done", "pages", null)).toBeNull();
     expect(agenticNodeKpi(progress, "plan_repairs", "done", "pages", summary)).toBeNull();
     expect(agenticNodeKpi(progress, "audit_batch", "running", "pages", summary)).toBeNull();

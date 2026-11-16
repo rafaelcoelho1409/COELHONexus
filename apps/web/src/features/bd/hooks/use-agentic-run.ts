@@ -148,8 +148,17 @@ export function useAgenticRun(bookId: string, snapshot: BookSnapshot): AgenticRu
       });
     }
     if (terminalEvent(event)) {
-      void queryClient.invalidateQueries({
-        queryKey: getBdIngestionBookIdQueryKey({ path: { book_id: bookId } }),
+      void Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: getBdIngestionBookIdQueryKey({ path: { book_id: bookId } }),
+        }),
+        queryClient.invalidateQueries({
+          queryKey: ["bd-agentic-usage", bookId, runId],
+        }),
+      ]).then(() => {
+        // The terminal SSE snapshot can trail the persisted run. Once the
+        // authoritative book snapshot has refreshed, stop preferring event state.
+        setEventState((previous) => (previous?.runId === runId ? null : previous));
       });
     }
   });

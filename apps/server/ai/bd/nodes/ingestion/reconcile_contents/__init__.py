@@ -1,4 +1,4 @@
 """Generate a standardized contents tree from the retained processed pages."""
-from . import node, service
+from . import node
 
-__all__ = ["node", "service"]
+__all__ = ["node"]

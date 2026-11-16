@@ -1,4 +1,4 @@
 """Create the dense selected-page map before contents reconciliation."""
-from . import node, service
+from . import node
 
-__all__ = ["node", "service"]
+__all__ = ["node"]

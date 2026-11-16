@@ -221,8 +221,8 @@ def failure_kind(exc: BaseException) -> str:
 
 def diff_usage(before: dict[str, Any], after: dict[str, Any]) -> dict[str, Any]:
     """Pure subtraction between two usage payloads — the delta is exactly the LLM usage that happened between the two
-    reads (e.g. one Ask turn), isolated from the thread's running total. Safe because the Redis counters are monotonic
-    (`HINCRBY` only, never reset mid-thread). Backs the Ask page's per-response usage badge."""
+    reads (e.g. one Ask turn), isolated from the thread's running total. Callers must not span an explicit replay reset.
+    Backs the Ask page's per-response usage badge."""
     def _sub(a: dict[str, Any], b: dict[str, Any]) -> dict[str, int]:
         return {k: max(0, int(a.get(k, 0) or 0) - int(b.get(k, 0) or 0)) for k in COUNT_FIELDS}
 

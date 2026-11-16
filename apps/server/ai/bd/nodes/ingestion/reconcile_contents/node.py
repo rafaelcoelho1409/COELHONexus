@@ -1,6 +1,6 @@
 """Thin LangGraph wrapper for canonical contents construction."""
 from __future__ import annotations
-from . import service
+import domains
 from .... import graphs
 
 from langgraph.runtime import Runtime
@@ -13,7 +13,7 @@ async def reconcile_contents(
     return await graphs.service.run_node(
         runtime.context.progress_callback,
         "reconcile_contents",
-        lambda: service.reconcile_contents(
+        lambda: domains.bd.ingestion.ai.processed_book.service.reconcile_contents(
             graph_state,
             runtime.context.read_page,
             runtime.context.write_artifact,

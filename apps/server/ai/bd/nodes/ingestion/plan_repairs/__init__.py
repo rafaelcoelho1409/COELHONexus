@@ -1,5 +1,5 @@
-"""Deterministic repair planning node and rules."""
+"""Deterministic repair planning graph node."""
 from __future__ import annotations
-from . import domain, node
+from . import node
 
-__all__ = ["domain", "node"]
+__all__ = ["node"]

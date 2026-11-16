@@ -1,7 +1,7 @@
 """Run integration between completed Book Distiller extractions and the AI graph."""
 from __future__ import annotations
 import ai, domains, infra
-from . import domain, schemas
+from . import content_selection, schemas
 
 
 import asyncio
@@ -673,8 +673,8 @@ async def ensure_selection(
                 book_id, agentic_run_id, revision,
             )
             if not await storage.exists(key):
-                selection = domain.build_legacy_selection(manifest, revision, time.time())
-                content = domain.selection_json(selection)
+                selection = content_selection.domain.build_legacy_selection(manifest, revision, time.time())
+                content = content_selection.domain.selection_json(selection)
                 await storage.write(key, content, content_type = "application/json")
                 digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
                 break
@@ -750,7 +750,7 @@ async def _apply_selection_overrides_unlocked(
     if current is None:
         raise FileNotFoundError("the ingestion run has no content selection")
     manifest, _, _ = current
-    updated = domain.apply_selection_overrides(
+    updated = content_selection.domain.apply_selection_overrides(
         manifest,
         overrides,
         expected_revision = expected_revision,
@@ -774,7 +774,7 @@ async def _apply_selection_overrides_unlocked(
     if revision != updated.revision:
         updated = updated.model_copy(update = {"revision": revision})
 
-    content = domain.selection_json(updated)
+    content = content_selection.domain.selection_json(updated)
     digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
     await storage.write(key, content, content_type = "application/json")
     processed, processed_key, processed_sha256 = await domains.bd.ingestion.ai.processed_book.service.ensure_for_selection(
@@ -1218,6 +1218,12 @@ async def queue_ingestion_ai_node_replay(
         }
         for path in sorted(artifact_paths):
             await storage.delete_prefix(prefix + path)
+
+        await domains.settings.llm_counter.service.retain_nodes(
+            "bd",
+            agentic_run_id,
+            set(domains.bd.ingestion.ai.params.GRAPH_NODES[:node_index]),
+        )
 
         manifest_key = domains.bd.ingestion.storage.keys.agentic_manifest_key(book_id, agentic_run_id)
         await storage.write(

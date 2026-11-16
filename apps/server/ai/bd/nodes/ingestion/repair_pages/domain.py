@@ -5,7 +5,6 @@ from . import errors, patterns
 from .... import agents
 
 import difflib
-import re
 import unicodedata
 import json
 from collections.abc import Iterator
@@ -397,7 +396,7 @@ def source_reading_confirms_patch(
         return False
     if not source_reading or source_reading != target_focus:
         return False
-    split_word = re.fullmatch(r"(.+?)[-‐‑]\s+(.+)", target_focus)
+    split_word = patterns.SPLIT_LINE_HYPHEN_RE.fullmatch(target_focus)
     return bool(split_word and split_word.group(1) + split_word.group(2) == replacement_focus)
 
 
@@ -495,8 +494,10 @@ def _is_deterministic_split_word_repair(
         and proposal.risk == agents.schemas.PatchRisk.LOW
         and proposal.confidence >= domains.bd.ingestion.ai.params.AUTO_APPLY_CONFIDENCE
         and _is_spacing_repair(proposal, markdown, start, end)
-        and re.sub(r"\s+", "", proposal.target_text) == re.sub(r"\s+", "", proposal.replacement)
-        and len(re.findall(r"\s", proposal.replacement)) < len(re.findall(r"\s", proposal.target_text))
+        and patterns.WHITESPACE_RE.sub("", proposal.target_text)
+        == patterns.WHITESPACE_RE.sub("", proposal.replacement)
+        and len(patterns.WHITESPACE_CHARACTER_RE.findall(proposal.replacement))
+        < len(patterns.WHITESPACE_CHARACTER_RE.findall(proposal.target_text))
         and not _is_protected_patch(proposal, markdown, start, end)
     )
 
@@ -510,7 +511,7 @@ def _expand_detached_heading_plural_suffix(
         proposal.issue_code != agents.schemas.IssueCode.SPLIT_WORD
         or not proposal.replacement.isalpha()
         or not proposal.replacement.isupper()
-        or re.sub(r"\s+", "", proposal.target_text) != proposal.replacement
+        or patterns.WHITESPACE_RE.sub("", proposal.target_text) != proposal.replacement
         or len(starts := _occurrences(markdown, proposal.target_text)) != 1
     ):
         return proposal
@@ -523,8 +524,10 @@ def _expand_detached_heading_plural_suffix(
     heading_prefix = markdown[line_start:start]
     detached_suffix = markdown[end:line_end]
     if (
-        re.fullmatch(r"[ \t]*#{1,6}[ \t]+", heading_prefix) is None
-        or (suffix_match := re.fullmatch(r"([ \t]+)S[ \t]*", detached_suffix)) is None
+        patterns.MARKDOWN_HEADING_PREFIX_RE.fullmatch(heading_prefix) is None
+        or (
+            suffix_match := patterns.DETACHED_HEADING_PLURAL_SUFFIX_RE.fullmatch(detached_suffix)
+        ) is None
     ):
         return proposal
 
@@ -532,7 +535,7 @@ def _expand_detached_heading_plural_suffix(
     if not any(extended_target in evidence.excerpt for evidence in proposal.evidence):
         return proposal
     extended_replacement = proposal.replacement + "S"
-    if re.sub(r"\s+", "", extended_target) != extended_replacement:
+    if patterns.WHITESPACE_RE.sub("", extended_target) != extended_replacement:
         return proposal
     return proposal.model_copy(update = {
         "target_text": extended_target,

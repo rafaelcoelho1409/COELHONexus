@@ -3,14 +3,22 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import inspect
 import json
 import time
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 
 import domains
 import infra
 
 from . import domain, schemas
+
+
+PageReader = Callable[[str], str | None | Awaitable[str | None]]
+ArtifactWriter = Callable[[str, str, str], Any]
+ArtifactExists = Callable[[str], Awaitable[bool]]
+CancelCheck = Callable[[], Awaitable[bool]]
 
 
 def _json(value: Any) -> str:
@@ -25,6 +33,208 @@ def _page_value(page: Any, name: str, default: Any = None) -> Any:
     if isinstance(page, dict):
         return page.get(name, default)
     return getattr(page, name, default)
+
+
+async def _read_callback(reader: PageReader, key: str) -> str:
+    value = reader(key)
+    if inspect.isawaitable(value):
+        value = await value
+    if not isinstance(value, str):
+        raise ValueError(f"processed-book artifact {key} could not be read")
+    return value
+
+
+async def materialize_processed_book(
+    state: Mapping[str, Any],
+    read_page: PageReader,
+    write_artifact: ArtifactWriter,
+    artifact_exists: ArtifactExists,
+) -> dict[str, Any]:
+    """Persist one immutable candidate page set with dense numbers and raw-source references."""
+    selection_key = state.get("content_selection_key")
+    selection_sha256 = state.get("content_selection_sha256")
+    selection_revision = state.get("content_selection_revision")
+    if not isinstance(selection_key, str) or not isinstance(selection_sha256, str):
+        raise ValueError("processed-book materialization requires a completed page selection")
+    if type(selection_revision) is not int or selection_revision < 1:
+        raise ValueError("processed-book materialization requires a valid selection revision")
+
+    book_id = state.get("book_id")
+    agentic_run_id = state.get("agentic_run_id")
+    extraction_run_id = state.get("extraction_run_id")
+    if not all(isinstance(value, str) for value in (book_id, agentic_run_id, extraction_run_id)):
+        raise ValueError("processed-book materialization requires complete run identities")
+    candidate_key = domains.bd.ingestion.storage.keys.agentic_processed_book_candidate_key(
+        book_id,
+        agentic_run_id,
+        selection_revision,
+    )
+    if await artifact_exists(candidate_key):
+        current = await _read_callback(read_page, candidate_key)
+        candidate = schemas.ProcessedBookCandidate.model_validate_json(current)
+        if (
+            candidate.book_id != book_id
+            or candidate.extraction_run_id != extraction_run_id
+            or candidate.agentic_run_id != agentic_run_id
+            or candidate.selection_revision != selection_revision
+            or candidate.selection_sha256 != selection_sha256
+        ):
+            raise ValueError("the saved processed-book candidate does not match this graph run")
+        return {
+            "processed_book_candidate_key": candidate_key,
+            "processed_page_count": len(candidate.pages),
+            "processed_book_revision": selection_revision,
+        }
+
+    selection_content = await _read_callback(read_page, selection_key)
+    if _digest(selection_content) != selection_sha256:
+        raise ValueError("the content-selection artifact failed its integrity check")
+    selection = domains.bd.ingestion.ai.schemas.ContentSelectionManifest.model_validate_json(selection_content)
+    if selection.revision != selection_revision:
+        raise ValueError("the content-selection revision does not match the graph state")
+
+    source_page_refs = state.get("source_page_refs")
+    page_results = state.get("page_results")
+    if not isinstance(source_page_refs, list) or not isinstance(page_results, list):
+        raise ValueError("processed-book materialization requires complete source and repaired page lists")
+    page_refs = {
+        page["page"]: page
+        for page in source_page_refs
+        if isinstance(page, dict) and type(page.get("page")) is int
+    }
+    qa_pages = []
+    for result in page_results:
+        if not isinstance(result, dict) or type(result.get("page")) is not int:
+            raise ValueError("processed-book materialization received a malformed page result")
+        reference = page_refs.get(result["page"], {})
+        qa_pages.append({
+            **result,
+            "page_number": result["page"],
+            "source_key": reference.get("key"),
+            "source_sha256": result.get("source_sha256"),
+        })
+
+    candidate = await make_candidate(
+        {"pages": source_page_refs, "book_id": book_id, "extraction_id": extraction_run_id},
+        selection,
+        selection_key,
+        selection_sha256,
+        qa_pages,
+        _CallbackReader(read_page),
+    )
+    content = candidate_json(candidate)
+    result = write_artifact(candidate_key, content, "application/json")
+    if inspect.isawaitable(result):
+        await result
+    return {
+        "processed_book_candidate_key": candidate_key,
+        "processed_page_count": len(candidate.pages),
+        "processed_book_revision": selection_revision,
+    }
+
+
+async def _candidate_headings(
+    candidate: schemas.ProcessedBookCandidate,
+    read_page: PageReader,
+) -> list[dict[str, Any]]:
+    """Read selected-page headings, rebuilding legacy immutable candidates when needed."""
+    if candidate.heading_candidates_built:
+        return [item.model_dump(mode="json") for item in candidate.heading_candidates]
+
+    semaphore = asyncio.Semaphore(domains.bd.ingestion.ai.params.PROCESSED_BOOK_READ_CONCURRENCY)
+
+    async def page_evidence_for(page: Any) -> dict[str, Any]:
+        async with semaphore:
+            content = await _read_callback(read_page, page.content_key)
+        return {
+            "source_page_number": page.source_page_number,
+            "section_path": page.section_path,
+            "role": page.role,
+            "headings": domain.markdown_headings(content),
+            "evidence": domain.heading_evidence(content, page.section_path),
+        }
+
+    page_evidence = await asyncio.gather(*(page_evidence_for(page) for page in candidate.pages))
+    return domain.canonical_heading_candidates(page_evidence)
+
+
+async def reconcile_contents(
+    state: Mapping[str, Any],
+    read_page: PageReader,
+    write_artifact: ArtifactWriter,
+    artifact_exists: ArtifactExists,
+    cancel_check: CancelCheck | None = None,
+) -> dict[str, Any]:
+    """Build canonical contents from selected-page headings and publish the processed-book manifest."""
+    candidate_key = state.get("processed_book_candidate_key")
+    if not isinstance(candidate_key, str):
+        raise ValueError("contents generation requires a materialized processed-book candidate")
+    candidate_content = await _read_callback(read_page, candidate_key)
+    candidate = schemas.ProcessedBookCandidate.model_validate_json(candidate_content)
+    if (
+        candidate.book_id != state.get("book_id")
+        or candidate.extraction_run_id != state.get("extraction_run_id")
+        or candidate.agentic_run_id != state.get("agentic_run_id")
+        or candidate.selection_revision != state.get("content_selection_revision")
+        or candidate.selection_sha256 != state.get("content_selection_sha256")
+    ):
+        raise ValueError("the processed-book candidate is not pinned to this ingestion run")
+
+    if cancel_check is not None and await cancel_check():
+        raise asyncio.CancelledError
+    heading_candidates = await _candidate_headings(candidate, read_page)
+    contents, contents_status = domain.build_canonical_contents(
+        heading_candidates,
+        [page.model_dump(mode="json") for page in candidate.pages],
+    )
+    if cancel_check is not None and await cancel_check():
+        raise asyncio.CancelledError
+    _, manifest_key, manifest_sha256 = await publish_manifest(
+        candidate,
+        contents,
+        contents_status,
+        domains.bd.ingestion.ai.versions.CONTENTS_RECONCILER_VERSION,
+        _CallbackWriter(read_page, write_artifact, artifact_exists),
+    )
+    return {
+        "processed_book_key": manifest_key,
+        "processed_book_sha256": manifest_sha256,
+        "processed_book_revision": candidate.selection_revision,
+        "processed_page_count": len(candidate.pages),
+        "contents_status": contents_status,
+    }
+
+
+class _CallbackReader:
+    """Adapt the graph's artifact callback to the processed-book storage read interface."""
+
+    def __init__(self, reader: PageReader):
+        self._reader = reader
+
+    async def read_text(self, key: str) -> str:
+        return await _read_callback(self._reader, key)
+
+
+class _CallbackWriter(_CallbackReader):
+    """Adapt graph artifact callbacks to processed-book manifest persistence."""
+
+    def __init__(
+        self,
+        reader: PageReader,
+        writer: ArtifactWriter,
+        exists_callback: ArtifactExists,
+    ):
+        super().__init__(reader)
+        self._writer = writer
+        self._exists_callback = exists_callback
+
+    async def exists(self, key: str) -> bool:
+        return await self._exists_callback(key)
+
+    async def write(self, key: str, content: str, content_type: str = "application/json") -> None:
+        result = self._writer(key, content, content_type)
+        if inspect.isawaitable(result):
+            await result
 
 
 async def make_candidate(

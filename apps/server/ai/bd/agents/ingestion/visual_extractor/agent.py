@@ -53,9 +53,18 @@ def visual_extractor(model = None):
         response_format = schemas.VisualExtractionResult,
         skills = [skills.domain.source_for("visual_extractor")],
         permissions = [
-            FilesystemPermission(operations = ["read"], paths = ["/skills/**"], mode = "allow"),
-            FilesystemPermission(operations = ["read"], paths = ["/**"], mode = "deny"),
-            FilesystemPermission(operations = ["write"], paths = ["/**"], mode = "deny"),
+            FilesystemPermission(
+                operations = ["read"], 
+                paths = ["/skills/**"], 
+                mode = "allow"),
+            FilesystemPermission(
+                operations = ["read"], 
+                paths = ["/**"], 
+                mode = "deny"),
+            FilesystemPermission(
+                operations = ["write"], 
+                paths = ["/**"], 
+                mode = "deny"),
         ],
         backend = StateBackend(),
         name = "bd_visual_extractor",

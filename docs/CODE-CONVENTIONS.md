@@ -362,8 +362,13 @@ contract and policy that own the code.
   when they depend on an agent schema or output contract. Keep persistent
   ingestion state, selection revisions, and processed-book capabilities in
   the BD domain layer when they express book-ingestion behavior independently
-  of a particular agent. The processed-book heading and page-mapping rules
-  are domain logic when they remain independent of agent contracts.
+  of a particular agent. The ingestion AI domain packages group these
+  capabilities by responsibility: `content_selection/`, `repair_planning/`,
+  `publication/`, and `processed_book/`. Graph `node.py` wrappers call those
+  dotted domain APIs for domain-owned operations; LLM calls, agent-contract
+  validation, progress, and graph runtime wiring stay in the AI node layer.
+  The processed-book heading and page-mapping rules are domain logic when they
+  remain independent of agent contracts.
 - **BD inventory boundary follow-up:**
   `domains/bd/ingestion/ai/inventory/domain.py` imports and returns
   `ai.bd.agents.schemas` types, and its helpers are shared by the audit and

@@ -1,7 +1,6 @@
 """Quality reporting and manifest-last publication for an agentic ingestion run."""
 from __future__ import annotations
 import domains
-from . import domain
 from .... import agents, graphs
 
 import asyncio
@@ -24,7 +23,8 @@ async def verify_pages(
 ) -> dict[str, object]:
     """Re-read every delivered page's source and output and check them against each other, outside any agent."""
     source_keys = {ref["page"]: ref["source_key"] for ref in state["page_refs"]}
-    semaphore = asyncio.Semaphore(domains.bd.ingestion.ai.params.VERIFY_CONCURRENCY)
+    publication = domains.bd.ingestion.ai.publication
+    semaphore = asyncio.Semaphore(publication.params.VERIFY_CONCURRENCY)
 
     async def read(key: str) -> str:
         text = read_page(key)
@@ -43,8 +43,8 @@ async def verify_pages(
             )
         return (
             page["page"],
-            domain.sha256_matches(normalized, content_sha256),
-            domain.lost_alphanumeric(source, normalized),
+            publication.domain.sha256_matches(normalized, content_sha256),
+            publication.domain.lost_alphanumeric(source, normalized),
         )
 
     delivered = [
@@ -52,7 +52,7 @@ async def verify_pages(
         if page.get("delivery_disposition", "include") != "discarded_blank"
     ]
     rows = await asyncio.gather(*(check(page) for page in delivered))
-    return domain.summarize(
+    return domains.bd.ingestion.ai.publication.domain.summarize(
         len(rows),
         [number for number, intact, _ in rows if not intact],
         {number: lost for number, _, lost in rows if lost},

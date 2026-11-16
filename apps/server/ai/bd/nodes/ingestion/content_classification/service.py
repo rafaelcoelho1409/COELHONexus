@@ -1,7 +1,6 @@
 """Classify source pages before repair and persist an append-only selection artifact."""
 from __future__ import annotations
 import domains
-from . import domain
 from .... import agents, graphs
 
 import asyncio
@@ -59,7 +58,7 @@ async def classify_content(
     if not isinstance(page_audits, list) or len(page_audits) != expected_count:
         raise ValueError("content classification requires the complete page audit")
 
-    params = domains.bd.ingestion.ai.params
+    params = domains.bd.ingestion.ai.content_selection.params
     revision = params.CONTENT_SELECTION_REVISION
     output_key = domains.bd.ingestion.storage.keys.agentic_content_selection_key(
         book_id, agentic_run_id, revision,
@@ -126,7 +125,10 @@ async def classify_content(
                 rationale = "The ingestion quality audit classified this page as blank."
                 decision_source = "content_policy"
                 selected = "exclude"
-            elif domain.is_source_contents_page(markdown, source_ref.get("section_path", [])):
+            elif domains.bd.ingestion.ai.content_selection.domain.is_source_contents_page(
+                markdown,
+                source_ref.get("section_path", []),
+            ):
                 role = "navigation"
                 confidence = 1.0
                 rationale = (
@@ -147,7 +149,7 @@ async def classify_content(
                     "book_title": title,
                     "physical_page": page_number,
                     "section_path": source_ref.get("section_path", []),
-                    "page_markdown_excerpt": domain.excerpt(markdown),
+                    "page_markdown_excerpt": domains.bd.ingestion.ai.content_selection.domain.excerpt(markdown),
                 }
                 try:
                     with domains.settings.llm_counter.service.llm_context(
@@ -164,7 +166,7 @@ async def classify_content(
                     role = result.role.value
                     confidence = result.confidence
                     rationale = result.rationale
-                    selected, decision_source = domain.disposition(
+                    selected, decision_source = domains.bd.ingestion.ai.content_selection.domain.disposition(
                         role,
                         confidence,
                         delivery_disposition = "include",
@@ -225,7 +227,7 @@ async def classify_content(
             )
 
     manifest = domains.bd.ingestion.ai.schemas.ContentSelectionManifest(
-        classifier_version = domains.bd.ingestion.ai.versions.CONTENT_CLASSIFIER_VERSION,
+        classifier_version = domains.bd.ingestion.ai.content_selection.versions.CONTENT_CLASSIFIER_VERSION,
         book_id = book_id,
         extraction_run_id = extraction_run_id,
         agentic_run_id = agentic_run_id,

@@ -1,21 +1,16 @@
 """Deterministic Markdown serializers for validated figure transcriptions."""
 from __future__ import annotations
 from .... import agents
-from . import params
+from . import params, patterns
 
 import json
-import re
-
-
-_LANGUAGE = re.compile(r"^[A-Za-z0-9_+#.-]{0,32}$")
-_BLOCKED_TEX = re.compile(r"\\(?:html|href|url|includegraphics|input|include|def|gdef|write|openout|read|csname)\b", re.I)
 
 
 def figure_context(markdown: str, marker_start: int, *, limit: int) -> str:
     """Return a bounded, image-marker-free excerpt around the figure's page position."""
     start = max(0, marker_start - limit // 2)
     excerpt = markdown[start:start + limit]
-    excerpt = re.sub(r"<!--\s*image\s*-->", "[figure]", excerpt, flags = re.I)
+    excerpt = patterns.IMAGE_COMMENT_RE.sub("[figure]", excerpt)
     return excerpt.strip()
 
 
@@ -274,7 +269,7 @@ def _fenced_json(value: dict[str, object], language: str) -> str:
 
 def _equation(result: agents.schemas.VisualExtractionResult) -> str | None:
     latex = result.equation_latex.strip()
-    if not latex or _BLOCKED_TEX.search(latex) or "\x00" in latex:
+    if not latex or patterns.BLOCKED_TEX_RE.search(latex) or "\x00" in latex:
         return None
     return f"$$\n{latex}\n$$"
 
@@ -282,7 +277,7 @@ def _equation(result: agents.schemas.VisualExtractionResult) -> str | None:
 def _code(result: agents.schemas.VisualExtractionResult) -> str | None:
     code = result.code_text.rstrip()
     language = result.code_language.strip()
-    if not code or not _LANGUAGE.fullmatch(language):
+    if not code or not patterns.LANGUAGE_RE.fullmatch(language):
         return None
     return _fenced_code(code, language)
 
@@ -293,7 +288,7 @@ def _text(result: agents.schemas.VisualExtractionResult) -> str | None:
         return None
     if result.text_format == "code":
         language = result.code_language.strip()
-        if not _LANGUAGE.fullmatch(language):
+        if not patterns.LANGUAGE_RE.fullmatch(language):
             return None
         return _fenced_code(text, language)
 
@@ -304,7 +299,10 @@ def _text(result: agents.schemas.VisualExtractionResult) -> str | None:
 
 
 def _fenced_code(code: str, language: str) -> str:
-    fence_length = max(3, max((len(match.group(0)) for match in re.finditer(r"`+", code)), default = 0) + 1)
+    fence_length = max(
+        3,
+        max((len(match.group(0)) for match in patterns.BACKTICK_RUN_RE.finditer(code)), default = 0) + 1,
+    )
     fence = "`" * fence_length
     return f"{fence}{language}\n{code}\n{fence}"
 
@@ -324,7 +322,7 @@ def _timeline(result: agents.schemas.VisualExtractionResult) -> str | None:
 
 
 def _markdown_literal(value: str) -> str:
-    return re.sub(r"([\\`*_{}\[\]<>#+.!|~])", r"\\\1", value).replace("&", "&amp;")
+    return patterns.MARKDOWN_ESCAPE_RE.sub(r"\\\1", value).replace("&", "&amp;")
 
 
 def _table_cell(value: str) -> str:
