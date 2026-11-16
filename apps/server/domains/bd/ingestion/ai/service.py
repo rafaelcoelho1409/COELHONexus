@@ -428,6 +428,32 @@ async def read_page_quality(
         for result in proposals.get("source_verification_results", [])
         if isinstance(result, dict) and isinstance(result.get("issue_id"), str)
     }
+
+    def proposal_details(issue_id: str) -> dict[str, Any] | None:
+        proposal = proposal_by_issue.get(issue_id)
+        if proposal is None:
+            return None
+        verification = verification_by_issue.get(issue_id)
+        verification_status = verification.get("status") if verification else None
+        verification_reason = verification.get("reason") if verification else None
+        if issue_id in auto_applied and verification_status not in {None, "confirmed"}:
+            verification_status = "advisory"
+            verification_reason = (
+                "Image verification is advisory; the validated quality correction was applied automatically."
+            )
+        return {
+            "target_text": proposal["target_text"],
+            "replacement": proposal["replacement"],
+            "rationale": proposal["rationale"],
+            "confidence": proposal["confidence"],
+            "risk": proposal["risk"],
+            "verification_status": verification_status,
+            "source_verification_status": (
+                verification.get("status") if verification else None
+            ),
+            "verification_reason": verification_reason,
+        }
+
     return {
         "book_id": book_id,
         "agentic_run_id": run["agentic_run_id"],
@@ -447,27 +473,7 @@ async def read_page_quality(
                     else "review" if issue["issue_id"] in review_required
                     else "none"
                 ),
-                "proposal": (
-                    {
-                        "target_text": proposal["target_text"],
-                        "replacement": proposal["replacement"],
-                        "rationale": proposal["rationale"],
-                        "confidence": proposal["confidence"],
-                        "risk": proposal["risk"],
-                        "verification_status": (
-                            verification["status"]
-                            if (verification := verification_by_issue.get(issue["issue_id"])) is not None
-                            else None
-                        ),
-                        "verification_reason": (
-                            verification.get("reason")
-                            if (verification := verification_by_issue.get(issue["issue_id"])) is not None
-                            else None
-                        ),
-                    }
-                    if (proposal := proposal_by_issue.get(issue["issue_id"])) is not None
-                    else None
-                ),
+                "proposal": proposal_details(issue["issue_id"]),
             }
             for issue in assessment["issues"]
         ],

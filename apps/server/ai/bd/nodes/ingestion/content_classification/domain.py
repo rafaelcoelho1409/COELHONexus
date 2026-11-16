@@ -54,7 +54,6 @@ def is_source_contents_page(markdown: str, section_path: list[str] | None = None
             or numbered_entries >= 2
             or trailing_page_entries >= 2
             or table_page_entries >= 2
-            or len(lines) >= 8
         )
     if has_contents_section and table_page_entries >= 2:
         return True

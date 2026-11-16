@@ -13,7 +13,11 @@ const nextConfig: NextConfig = {
   compress: false,
   turbopack: { root: import.meta.dirname },
   // Nexus pipelines can stream for minutes; Next's rewrite proxy defaults to 30s.
-  experimental: { proxyTimeout: 30 * 60 * 1000 },
+  experimental: {
+    proxyTimeout: 30 * 60 * 1000,
+    // BD uploads are accepted up to 300 MB; leave room for multipart boundaries and headers.
+    proxyClientMaxBodySize: "310mb",
+  },
   async redirects() {
     return buildRedirects();
   },

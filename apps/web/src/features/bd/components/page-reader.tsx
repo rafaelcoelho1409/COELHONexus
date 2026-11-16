@@ -45,6 +45,9 @@ export function PageReader({
   content,
   framed = true,
   toolbar,
+  previewMode: controlledPreviewMode,
+  onPreviewModeChange,
+  showViewControls = true,
 }: {
   bookId: string;
   bookMetadata?: {
@@ -60,11 +63,16 @@ export function PageReader({
   units: BookUnits;
   content: PageContent;
   framed?: boolean;
-  /** Buttons on the right of the header. */
+  /** Navigation controls in the page metadata row. */
   toolbar?: ReactNode;
+  previewMode?: (typeof PREVIEW_MODES)[number]["id"];
+  onPreviewModeChange?: (mode: (typeof PREVIEW_MODES)[number]["id"]) => void;
+  showViewControls?: boolean;
 }) {
-  const [previewMode, setPreviewMode] = useState<(typeof PREVIEW_MODES)[number]["id"]>("rendered");
+  const [localPreviewMode, setLocalPreviewMode] = useState<(typeof PREVIEW_MODES)[number]["id"]>("rendered");
   const [selectedFigure, setSelectedFigure] = useState<number | null>(null);
+  const previewMode = controlledPreviewMode ?? localPreviewMode;
+  const setPreviewMode = onPreviewModeChange ?? setLocalPreviewMode;
   const figures = row?.figures ?? EMPTY_FIGURES;
   const { body, raw, hasAi, version, source } = content;
   const renderedText = useMemo(
@@ -132,9 +140,7 @@ export function PageReader({
             </p>
           </div>
         ) : null}
-        <div
-          className={`flex min-w-0 flex-wrap items-start justify-between gap-3 ${bookMetadata ? "mt-3" : ""}`}
-        >
+        <div className={`flex min-w-0 flex-wrap items-center justify-between gap-3 ${bookMetadata ? "mt-3" : ""}`}>
           <div className="min-w-0 flex-1">
             <p className="mono-label">
               {unitName} {processedPageNumber ?? page}
@@ -151,46 +157,50 @@ export function PageReader({
                 : "Docling extraction"}
             </p>
           </div>
-          {toolbar}
-          {chips.length > 0 ? (
-            <ul
-              aria-label={`What the ${units.singular} contains`}
-              className="ml-auto flex max-w-full flex-wrap justify-end gap-2"
-            >
-              {chips.map((chip) => (
-                <li
-                  key={chip}
-                  className="whitespace-nowrap rounded-sm border border-border px-2 py-0.5 text-xs text-muted-foreground"
-                >
-                  {chip}
-                </li>
-              ))}
-            </ul>
-          ) : null}
+          <div className="ml-auto flex min-w-0 max-w-full flex-wrap items-center justify-end gap-2">
+            {chips.length > 0 ? (
+              <ul
+                aria-label={`What the ${units.singular} contains`}
+                className="flex max-w-full flex-wrap justify-start gap-2"
+              >
+                {chips.map((chip) => (
+                  <li
+                    key={chip}
+                    className="whitespace-nowrap rounded-sm border border-border px-2 py-0.5 text-xs text-muted-foreground"
+                  >
+                    {chip}
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+            {toolbar}
+          </div>
         </div>
         {trail ? <p className="mt-2 w-full break-words text-sm text-muted-foreground">{trail}</p> : null}
         <PageQualityPanel bookId={bookId} page={page} unit={unitName} enabled={hasAi} defaultOpen={framed} />
       </header>
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        {version === "changes" ? (
-          <span />
-        ) : (
-          <ToggleGroup
-            legend="Content view"
-            options={PREVIEW_MODES}
-            value={previewMode}
-            onChange={setPreviewMode}
-          />
-        )}
-        {hasAi ? (
-          <ToggleGroup
-            legend="Version of this page"
-            options={VERSIONS}
-            value={version}
-            onChange={content.setVersion}
-          />
-        ) : null}
-      </div>
+      {showViewControls ? (
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          {version === "changes" ? (
+            <span />
+          ) : (
+            <ToggleGroup
+              legend="Content view"
+              options={PREVIEW_MODES}
+              value={previewMode}
+              onChange={setPreviewMode}
+            />
+          )}
+          {hasAi ? (
+            <ToggleGroup
+              legend="Version of this page"
+              options={VERSIONS}
+              value={version}
+              onChange={content.setVersion}
+            />
+          ) : null}
+        </div>
+      ) : null}
       <div className="mt-4">
         <section
           aria-label={

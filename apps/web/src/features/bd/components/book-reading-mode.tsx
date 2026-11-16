@@ -95,9 +95,11 @@ export function BookReadingMode({
 
   const reader = (
     <div className="flex h-full min-h-0 flex-col">
-      <header className="relative flex shrink-0 items-center gap-1 border-b border-border px-2 py-1.5 sm:gap-2 sm:px-3">
-        <BookReadingProgress scroller={scroller} className="absolute inset-x-0 -bottom-px z-10 h-0.5" />
-        {!embedded ? (
+      {embedded ? (
+        <BookReadingProgress scroller={scroller} className="z-10 h-0.5 shrink-0" />
+      ) : (
+        <header className="relative flex shrink-0 items-center gap-1 border-b border-border px-2 py-1.5 sm:gap-2 sm:px-3">
+          <BookReadingProgress scroller={scroller} className="absolute inset-x-0 -bottom-px z-10 h-0.5" />
           <ActionButton
             iconOnly
             className="hidden md:inline-flex"
@@ -108,29 +110,27 @@ export function BookReadingMode({
           >
             {layout.readingContents ? <PanelLeftClose aria-hidden /> : <PanelLeftOpen aria-hidden />}
           </ActionButton>
-        ) : null}
-        <div className="min-w-0 flex-1 px-1">
-          <h2 id={titleId} className="truncate text-sm font-medium">
-            {title}
-          </h2>
-          <p className="text-xs text-muted-foreground">{position}</p>
-        </div>
-        <ActionButton
-          iconOnly
-          aria-label="Previous page"
-          title="Previous page"
-          disabled={!hasPrevious}
-          onClick={onPrevious}
-        >
-          <ChevronLeft aria-hidden />
-        </ActionButton>
-        <ActionButton iconOnly aria-label="Next page" title="Next page" disabled={!hasNext} onClick={onNext}>
-          <ChevronRight aria-hidden />
-        </ActionButton>
-        <ActionButton iconOnly aria-label="Search this book" title="Search this book" onClick={onSearch}>
-          <Search aria-hidden />
-        </ActionButton>
-        {!embedded ? (
+          <div className="min-w-0 flex-1 px-1">
+            <h2 id={titleId} className="truncate text-sm font-medium">
+              {title}
+            </h2>
+            <p className="text-xs text-muted-foreground">{position}</p>
+          </div>
+          <ActionButton
+            iconOnly
+            aria-label="Previous page"
+            title="Previous page"
+            disabled={!hasPrevious}
+            onClick={onPrevious}
+          >
+            <ChevronLeft aria-hidden />
+          </ActionButton>
+          <ActionButton iconOnly aria-label="Next page" title="Next page" disabled={!hasNext} onClick={onNext}>
+            <ChevronRight aria-hidden />
+          </ActionButton>
+          <ActionButton iconOnly aria-label="Search this book" title="Search this book" onClick={onSearch}>
+            <Search aria-hidden />
+          </ActionButton>
           <ActionButton
             className="hidden sm:inline-flex"
             aria-pressed={wide}
@@ -140,26 +140,24 @@ export function BookReadingMode({
             <MoveHorizontal aria-hidden />
             Wide
           </ActionButton>
-        ) : null}
-        {!embedded && hasOutline ? (
-          <ActionButton
-            iconOnly
-            className="hidden lg:inline-flex"
-            aria-expanded={layout.readingOutline}
-            aria-label={layout.readingOutline ? "Hide outline" : "Show outline"}
-            title={layout.readingOutline ? "Hide outline" : "Show outline"}
-            onClick={() => onLayout({ readingOutline: !layout.readingOutline })}
-          >
-            {layout.readingOutline ? <PanelRightClose aria-hidden /> : <PanelRightOpen aria-hidden />}
-          </ActionButton>
-        ) : null}
-        {!embedded ? (
+          {hasOutline ? (
+            <ActionButton
+              iconOnly
+              className="hidden lg:inline-flex"
+              aria-expanded={layout.readingOutline}
+              aria-label={layout.readingOutline ? "Hide outline" : "Show outline"}
+              title={layout.readingOutline ? "Hide outline" : "Show outline"}
+              onClick={() => onLayout({ readingOutline: !layout.readingOutline })}
+            >
+              {layout.readingOutline ? <PanelRightClose aria-hidden /> : <PanelRightOpen aria-hidden />}
+            </ActionButton>
+          ) : null}
           <ActionButton aria-label="Exit reading mode" onClick={onExit}>
             <Minimize2 aria-hidden />
             <span className="hidden sm:inline">Exit</span>
           </ActionButton>
-        ) : null}
-      </header>
+        </header>
+      )}
 
       <div className={`flex min-h-0 flex-1 ${embedded ? "flex-col md:flex-row" : ""}`}>
         {showContents ? (
@@ -197,6 +195,9 @@ export function BookReadingMode({
         aria-labelledby={titleId}
         className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background text-foreground"
       >
+        <h2 id={titleId} className="sr-only">
+          {title} · {position}
+        </h2>
         {reader}
       </section>
     );

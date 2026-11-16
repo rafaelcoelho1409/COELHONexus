@@ -1,4 +1,5 @@
 import { readerFont } from "@/shared/markdown/reader-font";
+import type { ReactNode } from "react";
 
 import { CONTENTS_ENTRIES_PER_PAGE } from "../params";
 import type { ProcessedBook } from "../entities";
@@ -12,12 +13,14 @@ export function GeneratedContentsPage({
   pageIndex,
   pageCount,
   onOpenPage,
+  toolbar,
 }: {
   bookTitle: string;
   entries: readonly ContentsEntry[];
   pageIndex: number;
   pageCount: number;
   onOpenPage: (sourcePage: number) => void;
+  toolbar?: ReactNode;
 }) {
   const start = pageIndex * CONTENTS_ENTRIES_PER_PAGE;
   const pageEntries = entries.slice(start, start + CONTENTS_ENTRIES_PER_PAGE);
@@ -28,9 +31,12 @@ export function GeneratedContentsPage({
       className="min-w-0 rounded-md border border-border bg-card p-4 sm:p-5"
     >
       <header className="mb-5 border-b border-border pb-4">
-        <p className="mono-label">
-          CONTENTS · {pageIndex + 1} OF {pageCount}
-        </p>
+        <div className="flex items-center justify-between gap-2">
+          <p className="mono-label">
+            CONTENTS · {pageIndex + 1} OF {pageCount}
+          </p>
+          {toolbar}
+        </div>
         <h2 className={`${readerFont.className} mt-2 text-2xl font-semibold tracking-tight`}>
           Table of Contents
         </h2>

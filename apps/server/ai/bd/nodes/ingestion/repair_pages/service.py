@@ -110,7 +110,8 @@ async def verify_source_patches(
             "status": "unavailable",
             "reason": reason,
         } for proposal in candidates], [
-            f"{len(candidates)} text patch candidate(s) were left unchanged because source-page verification was unavailable.",
+            f"{len(candidates)} text patch candidate(s) could not be image-verified; "
+            "verification does not block automatic application.",
         ], len(candidates)
 
     if verifier is None or read_source_page_image is None:
@@ -276,7 +277,10 @@ async def verify_source_patches(
             and target_focus != replacement_focus
         ):
             status = "source_mismatch"
-            reason = "The literal source reading matches the extracted text, so the proposed correction was not applied."
+            reason = (
+                "The source image matches the extracted wording; contextual correction remains eligible "
+                "for automatic application."
+            )
         elif check.verdict == agents.schemas.PatchVerificationVerdict.CONTRADICTED:
             source_replacement = domain.source_reading_replacement(
                 proposal,
@@ -315,12 +319,14 @@ async def verify_source_patches(
     warnings = []
     if unavailable_count:
         warnings.append(
-            f"{unavailable_count} text patch candidate(s) were left unchanged because source verification was unavailable."
+            f"{unavailable_count} text patch candidate(s) could not be image-verified; "
+            "verification does not block automatic application."
         )
     rejected_count = not_confirmed - unavailable_count
     if rejected_count:
         warnings.append(
-            f"{rejected_count} text patch candidate(s) were left unchanged because the source image did not confirm them."
+            f"{rejected_count} text patch candidate(s) were not confirmed by the image verifier; "
+            "validated proposals remain eligible for automatic application."
         )
     return verified_issue_ids, verified_replacements, results, warnings, unavailable_count
 
@@ -334,7 +340,7 @@ async def repair_pages(
     patch_verifier: PatchVerifier | None = None,
     read_source_page_image: graphs.ingestion.entities.SourcePageImageReader | None = None,
 ) -> dict:
-    """Run bounded specialists, apply only unambiguous low-risk proposals, and persist every page."""
+    """Run bounded specialists, automatically apply validated proposals, and persist every page."""
     page_refs = state["page_refs"]
     audits = {page["page"]: page for page in state["page_audits"]}
     selection = state.get("content_selection")
@@ -527,7 +533,6 @@ async def repair_pages(
                     normalized, auto_applied, proposal_reviews = domain.apply_proposals(
                         markdown,
                         proposals,
-                        source_verified_issue_ids = source_verified_ids,
                     )
                 except ValueError as error:
                     normalized = markdown

@@ -205,19 +205,23 @@ async def classify_content(
     rows.sort(key = lambda page: page["page_number"])
     selected_count = sum(page["disposition"] == "include" for page in rows)
     if selected_count == 0:
-        fallback_pages = [
-            page for page in rows
-            if page["role"] not in {"navigation", "legal", "noise"}
-        ]
+        fallback_pages = []
+        for page in rows:
+            assessment = audits_by_page[page["page_number"]].get("assessment")
+            if not isinstance(assessment, dict) or assessment.get("page_kind") != "blank":
+                fallback_pages.append(page)
         if not fallback_pages:
             raise ValueError(
-                "content classification found no substantive pages to keep after excluding navigation and non-book matter"
+                "content classification found no nonblank pages to keep after the page audit"
             )
         for page in fallback_pages:
             page.update(
                 disposition = "include",
                 decision_source = "conservative_fallback",
-                rationale = "No page met the normal inclusion threshold; ambiguous substantive pages were retained for review.",
+                rationale = (
+                    "Every page was otherwise excluded; this nonblank page was retained to avoid an empty processed "
+                    "book. Review the content selection."
+                ),
             )
 
     manifest = domains.bd.ingestion.ai.schemas.ContentSelectionManifest(

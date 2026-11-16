@@ -17,7 +17,7 @@ import {
   TriangleAlert,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { flushSync } from "react-dom";
+import { createPortal, flushSync } from "react-dom";
 import { apiErrorMessage } from "@/shared/lib/api-error";
 import { useScrollSpy } from "@/shared/lib/use-scroll-spy";
 import { bookUnits, fmtBytes, isLive } from "../domain/books";
@@ -41,7 +41,7 @@ import {
 } from "../hooks/use-bd-data";
 import { useBookRun } from "../hooks/use-book-run";
 import { useBdOverlays } from "../hooks/use-overlays";
-import { usePageContent } from "../hooks/use-page-content";
+import { usePageContent, type PageVersion } from "../hooks/use-page-content";
 import { useReaderLayout } from "../hooks/use-reader-layout";
 import { CONTENTS_ENTRIES_PER_PAGE, type BookViewId } from "../params";
 import { ActionButton } from "./action-button";
@@ -73,6 +73,15 @@ const PAGES_NAV_OPTIONS = [
   { id: "contents", label: "Contents" },
   { id: "pages", label: "Processed pages" },
 ] as const;
+const CONTENT_VIEW_OPTIONS = [
+  { id: "rendered", label: "Rendered" },
+  { id: "source", label: "Markdown source" },
+] as const;
+const CONTENT_VERSION_OPTIONS: readonly { id: PageVersion; label: string }[] = [
+  { id: "ai", label: "AI-processed" },
+  { id: "docling", label: "Docling raw" },
+  { id: "changes", label: "Changes" },
+];
 
 type ReaderPosition = { kind: "contents"; index: number } | { kind: "page"; page: number };
 
@@ -87,11 +96,13 @@ export function BookView({
   initialPage,
   autoChain,
   activeView,
+  pageControlsHost,
 }: {
   bookId: string;
   initialPage: number | null;
   autoChain: boolean;
   activeView: BookViewId;
+  pageControlsHost: HTMLDivElement | null;
 }) {
   const snapshot = useSnapshot(bookId);
   if (snapshot.isPending && !snapshot.data) {
@@ -162,6 +173,7 @@ export function BookView({
         snapshot={snapshot.data}
         autoChain={autoChain}
         activeView={activeView}
+        pageControlsHost={pageControlsHost}
       />
     </>
   );
@@ -173,12 +185,14 @@ function BookDetail({
   snapshot,
   autoChain,
   activeView,
+  pageControlsHost,
 }: {
   bookId: string;
   initialPage: number | null;
   snapshot: BookSnapshot;
   autoChain: boolean;
   activeView: BookViewId;
+  pageControlsHost: HTMLDivElement | null;
 }) {
   const run = useBookRun(bookId, snapshot);
   const agentic = useAgenticRun(bookId, snapshot);
@@ -319,6 +333,7 @@ function BookDetail({
     activeView === "materials" ? { startId: null } : null,
   );
   const [pagesNavigation, setPagesNavigation] = useState<"contents" | "pages">("contents");
+  const [previewMode, setPreviewMode] = useState<(typeof CONTENT_VIEW_OPTIONS)[number]["id"]>("rendered");
   const [searchOpen, setSearchOpen] = useState(false);
   const [usageOpen, setUsageOpen] = useState(false);
   const [replayPendingNodeId, setReplayPendingNodeId] = useState<string | null>(null);
@@ -339,6 +354,28 @@ function BookDetail({
     livePage: page === null ? undefined : state.pages[page],
     agenticRunAvailable: agentic.run !== null,
   });
+  const pageViewControls =
+    activeView === "materials" && pageControlsHost
+      ? createPortal(
+          <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+            <ToggleGroup
+              legend="Content view"
+              options={CONTENT_VIEW_OPTIONS}
+              value={previewMode}
+              onChange={setPreviewMode}
+            />
+            {agentic.status === "done" || content.hasAi ? (
+              <ToggleGroup
+                legend="Version of this page"
+                options={CONTENT_VERSION_OPTIONS}
+                value={content.version}
+                onChange={content.setVersion}
+              />
+            ) : null}
+          </div>,
+          pageControlsHost,
+        )
+      : null;
   const activeHeading = useScrollSpy(content.outlineIds, `${reading !== null}:${page}:${content.version}`);
   const hasOutline = content.outline.length >= 2;
   const reviewPages = agentic.run?.review_pages ?? [];
@@ -502,6 +539,42 @@ function BookDetail({
     setView({ follow: false, picked: target });
   };
   const choosePage = (target: number) => choosePosition({ kind: "page", page: target });
+  const goToPreviousPosition = () => {
+    if (previousPosition !== null) choosePosition(previousPosition);
+  };
+  const goToNextPosition = () => {
+    if (nextPosition !== null) choosePosition(nextPosition);
+  };
+  const pageNavigationToolbar = (
+    <div className="flex shrink-0 items-center gap-1">
+      <ActionButton
+        iconOnly
+        aria-label={`Previous ${units.singular}`}
+        title={`Previous ${units.singular}`}
+        disabled={previousPosition === null}
+        onClick={goToPreviousPosition}
+      >
+        <ChevronLeft aria-hidden />
+      </ActionButton>
+      <ActionButton
+        iconOnly
+        aria-label={`Next ${units.singular}`}
+        title={`Next ${units.singular}`}
+        disabled={nextPosition === null}
+        onClick={goToNextPosition}
+      >
+        <ChevronRight aria-hidden />
+      </ActionButton>
+      <ActionButton
+        iconOnly
+        aria-label="Search this book"
+        title="Search this book"
+        onClick={() => setSearchOpen(true)}
+      >
+        <Search aria-hidden />
+      </ActionButton>
+    </div>
+  );
   const contentsPage =
     contentsEntries.length > 0 && contentsPageIndex !== null ? (
       <GeneratedContentsPage
@@ -510,18 +583,13 @@ function BookDetail({
         pageIndex={contentsPageIndex}
         pageCount={contentsPageCount}
         onOpenPage={choosePage}
+        toolbar={pageNavigationToolbar}
       />
     ) : processedBook.isPending ? (
       <p role="status" className="rounded-md border border-border bg-card p-6 text-sm text-muted-foreground">
         Loading the generated table of contents…
       </p>
     ) : null;
-  const goToPreviousPosition = () => {
-    if (previousPosition !== null) choosePosition(previousPosition);
-  };
-  const goToNextPosition = () => {
-    if (nextPosition !== null) choosePosition(nextPosition);
-  };
   const openReadingMode = () => {
     if (currentPosition === null) return;
     choosePosition(currentPosition);
@@ -714,13 +782,13 @@ function BookDetail({
       </ActionButton>
     </div>
   );
-
   return (
     <section
       aria-label={title}
       className={activeView === "materials" ? "flex min-h-0 min-w-0 flex-1 flex-col" : "min-w-0"}
     >
       {activeView === "materials" ? null : <BookReadingProgress />}
+      {pageViewControls}
       {activeView !== "materials" ? (
         <header className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0">
@@ -855,9 +923,6 @@ function BookDetail({
               }
               className="mt-0"
             />
-            <p className="mt-2 text-xs text-muted-foreground">
-              Wipe clears extracted materials and derived AI results but keeps the uploaded book.
-            </p>
           </section>
           <section
             aria-label="Agentic AI progress"
@@ -871,11 +936,6 @@ function BookDetail({
               units={units}
               extractionDone={status === "done"}
               successful={agentic.status === "done"}
-              qualityStatus={agentic.run?.quality_status ?? null}
-              deliveredPageCount={agentic.run?.delivered_page_count ?? 0}
-              discardedBlankPageCount={agentic.run?.discarded_blank_page_count ?? 0}
-              reviewPageCount={agentic.run?.review_page_count ?? 0}
-              unverifiedPageCount={agentic.run?.unverified_page_count ?? 0}
               streamStatus={agentic.streamStatus}
               actionPending={agenticActionPending}
               cancelPending={agenticCancelPending}
@@ -886,7 +946,6 @@ function BookDetail({
               onResume={retryAgenticProcessing}
               onStop={stopAgenticProcessing}
               onWipe={() => void wipeAgenticProcessing()}
-              chapters={state.chapters.length > 0 ? state.chapters : manifest.chapters}
             />
           </section>
         </div>
@@ -967,7 +1026,10 @@ function BookDetail({
                 }
                 units={units}
                 content={content}
-                toolbar={toolbar}
+                toolbar={activeView === "materials" ? pageNavigationToolbar : toolbar}
+                previewMode={previewMode}
+                onPreviewModeChange={setPreviewMode}
+                showViewControls={activeView !== "materials"}
               />
             )}
 
@@ -1011,7 +1073,11 @@ function BookDetail({
                 }
                 units={units}
                 content={content}
+                toolbar={activeView === "materials" ? pageNavigationToolbar : undefined}
                 framed={false}
+                previewMode={previewMode}
+                onPreviewModeChange={setPreviewMode}
+                showViewControls={activeView !== "materials"}
               />
             )}
           </BookReadingMode>

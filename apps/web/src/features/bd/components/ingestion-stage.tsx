@@ -21,6 +21,8 @@ export function IngestionStage({ view = "pipeline" }: { view?: BookViewId }) {
   const bookId = searchParams.get(BOOK_PARAM);
   const initialPage = parsePageParam(searchParams.get(PAGE_PARAM));
   const [refreshKey, setRefreshKey] = useState(0);
+  const [pageControlsHost, setPageControlsHost] = useState<HTMLDivElement | null>(null);
+  const [uploadProgressHost, setUploadProgressHost] = useState<HTMLDivElement | null>(null);
   const [autoChain, setAutoChain] = useAutoChainPreference();
   const library = useLibrary();
   const selectedBook = library.data?.find((book) => book.book_id === bookId);
@@ -45,9 +47,12 @@ export function IngestionStage({ view = "pipeline" }: { view?: BookViewId }) {
               autoChain={autoChain}
               showSelectedTitle={view !== "materials"}
             />
+            {view === "materials" ? (
+              <div ref={setPageControlsHost} className="flex min-w-0 flex-wrap items-center gap-1.5" />
+            ) : null}
             {view !== "materials" ? (
               <>
-                <UploadDropzone onOpen={open} autoChain={autoChain} />
+                <UploadDropzone onOpen={open} autoChain={autoChain} progressHost={uploadProgressHost} />
                 <label className="flex min-h-9 items-center gap-2 text-xs text-muted-foreground">
                   <input
                     type="checkbox"
@@ -73,6 +78,7 @@ export function IngestionStage({ view = "pipeline" }: { view?: BookViewId }) {
         }
       />
       <div className={view === "materials" ? "flex min-h-0 min-w-0 flex-1 flex-col" : "min-w-0"}>
+        {view !== "materials" ? <div ref={setUploadProgressHost} className="min-w-0" /> : null}
         {bookId ? (
           <BookView
             key={openingKey}
@@ -80,6 +86,7 @@ export function IngestionStage({ view = "pipeline" }: { view?: BookViewId }) {
             initialPage={initialPage}
             autoChain={autoChain}
             activeView={view}
+            pageControlsHost={view === "materials" ? pageControlsHost : null}
           />
         ) : (
           <section

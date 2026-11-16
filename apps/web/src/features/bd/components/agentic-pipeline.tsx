@@ -53,11 +53,6 @@ export function AgenticProgressBar({
   units,
   extractionDone,
   successful,
-  qualityStatus,
-  deliveredPageCount,
-  discardedBlankPageCount,
-  reviewPageCount,
-  unverifiedPageCount,
   streamStatus,
   actionPending,
   cancelPending,
@@ -68,7 +63,6 @@ export function AgenticProgressBar({
   onResume,
   onStop,
   onWipe,
-  chapters,
 }: {
   status: AgenticRunStatus["status"] | null;
   progress: AgenticProgress | null;
@@ -77,11 +71,6 @@ export function AgenticProgressBar({
   units: BookUnits;
   extractionDone: boolean;
   successful: boolean;
-  qualityStatus: AgenticRunStatus["quality_status"];
-  deliveredPageCount: number;
-  discardedBlankPageCount: number;
-  reviewPageCount: number;
-  unverifiedPageCount: number;
   streamStatus: StreamStatus;
   actionPending: boolean;
   cancelPending: boolean;
@@ -92,15 +81,9 @@ export function AgenticProgressBar({
   onResume: () => void;
   onStop: () => void;
   onWipe: () => void;
-  chapters: readonly ChapterRange[];
 }) {
   const completed = progress?.processed_pages.length ?? 0;
   const percent = agenticPercent(completed, total);
-  const chapterSummary = chapterProgressSummary(chapters, progress?.processed_pages ?? []);
-  const activeWork = [
-    progress?.active_audit_pages.length ? `${progress.active_audit_pages.length} auditing` : null,
-    progress?.active_repair_pages.length ? `${progress.active_repair_pages.length} repairing` : null,
-  ].filter((item) => item !== null);
   const statusText = cancelRequested
     ? "Stopping"
     : status === null
@@ -195,46 +178,11 @@ export function AgenticProgressBar({
       >
         <div className="h-full bg-primary" style={{ width: `${percent ?? 0}%` }} />
       </div>
-      <dl className="mt-2 grid grid-cols-2 gap-2 text-xs sm:grid-cols-3 xl:grid-cols-6">
-        <ProgressMetric
-          label="Processed"
-          value={`${completed} / ${total > 0 ? total : "?"}${percent !== null ? ` · ${percent}%` : ""}`}
-        />
-        <ProgressMetric label="Audited" value={progress ? String(progress.audited_pages.length) : "—"} />
-        <ProgressMetric
-          label="Pages with findings"
-          value={status === "done" ? String(reviewPageCount) : hasRun ? "Pending" : "—"}
-        />
-        <ProgressMetric
-          label="Unverified audits"
-          value={status === "done" ? String(unverifiedPageCount) : hasRun ? "Pending" : "—"}
-        />
-        <ProgressMetric
-          label="Chapters"
-          value={chapterSummary ? `${chapterSummary.completed} / ${chapterSummary.total}` : "—"}
-        />
-        <ProgressMetric label="Active work" value={activeWork.length ? activeWork.join(" · ") : "Idle"} />
-      </dl>
       {progress && progress.audit_warning_pages.length > 0 ? (
         <p className="mt-1 text-xs text-warning-text">
           Audit warnings on {progress.audit_warning_pages.length}{" "}
           {progress.audit_warning_pages.length === 1 ? units.singular : units.plural}.
         </p>
-      ) : null}
-      {qualityStatus === "complete_with_review" ? (
-        <p className="mt-1 text-xs text-warning-text">
-          Completed with notes · {reviewPageCount}{" "}
-          {reviewPageCount === 1 ? "page has retained findings" : "pages have retained findings"} ·{" "}
-          {unverifiedPageCount}{" "}
-          {unverifiedPageCount === 1 ? "audit unverified" : "audits unverified"} · {deliveredPageCount}{" "}
-          delivered · {discardedBlankPageCount} blank excluded
-        </p>
-      ) : qualityStatus === "complete" ? (
-        <p className="mt-1 text-xs text-success-text">
-          Quality checks passed · {deliveredPageCount} delivered · {discardedBlankPageCount} blank excluded
-        </p>
-      ) : status === "done" ? (
-        <p className="mt-1 text-xs text-warning-text">Quality status unavailable for this run.</p>
       ) : null}
       {error ? (
         <p role="alert" className="mt-1 break-words text-xs text-destructive-text">
@@ -250,21 +198,7 @@ export function AgenticProgressBar({
         <p aria-live="polite" className="mt-1 text-xs text-muted-foreground">
           Stop requested; active page work is draining before the run ends.
         </p>
-      ) : status === "queued" || status === "running" ? (
-        <p className="mt-1 text-xs text-muted-foreground">
-          Stop takes effect at a safe page or graph-stage boundary. Wipe becomes available after the run
-          stops.
-        </p>
       ) : null}
-    </div>
-  );
-}
-
-function ProgressMetric({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="min-w-0 rounded-sm border border-border bg-background px-2.5 py-1.5">
-      <dt className="text-muted-foreground">{label}</dt>
-      <dd className="break-words font-medium tabular-nums text-foreground">{value}</dd>
     </div>
   );
 }

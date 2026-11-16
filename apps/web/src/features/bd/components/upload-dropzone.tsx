@@ -2,6 +2,7 @@
 
 import { Upload } from "lucide-react";
 import { type ChangeEvent, type DragEvent, useId, useState } from "react";
+import { createPortal } from "react-dom";
 
 import { describeUploadError } from "../api";
 import { bookFileProblem } from "../domain/books";
@@ -14,9 +15,11 @@ import { MAX_UPLOAD_LABEL } from "../params";
 export function UploadDropzone({
   onOpen,
   autoChain = false,
+  progressHost,
 }: {
   onOpen: (bookId: string) => void;
   autoChain?: boolean;
+  progressHost: HTMLDivElement | null;
 }) {
   const upload = useUploadBook();
   const { notice } = useBdOverlays();
@@ -24,6 +27,7 @@ export function UploadDropzone({
   const hintId = useId();
   const errorId = useId();
   const [progress, setProgress] = useState<number | null>(null);
+  const [fileName, setFileName] = useState<string | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
   const busy = upload.isPending;
@@ -35,6 +39,7 @@ export function UploadDropzone({
       return;
     }
     setProblem(null);
+    setFileName(file.name);
     setProgress(0);
     upload.mutate(
       { file, autoChain, onProgress: setProgress },
@@ -47,7 +52,10 @@ export function UploadDropzone({
           onOpen(result.book_id);
         },
         onError: (error) => setProblem(describeUploadError(error)),
-        onSettled: () => setProgress(null),
+        onSettled: () => {
+          setProgress(null);
+          setFileName(null);
+        },
       },
     );
   };
@@ -96,28 +104,58 @@ export function UploadDropzone({
       <p id={hintId} className="text-xs text-muted-foreground">
         PDF or EPUB · up to {MAX_UPLOAD_LABEL}
       </p>
-      {percent !== null ? (
-        <div className="w-full max-w-sm">
-          <div
-            role="progressbar"
-            aria-label="Upload progress"
-            aria-valuemin={0}
-            aria-valuemax={100}
-            aria-valuenow={percent}
-            className="h-1 w-full overflow-hidden rounded-sm bg-muted"
-          >
-            <div className="h-full bg-primary" style={{ width: `${percent}%` }} />
-          </div>
-          <p aria-live="polite" className="mt-1 text-xs text-muted-foreground">
-            {percent >= 100 ? "Sent — the server is storing the book…" : `Uploading… ${percent}%`}
-          </p>
-        </div>
-      ) : null}
-      {problem ? (
-        <p id={errorId} role="alert" className="w-full text-sm text-destructive-text">
-          {problem}
-        </p>
-      ) : null}
+      {progressHost && percent !== null
+        ? createPortal(
+            <section
+              role="status"
+              aria-label="Book upload progress"
+              aria-busy={busy}
+              className="mb-3 rounded-md border border-border bg-card p-3"
+            >
+              <div className="flex min-w-0 flex-wrap items-center justify-between gap-x-4 gap-y-1">
+                <p className="min-w-0 break-words text-sm font-medium text-foreground">
+                  {percent >= 100 ? "Storing uploaded book" : "Uploading book"}
+                  {fileName ? <span className="ml-2 font-normal text-muted-foreground">{fileName}</span> : null}
+                </p>
+                <span className="shrink-0 text-sm tabular text-muted-foreground">{percent}% sent</span>
+              </div>
+              <div
+                role="progressbar"
+                aria-label="Upload progress"
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={percent}
+                className="mt-2 h-1.5 w-full overflow-hidden rounded-sm bg-muted"
+              >
+                <div className="h-full bg-primary transition-[width]" style={{ width: `${percent}%` }} />
+              </div>
+              <p aria-live="polite" className="mt-1.5 text-xs text-muted-foreground">
+                {percent >= 100
+                  ? "The file has been sent. The server is saving it and preparing the book record…"
+                  : `Sending ${fileName ?? "your book"} to the server…`}
+              </p>
+            </section>,
+            progressHost,
+          )
+        : null}
+      {progressHost && problem
+        ? createPortal(
+            <p
+              id={errorId}
+              role="alert"
+              className="mb-3 rounded-md border border-destructive bg-card p-3 text-sm text-destructive-text"
+            >
+              {problem}
+            </p>,
+            progressHost,
+          )
+        : !progressHost && problem
+          ? (
+              <p id={errorId} role="alert" className="w-full text-sm text-destructive-text">
+                {problem}
+              </p>
+            )
+          : null}
     </div>
   );
 }

@@ -249,7 +249,7 @@ def check_draft(
     role: agents.schemas.SpecialistRole,
     allowed_context: str,
 ) -> str:
-    """Tell a specialist, before it answers, what the gates would do with one patch: the same checks, nothing applied."""
+    """Tell a specialist whether a draft passes the exact checks used before automatic application."""
     if issue_id not in assigned_issues:
         return f"rejected: {issue_id!r} is not one of your assigned issues ({', '.join(assigned_issues)})"
     try:
@@ -277,24 +277,11 @@ def check_draft(
     proposal = accepted[0]
     starts = _occurrences(markdown, proposal.target_text)
     if all(
-        _is_auto_applicable(
-            proposal,
-            markdown,
-            start,
-            start + len(proposal.target_text),
-            source_verified = False,
-        )
+        _is_auto_applicable(proposal, markdown, start, start + len(proposal.target_text))
         for start in starts
     ):
-        return "ok: deterministic safe normalization; the application applies it automatically"
-    if source_verification_candidates(markdown, [proposal]):
-        return (
-            "ok: eligible for source-image verification; the application applies it only if the original page "
-            "confirms the exact replacement, otherwise it preserves the original and reports the finding"
-        )
-    return (
-        "ok: the proposal will remain unapplied and be reported as an unresolved finding; no user approval is requested"
-    )
+        return "ok: this validated proposal is applied automatically; source-image verification is advisory"
+    return "rejected: the patch changes protected content or alters structural text beyond formatting"
 
 
 def count_variants(text: str, variants: list[str], *, max_variants: int, max_chars: int) -> str:
@@ -324,8 +311,6 @@ def _squeeze(text: str) -> str:
 def apply_proposals(
     markdown: str,
     proposals: list[agents.schemas.PatchProposal],
-    *,
-    source_verified_issue_ids: set[str] | frozenset[str] = frozenset(),
 ) -> tuple[str, list[str], list[str]]:
     # One span per occurrence: a space-only repair of a phrase that appears twice is the same fix in both places.
     spans = [
@@ -334,24 +319,18 @@ def apply_proposals(
         for start in _occurrences(markdown, proposal.target_text)
     ]
     spans.sort(key = lambda span: span[0])
-    # Model confidence cannot prove that a word break is an OCR error. Only deterministic fixes or patches independently
-    # confirmed against the source page image can be applied automatically.
+    # Every validated quality proposal is approved automatically unless it edits protected content or conflicts with
+    # another proposal. Source-image verification is retained as evidence, but it cannot veto a contextual correction.
     eligible_issue_ids = {
         proposal.issue_id
         for proposal in proposals
         if all(
-            _is_auto_applicable(
-                proposal,
-                markdown,
-                start,
-                start + len(proposal.target_text),
-                source_verified = proposal.issue_id in source_verified_issue_ids,
-            )
+            _is_auto_applicable(proposal, markdown, start, start + len(proposal.target_text))
             for start in _occurrences(markdown, proposal.target_text)
         )
     }
     eligible = [span for span in spans if span[2].issue_id in eligible_issue_ids]
-    # Only eligible edits can collide; a proposal that remains unapplied must not block an independent verified repair.
+    # Only eligible edits can collide; an unsafe proposal must not block an independent safe correction.
     overlapping_issue_ids: set[str] = set()
     for index, current in enumerate(eligible):
         for previous in eligible[:index]:
@@ -376,7 +355,7 @@ def source_verification_candidates(
     markdown: str,
     proposals: list[agents.schemas.PatchProposal],
 ) -> list[agents.schemas.PatchProposal]:
-    """Select unique, low-risk prose patches that may be auto-applied after exact visual confirmation."""
+    """Select unique, low-risk prose patches for advisory source-image verification."""
     candidates = []
     for proposal in proposals:
         if (
@@ -499,29 +478,18 @@ def _is_auto_applicable(
     markdown: str,
     start: int,
     end: int,
-    *,
-    source_verified: bool,
 ) -> bool:
-    mechanically_safe = (
-        proposal.risk == agents.schemas.PatchRisk.LOW
-        and proposal.confidence >= domains.bd.ingestion.ai.params.AUTO_APPLY_CONFIDENCE
-        and _is_mechanical_repair(proposal)
-    )
-    if mechanically_safe:
-        return True
-    if _is_deterministic_split_word_repair(proposal, markdown, start, end):
-        return True
-    return (
-        source_verified
-        and proposal.risk == agents.schemas.PatchRisk.LOW
-        and proposal.confidence >= domains.bd.ingestion.ai.params.VERIFIED_PATCH_MIN_CONFIDENCE
-        and proposal.issue_code in {
-            agents.schemas.IssueCode.SPLIT_WORD,
-            agents.schemas.IssueCode.FUSED_MARKER,
-            agents.schemas.IssueCode.TEXT_CORRUPTION,
-        }
-        and not _is_protected_patch(proposal, markdown, start, end)
-    )
+    if _inside_code(markdown, start) or _inside_path_or_address(markdown, start, end):
+        return False
+    if proposal.issue_code == agents.schemas.IssueCode.STRUCTURE:
+        # Structure repairs may move Markdown markers, but must preserve source words, numbers, and line boundaries.
+        source_tokens = sorted(re.findall(r"[^\W_]+", proposal.target_text.casefold()))
+        replacement_tokens = sorted(re.findall(r"[^\W_]+", proposal.replacement.casefold()))
+        return (
+            source_tokens == replacement_tokens
+            and proposal.target_text.count("\n") == proposal.replacement.count("\n")
+        )
+    return not _is_protected_patch(proposal, markdown, start, end)
 
 
 def _is_protected_patch(
