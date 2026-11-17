@@ -141,6 +141,7 @@ export function DistillNodeBoard({
           runId={runId}
           status={distillNodeStatus(selectedNode.id, status, progress)}
           runStatus={status}
+          kpi={views.find((view) => view.id === selectedNode.id)?.kpi ?? null}
           onClose={() => setSelectedNodeId(null)}
         />
       ) : null}
@@ -156,7 +157,16 @@ export function DistillNodeBoard({
         <PipelineUsageSheet
           bookId={bookId}
           runId={runId}
-          nodeIds={["learning_extractor", "evidence_verifier", "chapter_synthesizer", "book_synthesizer"]}
+          nodeIds={[
+            "learning_extractor",
+            "evidence_verifier",
+            "chapter_synthesizer",
+            "visual_artifact_builder",
+            "book_synthesizer",
+            "decision_brief_writer",
+            "research_analyst",
+            "report_reviewer",
+          ]}
           live={status === "queued" || status === "running"}
           title="Distill LLM usage"
           subtitle="Calls and token counts recorded for this book run."
@@ -284,6 +294,7 @@ function DistillNodeSheet({
   runId,
   status,
   runStatus,
+  kpi,
   onClose,
 }: {
   bookId: string;
@@ -291,6 +302,7 @@ function DistillNodeSheet({
   runId: string | null;
   status: AgenticNodeStatus;
   runStatus: DistillRun["status"] | null;
+  kpi: string | null;
   onClose: () => void;
 }) {
   const usageCounterIds = DISTILL_USAGE_COUNTERS[node.id] ?? [];
@@ -323,6 +335,7 @@ function DistillNodeSheet({
         <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
           <AgenticStatusBadge status={status} />
           <span className="font-mono">distill · {node.id}</span>
+          {kpi ? <span className="font-medium tabular-nums">{kpi}</span> : null}
         </span>
       }
       closeLabel="Close node details"
@@ -332,6 +345,7 @@ function DistillNodeSheet({
         <Tabs defaultValue="overview" className="w-full">
           <TabsList aria-label="Node details">
             <TabsTrigger value="overview">Overview</TabsTrigger>
+            <TabsTrigger value="llm-calls">LLM Calls</TabsTrigger>
             <TabsTrigger value="resources">Resources</TabsTrigger>
           </TabsList>
           <TabsContent value="overview" className="flex flex-col gap-3 pt-4">
@@ -342,37 +356,41 @@ function DistillNodeSheet({
               <AgenticPills items={node.reads} />
               <span>Writes</span>
               <AgenticPills items={node.writes} />
+              <span>LLM</span>
+              <span className="text-sm text-foreground">{node.llm}</span>
             </div>
           </TabsContent>
+          <TabsContent value="llm-calls" className="flex flex-col gap-3 pt-4">
+            <section aria-label="Node LLM usage" className="flex flex-col gap-3">
+              <div>
+                <h3 className="text-sm font-medium">LLM usage</h3>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Calls and token counts recorded for this graph stage.
+                </p>
+              </div>
+              <PipelineUsageBreakdown
+                usage={usageQuery.data}
+                nodeIds={usageCounterIds}
+                hasRun={runId !== null}
+                loading={usageQuery.isPending}
+                failed={usageQuery.isError}
+                errorMessage={usageQuery.isError ? apiErrorMessage(usageQuery.error) : null}
+                onRetry={() => void usageQuery.refetch()}
+                emptyMessage="Usage appears here when Distill has a run."
+                noCallsMessage={
+                  usageCounterIds.length === 0
+                    ? "This deterministic stage does not make LLM calls."
+                    : "No LLM calls were recorded for this stage. It may reuse saved unit results; otherwise, its configured agent call did not reach the usage counter."
+                }
+              />
+            </section>
+          </TabsContent>
           <TabsContent value="resources" className="pt-4">
-            <section aria-label="Agent, skills, and tools">
+            <section aria-label="Agents, skills, and tools">
               <AgenticNodeDetailsList resources={node.resources} />
             </section>
           </TabsContent>
         </Tabs>
-        <section aria-label="Node LLM usage" className="flex flex-col gap-3">
-          <div>
-            <h3 className="text-sm font-medium">LLM usage</h3>
-            <p className="mt-1 text-xs text-muted-foreground">
-              Calls and token counts recorded for this graph stage.
-            </p>
-          </div>
-          <PipelineUsageBreakdown
-            usage={usageQuery.data}
-            nodeIds={usageCounterIds}
-            hasRun={runId !== null}
-            loading={usageQuery.isPending}
-            failed={usageQuery.isError}
-            errorMessage={usageQuery.isError ? apiErrorMessage(usageQuery.error) : null}
-            onRetry={() => void usageQuery.refetch()}
-            emptyMessage="Usage appears here when Distill has a run."
-            noCallsMessage={
-              usageCounterIds.length === 0
-                ? "This stage does not make LLM calls."
-                : "No LLM calls have been recorded for this stage yet."
-            }
-          />
-        </section>
       </div>
     </SideSheet>
   );

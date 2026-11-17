@@ -4,6 +4,7 @@ from __future__ import annotations
 import domains, infra
 from . import domain, errors, keys, params
 
+import asyncio
 import json
 import logging
 import time
@@ -101,6 +102,7 @@ class Progress:
         self._state: dict = domain.initial_state(time.time())
         self._restored = False
         self._active_stage: str | None = None
+        self._flush_lock = asyncio.Lock()
 
     async def _client(self) -> infra.redis.service.Redis | None:
         if self._r is None:
@@ -132,26 +134,29 @@ class Progress:
         self._state = restored
 
     async def _flush(self, force: bool = False) -> None:
-        now = time.time()
-        if not force and (now - self._last_flush) < params.THROTTLE_S:
-            return
-        self._last_flush = now
-        self._state["updated_at"] = now
-        r = await self._client()
-        if r is None:
-            return
-        try:
-            await r.set(
-                keys.progress_key(self.run_id), json.dumps(self._state), ex=params.TTL_S
-            )
-        except Exception as e:
-            logger.info(f"[progress] write skipped: {e}")
+        async with self._flush_lock:
+            now = time.time()
+            if not force and (now - self._last_flush) < params.THROTTLE_S:
+                return
+            self._last_flush = now
+            self._state["updated_at"] = now
+            r = await self._client()
+            if r is None:
+                return
+            try:
+                await r.set(
+                    keys.progress_key(self.run_id), json.dumps(self._state), ex=params.TTL_S
+                )
+            except Exception as e:
+                logger.info(f"[progress] write skipped: {e}")
 
     async def start(self, tier: str, total: int) -> None:
         await self._restore_state()
         stage = (
             "agentic"
             if tier == "agentic_normalization"
+            else "selection"
+            if tier == "page_selection"
             else "extraction"
             if tier
             in {
@@ -164,8 +169,9 @@ class Progress:
             }
             else None
         )
-        if stage is not None:
-            self._active_stage = stage
+        # Clear the active stage for post-processing phases (for example vault backfill) so their progress cannot
+        # overwrite the last page-selection or extraction stage in the UI.
+        self._active_stage = stage
         self._state.update(
             tier=tier,
             total=max(0, int(total)),
@@ -184,9 +190,34 @@ class Progress:
             )
             if stage == "extraction":
                 phase.update(tier=tier, last_url="")
-            else:
+            elif stage == "agentic":
                 phase.update(current_node=None, node_status={}, node_progress={})
+            else:
+                phase.update(status="running", current=0, total=max(0, int(total)), error=None)
         await self._flush(force=True)
+
+    async def start_parallel_stage(self, stage: str, total: int) -> None:
+        """Start a side stage without changing the extraction stage's current status or counters."""
+        await self._restore_state()
+        phase = self._state.setdefault("stages", {}).setdefault(stage, {})
+        phase.update(
+            status="running",
+            current=0,
+            total=max(0, int(total)),
+            error=None,
+        )
+        await self._flush(force=True)
+
+    async def update_parallel_stage(self, stage: str, *, current: int, total: int) -> None:
+        """Update a side stage while extraction continues to own the run-level progress fields."""
+        await self._restore_state()
+        phase = self._state.setdefault("stages", {}).setdefault(stage, {})
+        phase.update(
+            status="running",
+            current=max(0, int(current)),
+            total=max(0, int(total)),
+        )
+        await self._flush(force=False)
 
     async def queue_agentic(self, total: int) -> None:
         """Publish a visible queued state before a standalone Agentic AI Celery task starts."""
@@ -269,18 +300,20 @@ class Progress:
         *,
         current: int | None = None,
         total: int | None = None,
+        status: str = "done",
+        error: str | None = None,
     ) -> None:
         """Mark one visible pipeline phase complete without changing the overall run status."""
         await self._restore_state()
         phase = self._state.setdefault("stages", {}).setdefault(stage, {})
-        phase["status"] = "done"
+        phase["status"] = status
         if total is not None:
             phase["total"] = max(0, int(total))
         if current is not None:
             phase["current"] = max(0, int(current))
         elif total is not None:
             phase["current"] = max(0, int(total))
-        phase["error"] = None
+        phase["error"] = error
         await self._flush(force=True)
 
     async def update_agentic_node(

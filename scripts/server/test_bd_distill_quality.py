@@ -100,7 +100,7 @@ def build_report():
 
 
 report = build_report()
-rendered = domains.bd.distill.domain.render_html(report)
+rendered = domains.bd.distill.rendering.domain.render_html(report)
 check("whole-book diagrams are part of the validated report contract and rendered output",
       "Whole-book diagrams" in rendered and "A sourced relationship" in rendered and "<svg" in rendered, True)
 check("whole-book equations are rendered from the validated report model",

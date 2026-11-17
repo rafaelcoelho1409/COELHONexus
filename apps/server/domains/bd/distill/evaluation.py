@@ -24,6 +24,15 @@ def _all_source_refs(report: domains.bd.distill.schemas.StudyGuideDocument):
         yield from chapter.overview_source_refs
         for lesson in [*chapter.lessons, *chapter.open_questions]:
             yield from lesson.source_refs
+        for timeline in chapter.timelines:
+            for event in timeline.events:
+                yield from event.source_refs
+    if report.decision_brief is not None:
+        yield from report.decision_brief.recommendation.source_refs
+        for option in report.decision_brief.options:
+            yield from option.source_refs
+        for action in report.decision_brief.action_plan:
+            yield from action.source_refs
     for glossary in report.glossary:
         yield from glossary.source_refs
 
@@ -42,6 +51,13 @@ def _all_evidence_quotes(report: domains.bd.distill.schemas.StudyGuideDocument):
     for chart in charts:
         for row in chart.dataset.rows:
             yield from ((quote.page_number, quote.quote) for quote in row.evidence)
+    maps = [*report.maps, *(map_spec for chapter in report.chapters for map_spec in chapter.maps)]
+    for map_spec in maps:
+        for feature in map_spec.geojson.features:
+            yield from (
+                (quote.page_number, quote.quote)
+                for quote in feature.properties.evidence
+            )
 
 
 def assess_report_structure(
@@ -68,6 +84,26 @@ def assess_report_structure(
         errors.append("source_page_manifest_has_invalid_or_duplicate_page_numbers")
     if set(pages) != expected_pages:
         errors.append("source_page_manifest_does_not_cover_expected_page_range")
+
+    research = report.research_context
+    research_ids = [source.source_id for source in research.sources]
+    research_urls = [source.url for source in research.sources]
+    if len(research_ids) != len(set(research_ids)):
+        errors.append("research_source_ids_are_not_unique")
+    if len(research_urls) != len(set(research_urls)):
+        errors.append("research_source_urls_are_not_unique")
+    if research.status == "complete" and not research.sources:
+        errors.append("complete_research_context_has_no_sources")
+    if research.status != "complete" and research.sources:
+        errors.append("research_sources_have_an_inconsistent_status")
+    research_source_ids = set(research_ids)
+    if any(
+        not finding.source_ids or set(finding.source_ids) - research_source_ids
+        for finding in research.findings
+    ):
+        errors.append("research_finding_references_an_unknown_external_source")
+    if research.findings and research.status != "complete":
+        errors.append("research_findings_have_an_inconsistent_status")
 
     substantive_pages = {
         number for number, page in pages.items()

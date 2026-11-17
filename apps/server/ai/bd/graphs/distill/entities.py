@@ -22,6 +22,15 @@ class DistillRunControls:
 @dataclass(frozen = True, slots = True)
 class DistillDependencies:
     storage: infra.minio.service.MinIOStorage
-    extractor: Any
+    learning_extractor: Any
+    evidence_verifier: Any
+    chapter_synthesizer: Any
+    visual_artifact_builder: Any
+    book_synthesizer: Any
+    decision_brief_writer: Any
+    research_analyst: Any
+    research_search_session: Any
+    report_reviewer: Any
     controls: DistillRunControls
     progress_callback: ProgressReporter | None = None
+    research_enabled: bool = False

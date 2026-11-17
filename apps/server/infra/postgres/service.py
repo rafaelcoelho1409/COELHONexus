@@ -183,16 +183,20 @@ async def checkpoint_before_node(
     """Return the newest checkpoint that schedules ``node_id`` next.
 
     LangGraph replay starts from that checkpoint, so upstream nodes stay
-    complete and the selected node runs again. The checkpoint history remains
-    available as an audit trail because this operation creates a new branch.
+    complete and the selected node runs again. A checkpoint may schedule
+    several tasks for the same node (for example, a fan-out batch); replaying
+    that node re-executes all of those tasks. A checkpoint that also schedules
+    other node names cannot be replayed as one node. The checkpoint history
+    remains available as an audit trail because this operation creates a new
+    branch.
     """
     async for snapshot in graph.aget_state_history(config):
         next_nodes = tuple(snapshot.next or ())
         if node_id not in next_nodes:
             continue
-        if len(next_nodes) > 1:
+        if any(next_node != node_id for next_node in next_nodes):
             raise ValueError(
-                f"node {node_id!r} shares a pending checkpoint with other nodes; "
+                f"node {node_id!r} shares a pending checkpoint with different nodes; "
                 "it cannot be replayed independently"
             )
         snapshot_config = snapshot.config

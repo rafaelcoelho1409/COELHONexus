@@ -3,7 +3,14 @@ from __future__ import annotations
 ROTATOR_TASK = "bd_distill_learning_extractor"
 MAX_MODEL_CALLS = 2
 MAX_STRUCTURED_RESPONSE_ATTEMPTS = 2
-MAX_DIRECT_STRUCTURED_ATTEMPTS = 2
-MAX_TEXT_FALLBACK_ATTEMPTS = 2
-MAX_PROVIDER_ATTEMPTS = 3
-PROVIDER_RETRY_WAIT_BASE_S = 5.0
+DEFAULT_TOOL_NAMES = frozenset({
+    "write_todos",
+    "ls",
+    "read_file",
+    "write_file",
+    "edit_file",
+    "glob",
+    "grep",
+    "execute",
+    "task",
+})

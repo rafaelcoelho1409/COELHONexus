@@ -45,6 +45,15 @@ def new_entry(
     )
 
 
+def selection_identity(entry: entities.ManifestEntry) -> tuple[str, str, str]:
+    """Stable page identity across manifest reordering and storage-key promotion."""
+    return (
+        entry.raw_key or entry.key,
+        entry.slug or "",
+        entry.url or "",
+    )
+
+
 def ordered_by_urls(
     entries: list[entities.ManifestEntry], url_list: list[str]
 ) -> list[entities.ManifestEntry]:

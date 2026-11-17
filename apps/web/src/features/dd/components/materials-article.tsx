@@ -32,7 +32,6 @@ export function MaterialsArticle({
   onVersion,
   hasVersions,
   toolbar,
-  quality,
   children,
 }: {
   ref?: Ref<HTMLElement>;
@@ -48,8 +47,6 @@ export function MaterialsArticle({
   hasVersions: boolean;
   /** Layout controls, shown in the framed page header. */
   toolbar?: ReactNode;
-  /** Quality report for finalized Agentic AI pages. */
-  quality?: ReactNode;
   /** The page's text, or the loading and error lines. */
   children: ReactNode;
 }) {
@@ -94,7 +91,16 @@ export function MaterialsArticle({
                 <div className="flex shrink-0 flex-wrap items-center justify-end gap-1">{toolbar}</div>
               ) : null}
             </div>
-            {quality}
+            {entry.page_selection?.status === "excluded" || entry.page_selection?.needs_review ? (
+              <div className="mt-3 rounded-sm border border-border bg-muted px-3 py-2 text-xs text-muted-foreground">
+                <p className="font-medium text-foreground">
+                  {entry.page_selection?.needs_review
+                    ? "Kept in the learning set for review"
+                    : "Excluded from the learning set"}
+                </p>
+                {entry.page_selection?.reason ? <p className="mt-1">{entry.page_selection.reason}</p> : null}
+              </div>
+            ) : null}
           </header>
           <div className="flex flex-wrap items-center justify-between gap-2">
             <ToggleGroup legend="Page shown as" options={PREVIEW_MODES} value={mode} onChange={onMode} />

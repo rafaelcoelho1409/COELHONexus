@@ -1,5 +1,12 @@
 import type { TocEntry } from "@/shared/markdown";
-import type { DistillRun, LearningGuide, ReportChart, ReportDiagram } from "../entities";
+import type {
+  DistillRun,
+  LearningGuide,
+  ReportChart,
+  ReportDiagram,
+  ReportMap,
+  ReportTimeline,
+} from "../entities";
 
 export type StudyPage = {
   id: string;
@@ -10,6 +17,8 @@ export type StudyPage = {
     | "thesis"
     | "takeaways"
     | "connections"
+    | "decision-brief"
+    | "research-context"
     | "chapter"
     | "glossary"
     | "limitations"
@@ -24,6 +33,8 @@ type VisualGroup = {
   diagrams: readonly ReportDiagram[];
   equations: readonly LearningGuide["equations"][number][];
   charts: readonly ReportChart[];
+  timelines: readonly ReportTimeline[];
+  maps: readonly ReportMap[];
 };
 export function createStudyPages(report: LearningGuide): StudyPage[] {
   const pages: StudyPage[] = [
@@ -39,6 +50,21 @@ export function createStudyPages(report: LearningGuide): StudyPage[] {
       group: "Core lessons",
       kind: "connections",
     });
+  if (report.decision_brief)
+    pages.push({
+      id: "decision-brief",
+      title: "Decision brief",
+      group: "Decision support",
+      kind: "decision-brief",
+    });
+  if (report.research_context.status !== "disabled") {
+    pages.push({
+      id: "research-context",
+      title: "Current context",
+      group: "Further reading",
+      kind: "research-context",
+    });
+  }
   report.chapters.forEach((chapter, chapterIndex) => {
     pages.push({
       id: `chapter-${chapterIndex + 1}`,
@@ -58,7 +84,12 @@ export function createStudyPages(report: LearningGuide): StudyPage[] {
       kind: "limitations",
     });
   if (visualGroups(report).length)
-    pages.push({ id: "visual-library", title: "Figures and models", group: "Visuals", kind: "visuals" });
+    pages.push({
+      id: "visual-library",
+      title: "Visuals and data structures",
+      group: "Visuals",
+      kind: "visuals",
+    });
   return pages;
 }
 
@@ -84,6 +115,25 @@ export function pageOutline(page: StudyPage, report: LearningGuide): TocEntry[] 
       ...lessons.map((lesson, index) => entry(`${anchor}-lesson-${index + 1}`, lesson.title)),
     ];
   }
+  if (page.kind === "decision-brief") {
+    const brief = report.decision_brief;
+    if (!brief) return [];
+    return [
+      entry(`${anchor}-title`, "Decision brief"),
+      entry(`${anchor}-recommendation`, "Recommended approach"),
+      ...brief.options.map((option, index) => entry(`${anchor}-option-${index + 1}`, option.title)),
+      ...(brief.action_plan.length ? [entry(`${anchor}-actions`, "Action plan")] : []),
+    ];
+  }
+  if (page.kind === "research-context") {
+    return [
+      entry(`${anchor}-title`, "Current context and further reading"),
+      ...report.research_context.findings.map((finding, index) =>
+        entry(`${anchor}-finding-${index + 1}`, finding.title),
+      ),
+      ...(report.research_context.sources.length ? [entry(`${anchor}-sources`, "Retrieved sources")] : []),
+    ];
+  }
   if (page.kind === "chapter") {
     const chapter = report.chapters[page.chapterIndex ?? -1];
     if (!chapter) return [];
@@ -92,8 +142,12 @@ export function pageOutline(page: StudyPage, report: LearningGuide): TocEntry[] 
       entry(`${anchor}-overview`, "Overview"),
       ...(chapter.lessons.length ? [entry(`${anchor}-lessons`, "Key lessons")] : []),
       ...(chapter.open_questions.length ? [entry(`${anchor}-questions`, "Open questions")] : []),
-      ...(chapter.diagrams.length + chapter.equations.length + chapter.charts.length
-        ? [entry(`${anchor}-visuals`, "Figures and models")]
+      ...(chapter.diagrams.length +
+      chapter.equations.length +
+      chapter.charts.length +
+      chapter.timelines.length +
+      chapter.maps.length
+        ? [entry(`${anchor}-visuals`, "Visuals and data structures")]
         : []),
     ];
   }
@@ -111,7 +165,7 @@ export function pageOutline(page: StudyPage, report: LearningGuide): TocEntry[] 
   }
   const groups = visualGroups(report);
   return [
-    entry(`${anchor}-title`, "Figures and models"),
+    entry(`${anchor}-title`, "Visuals and data structures"),
     ...groups.map((group, groupIndex) => entry(`${anchor}-group-${groupIndex + 1}`, group.title)),
   ];
 }
@@ -137,10 +191,33 @@ export function pageFacts(page: StudyPage, report: LearningGuide): string[] {
       ...(pending ? [`${pending} need review`] : []),
     ];
   }
+  if (page.kind === "decision-brief") {
+    const brief = report.decision_brief;
+    return brief
+      ? [
+          `${brief.options.length} options`,
+          `${brief.action_plan.length} action steps`,
+          ...(brief.recommendation.verification_status === "unverified"
+            ? ["Recommendation needs review"]
+            : []),
+        ]
+      : [];
+  }
+  if (page.kind === "research-context") {
+    return [
+      `${report.research_context.findings.length} findings`,
+      `${report.research_context.sources.length} sources`,
+    ];
+  }
   if (page.kind === "chapter") {
     const chapter = report.chapters[page.chapterIndex ?? -1];
     if (!chapter) return [];
-    const visuals = chapter.diagrams.length + chapter.equations.length + chapter.charts.length;
+    const visuals =
+      chapter.diagrams.length +
+      chapter.equations.length +
+      chapter.charts.length +
+      chapter.timelines.length +
+      chapter.maps.length;
     const sources = new Set([
       ...chapter.overview_source_refs.map((source) => source.page_number),
       ...chapter.lessons.flatMap((lesson) => lesson.source_refs.map((source) => source.page_number)),
@@ -148,7 +225,7 @@ export function pageFacts(page: StudyPage, report: LearningGuide): string[] {
     return [
       `${chapter.lessons.length} lessons`,
       `${sources} cited pages`,
-      ...(visuals ? [`${visuals} figures and models`] : []),
+      ...(visuals ? [`${visuals} visual artifacts`] : []),
     ];
   }
   if (page.kind === "glossary") {
@@ -157,7 +234,16 @@ export function pageFacts(page: StudyPage, report: LearningGuide): string[] {
   }
   if (page.kind === "limitations") return [`${report.limitation_notes.length} caveats`];
   return [
-    `${visualGroups(report).reduce((total, group) => total + group.diagrams.length + group.equations.length + group.charts.length, 0)} figures and models`,
+    `${visualGroups(report).reduce(
+      (total, group) =>
+        total +
+        group.diagrams.length +
+        group.equations.length +
+        group.charts.length +
+        group.timelines.length +
+        group.maps.length,
+      0,
+    )} visual artifacts`,
   ];
 }
 
@@ -169,6 +255,8 @@ export function needsReview(page: StudyPage, report: LearningGuide | undefined):
     return report.key_takeaways.some((lesson) => lesson.verification_status === "unverified");
   if (page.kind === "connections")
     return report.cross_chapter_connections.some((lesson) => lesson.verification_status === "unverified");
+  if (page.kind === "decision-brief")
+    return report.decision_brief?.recommendation.verification_status === "unverified";
   if (page.kind === "chapter") {
     const chapter = report.chapters[page.chapterIndex ?? -1];
     return (
@@ -197,7 +285,13 @@ export function guideMetrics(report: LearningGuide, quality: GuideQuality) {
       ? report.selected_page_count
       : reportPages.size;
   const visuals = visualGroups(report).reduce(
-    (total, group) => total + group.diagrams.length + group.equations.length + group.charts.length,
+    (total, group) =>
+      total +
+      group.diagrams.length +
+      group.equations.length +
+      group.charts.length +
+      group.timelines.length +
+      group.maps.length,
     0,
   );
   const coverageRate =
@@ -216,29 +310,39 @@ export function guideMetrics(report: LearningGuide, quality: GuideQuality) {
     },
     { label: "Key takeaways", value: report.key_takeaways.length.toLocaleString() },
     { label: "Distilled sections", value: report.chapters.length.toLocaleString() },
-    { label: "Figures and models", value: visuals.toLocaleString() },
+    { label: "Visual artifacts", value: visuals.toLocaleString() },
   ];
 }
 
 export function visualGroups(report: LearningGuide): VisualGroup[] {
   const groups: VisualGroup[] = [];
-  if (report.diagrams.length || report.equations.length || report.charts.length) {
+  if (report.diagrams.length || report.equations.length || report.charts.length || report.maps.length) {
     groups.push({
       id: "guide-visuals",
       title: "Learning Guide overview",
       diagrams: report.diagrams,
       equations: report.equations,
       charts: report.charts,
+      timelines: [],
+      maps: report.maps,
     });
   }
   report.chapters.forEach((chapter, index) => {
-    if (chapter.diagrams.length || chapter.equations.length || chapter.charts.length) {
+    if (
+      chapter.diagrams.length ||
+      chapter.equations.length ||
+      chapter.charts.length ||
+      chapter.timelines.length ||
+      chapter.maps.length
+    ) {
       groups.push({
         id: `chapter-${index + 1}`,
         title: chapter.title,
         diagrams: chapter.diagrams,
         equations: chapter.equations,
         charts: chapter.charts,
+        timelines: chapter.timelines,
+        maps: chapter.maps,
       });
     }
   });

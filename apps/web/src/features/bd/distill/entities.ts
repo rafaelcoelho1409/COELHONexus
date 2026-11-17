@@ -98,6 +98,182 @@ const chartSchema = z.looseObject({
 });
 export type ReportChart = z.infer<typeof chartSchema>;
 
+const reportTimelineEventSchema = z.looseObject({
+  label: z.string(),
+  description: z.string(),
+  date_or_order: z.string(),
+  attribution: z.enum(["book", "agent_inference"]).catch("book"),
+  source_refs: z.array(sourceRefSchema).catch([]),
+});
+
+const reportTimelineSchema = z.looseObject({
+  title: z.string(),
+  accessible_description: z.string(),
+  events: z.array(reportTimelineEventSchema).catch([]),
+});
+export type ReportTimeline = z.infer<typeof reportTimelineSchema>;
+
+const httpsUrlSchema = z
+  .string()
+  .url()
+  .refine((value) => {
+    try {
+      return new URL(value).protocol === "https:";
+    } catch {
+      return false;
+    }
+  });
+
+const geoPositionSchema = z.tuple([
+  z.number().finite().min(-180).max(180),
+  z.number().finite().min(-90).max(90),
+]);
+const lineCoordinatesSchema = z.array(geoPositionSchema).min(2).max(2_000);
+const linearRingSchema = z
+  .array(geoPositionSchema)
+  .min(4)
+  .max(2_000)
+  .refine((ring) => {
+    const first = ring[0];
+    const last = ring[ring.length - 1];
+    return first !== undefined && last !== undefined && first[0] === last[0] && first[1] === last[1];
+  });
+
+const geoJsonGeometrySchema = z.discriminatedUnion("type", [
+  z.looseObject({ type: z.literal("Point"), coordinates: geoPositionSchema }),
+  z.looseObject({ type: z.literal("MultiPoint"), coordinates: z.array(geoPositionSchema).min(1).max(500) }),
+  z.looseObject({ type: z.literal("LineString"), coordinates: lineCoordinatesSchema }),
+  z.looseObject({
+    type: z.literal("MultiLineString"),
+    coordinates: z.array(lineCoordinatesSchema).min(1).max(100),
+  }),
+  z.looseObject({ type: z.literal("Polygon"), coordinates: z.array(linearRingSchema).min(1).max(50) }),
+  z.looseObject({
+    type: z.literal("MultiPolygon"),
+    coordinates: z.array(z.array(linearRingSchema).min(1).max(50)).min(1).max(100),
+  }),
+]);
+
+const geoMapSchema = z
+  .looseObject({
+    title: z.string(),
+    accessible_description: z.string(),
+    geojson: z.looseObject({
+      type: z.literal("FeatureCollection"),
+      features: z
+        .array(
+          z.looseObject({
+            type: z.literal("Feature").catch("Feature"),
+            id: z.string(),
+            properties: z.looseObject({
+              label: z.string(),
+              description: z.string().catch(""),
+              attribution: z.enum(["book", "agent_inference"]).catch("book"),
+              learning_unit_ids: z.array(z.string()).catch([]),
+              evidence: z.array(evidenceQuoteSchema).catch([]),
+            }),
+            geometry: geoJsonGeometrySchema,
+          }),
+        )
+        .max(100)
+        .catch([]),
+    }),
+  })
+  .superRefine((map, context) => {
+    const ids = map.geojson.features.map((feature) => feature.id);
+    if (new Set(ids).size !== ids.length) {
+      context.addIssue({
+        code: "custom",
+        path: ["geojson", "features"],
+        message: "Feature IDs must be unique",
+      });
+    }
+    const coordinateCount = map.geojson.features.reduce(
+      (total, feature) => total + countCoordinates(feature.geometry.coordinates),
+      0,
+    );
+    if (coordinateCount > 10_000) {
+      context.addIssue({
+        code: "custom",
+        path: ["geojson", "features"],
+        message: "Map exceeds its coordinate limit",
+      });
+    }
+  });
+export type ReportMap = z.infer<typeof geoMapSchema>;
+
+function countCoordinates(value: unknown): number {
+  if (!Array.isArray(value)) return 0;
+  if (value.length === 2 && value.every((item) => typeof item === "number")) return 1;
+  return value.reduce<number>((total, item) => total + countCoordinates(item), 0);
+}
+
+const decisionBriefSchema = z.looseObject({
+  decision_question: z.string(),
+  recommendation: reportLessonSchema,
+  options: z
+    .array(
+      z.looseObject({
+        title: z.string(),
+        expected_outcome: z.string(),
+        tradeoffs: z.array(z.string()).catch([]),
+        risks: z.array(z.string()).catch([]),
+        attribution: z.enum(["book", "agent_inference"]).catch("agent_inference"),
+        source_refs: z.array(sourceRefSchema).catch([]),
+      }),
+    )
+    .catch([]),
+  assumptions: z.array(z.string()).catch([]),
+  risks: z.array(z.string()).catch([]),
+  action_plan: z
+    .array(
+      z.looseObject({
+        sequence: z.number().int().positive(),
+        action: z.string(),
+        rationale: z.string(),
+        attribution: z.enum(["book", "agent_inference"]).catch("agent_inference"),
+        prerequisites: z.array(z.string()).catch([]),
+        success_measure: z.string(),
+        source_refs: z.array(sourceRefSchema).catch([]),
+      }),
+    )
+    .catch([]),
+});
+
+const researchContextSchema = z.looseObject({
+  status: z
+    .enum(["disabled", "unavailable", "unsupported_provider", "no_results", "complete"])
+    .catch("disabled"),
+  provider_id: z.string().nullable().catch(null),
+  queries: z.array(z.string()).catch([]),
+  sources: z
+    .array(
+      z.looseObject({
+        source_id: z.string(),
+        provider_id: z.enum(["coelho_search", "parallel"]),
+        title: z.string(),
+        url: httpsUrlSchema,
+        snippet: z.string(),
+        query: z.string(),
+        publisher: z.string().nullable().catch(null),
+        published_at: z.string().nullable().catch(null),
+        accessed_at: z.number().positive(),
+      }),
+    )
+    .catch([]),
+  findings: z
+    .array(
+      z.looseObject({
+        title: z.string(),
+        summary: z.string(),
+        relevance_to_book: z.string(),
+        source_ids: z.array(z.string()).catch([]),
+      }),
+    )
+    .catch([]),
+  error_type: z.string().nullable().catch(null),
+});
+
 const reportSectionSchema = z.looseObject({
   title: z.string(),
   overview: z.string(),
@@ -108,6 +284,8 @@ const reportSectionSchema = z.looseObject({
   diagrams: z.array(diagramSchema).catch([]),
   equations: z.array(equationSchema).catch([]),
   charts: z.array(chartSchema).catch([]),
+  timelines: z.array(reportTimelineSchema).catch([]),
+  maps: z.array(geoMapSchema).max(4).catch([]),
 });
 export type ReportSection = z.infer<typeof reportSectionSchema>;
 
@@ -235,6 +413,16 @@ export const learningGuideSchema = z.looseObject({
   diagrams: z.array(diagramSchema).catch([]),
   equations: z.array(equationSchema).catch([]),
   charts: z.array(chartSchema).catch([]),
+  maps: z.array(geoMapSchema).max(4).catch([]),
+  decision_brief: decisionBriefSchema.nullable().catch(null),
+  research_context: researchContextSchema.catch({
+    status: "disabled",
+    provider_id: null,
+    queries: [],
+    sources: [],
+    findings: [],
+    error_type: null,
+  }),
   covered_pages: z.array(z.number().int().positive()).catch([]),
   uncovered_pages: z.array(z.number().int().positive()).catch([]),
   review_required: z.boolean(),

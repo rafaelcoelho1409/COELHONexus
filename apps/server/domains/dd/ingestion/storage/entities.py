@@ -47,3 +47,5 @@ class ManifestEntry:
     # canonical identity (fragments never are); anchors stay queryable
     # metadata instead of separate near-duplicate documents.
     anchors: list = field(default_factory=list)
+    # Non-destructive learning-set verdict and concise reason; raw Markdown remains the page body.
+    page_selection: dict = field(default_factory=dict)

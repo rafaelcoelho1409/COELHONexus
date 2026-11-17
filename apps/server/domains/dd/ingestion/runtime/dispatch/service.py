@@ -53,6 +53,7 @@ async def run_source_chain(
     slug: str,
     source_attempts: list[dict] | None = None,
     on_attempts: Callable[[list[dict]], Awaitable[None]] | None = None,
+    on_progress: Callable[[Any], None] | None = None,
 ):
     """Run the first source in `chain` (`[{kind, url}]`, best first) that works, and return the `Progress` the winning
     tier used. A tier that says its source is unusable — a link index instead of content, a page of links with none to
@@ -116,6 +117,8 @@ async def run_source_chain(
             )
             await progress.close()
             progress = new_progress()
+            if on_progress is not None:
+                on_progress(progress)
         except BaseException as error:
             attempt.update(
                 status="cancelled" if isinstance(error, asyncio.CancelledError) else "failed",
@@ -498,6 +501,8 @@ async def _run_inner(
     watcher_task = asyncio.create_task(
         cancel_watcher(r, run_id, asyncio.current_task(), slug=slug),
     )
+    selection_stream = None
+    selection_final_started = False
 
     try:
         # The lock was taken when the run was queued, with the longer queued lease: this run now keeps it alive as it goes. If another
@@ -542,6 +547,16 @@ async def _run_inner(
             benchmark_report["source_attempts"] = [dict(row) for row in attempts]
             await _persist_benchmark_report(progress, minio, benchmark_report)
 
+        selection_stream = domains.dd.pages.selection.service.PageSelectionStream(
+            store,
+            progress,
+            framework_name=entry.get("name") or slug,
+        )
+        store.on_page_added = selection_stream.submit
+
+        def _selection_progress_changed(updated_progress) -> None:
+            selection_stream.progress = updated_progress
+
         # Benchmarks force exactly one source kind; regular runs retain catalog priority and fallback behavior.
         progress = await run_source_chain(
             chain,
@@ -554,8 +569,10 @@ async def _run_inner(
             slug=slug,
             source_attempts=source_attempts,
             on_attempts=_record_attempts if benchmark else None,
+            on_progress=_selection_progress_changed,
         )
 
+        extraction_finished_at = time.monotonic()
         await progress.raise_if_cancelled()
 
         await progress.complete_stage(
@@ -563,6 +580,8 @@ async def _run_inner(
             current=len(store.manifest),
             total=len(store.manifest),
         )
+        store.on_page_added = None
+        await selection_stream.finish()
         if benchmark_report is not None:
             benchmark_report["extraction"] = {
                 "pages": len(store.manifest),
@@ -605,7 +624,7 @@ async def _run_inner(
                     "error": type(error).__name__,
                 }
             benchmark_report.setdefault("timings_ms", {})["extraction"] = max(
-                0, int((time.monotonic() - extraction_started) * 1000)
+                0, int((extraction_finished_at - extraction_started) * 1000)
             )
             await _persist_benchmark_report(progress, minio, benchmark_report)
         await progress.start(tier="post", total=0)
@@ -624,6 +643,42 @@ async def _run_inner(
         )
         if benchmark_report is not None:
             benchmark_report["post"] = post_summary
+            await _persist_benchmark_report(progress, minio, benchmark_report)
+
+        await progress.raise_if_cancelled()
+
+        # Final selection handles pages deferred until structural splitting gave them stable page identities.
+        phase_started = time.monotonic()
+        selection_entries = [
+            item for item in store.manifest
+            if item.page_selection.get("status") not in domains.dd.pages.selection.service.SELECTION_STATUSES
+        ]
+        selection_final_started = True
+        with domains.settings.llm_counter.service.llm_context(
+            ns="dd", run_id=run_id, node_id="page_selection", stage="pages",
+        ):
+            selection_summary = await domains.dd.pages.selection.service.select_pages(
+                store,
+                progress,
+                framework_name=entry.get("name") or slug,
+                entries=selection_entries,
+                known_digests=selection_stream.known_digests,
+                parallel=selection_stream.started,
+                complete_stage=True,
+                progress_total=len(store.manifest),
+            )
+        if benchmark_report is not None:
+            benchmark_report["page_selection"] = selection_summary
+            benchmark_report.setdefault("timings_ms", {})["page_selection"] = max(
+                0,
+                int(
+                    (
+                        selection_stream.processing_duration_s
+                        + max(0.0, time.monotonic() - phase_started)
+                    )
+                    * 1000
+                ),
+            )
             await _persist_benchmark_report(progress, minio, benchmark_report)
 
         await progress.raise_if_cancelled()
@@ -704,6 +759,20 @@ async def _run_inner(
             await watcher_task
         except (asyncio.CancelledError, Exception):
             pass
+        if selection_stream is not None and (selection_stream.started or selection_final_started):
+            store.on_page_added = None
+            await selection_stream.cancel()
+            processed = sum(
+                item.page_selection.get("status")
+                in domains.dd.pages.selection.service.SELECTION_STATUSES
+                for item in store.manifest
+            )
+            await progress.complete_stage(
+                "selection",
+                current=processed,
+                total=max(selection_stream.seen, len(store.manifest)),
+                status="cancelled",
+            )
         await _cleanup_run_staging(minio, storage_slug, run_id)
         await progress.finish(status="cancelled")
         if benchmark_report is not None:
@@ -717,6 +786,21 @@ async def _run_inner(
 
     except Exception as e:
         logger.exception(f"[dispatch] {slug}: failed")
+        if selection_stream is not None and (selection_stream.started or selection_final_started):
+            store.on_page_added = None
+            await selection_stream.cancel()
+            processed = sum(
+                item.page_selection.get("status")
+                in domains.dd.pages.selection.service.SELECTION_STATUSES
+                for item in store.manifest
+            )
+            await progress.complete_stage(
+                "selection",
+                current=processed,
+                total=max(selection_stream.seen, len(store.manifest)),
+                status="failed",
+                error=domain.error_text(e),
+            )
         # The previous canonical manifest remains active. Raw captures and partial published pages remain versioned for diagnosis/retry.
         await _cleanup_run_staging(minio, storage_slug, run_id)
         await progress.finish(status="failed", error=domain.error_text(e))
@@ -731,6 +815,12 @@ async def _run_inner(
         return domain.failed_result(base_result, e)
 
     finally:
+        if selection_stream is not None:
+            store.on_page_added = None
+            try:
+                await selection_stream.cancel()
+            except Exception:
+                pass
         watcher_task.cancel()
         try:
             await watcher_task

@@ -6,6 +6,7 @@ import { fmtInt } from "../domain/format";
 import { type UsageGroupingMode, usageGroupingRows } from "../domain/usage";
 import type { NodeUsage, UsageCounts, UsagePayload } from "../entities";
 import type { RunStage } from "../params";
+import { ActionButton } from "./action-button";
 import { ToggleGroup } from "./toggle-group";
 
 export type UsageBreakdownRow = {
@@ -35,6 +36,8 @@ export function UsageBreakdownView({
   failed,
   noRunMessage,
   emptyMessage,
+  errorMessage,
+  onRetry,
 }: {
   counts?:
     | Pick<UsageCounts, "calls" | "tokens_in" | "tokens_out" | "reasoning_tokens" | "errors">
@@ -47,6 +50,8 @@ export function UsageBreakdownView({
   failed: boolean;
   noRunMessage: string;
   emptyMessage: string;
+  errorMessage?: string | null;
+  onRetry?: () => void;
 }) {
   const [mode, setMode] = useState(defaultMode);
   const selected = modes.find((option) => option.id === mode) ?? modes[0];
@@ -79,9 +84,12 @@ export function UsageBreakdownView({
         />
       ) : null}
       {failed ? (
-        <p role="alert" className="text-sm text-destructive-text">
-          LLM usage could not be loaded.
-        </p>
+        <div role="alert" className="flex flex-col items-start gap-3">
+          <p className="text-sm text-destructive-text">
+            LLM usage could not be loaded{errorMessage ? ` — ${errorMessage}` : "."}
+          </p>
+          {onRetry ? <ActionButton onClick={onRetry}>Try again</ActionButton> : null}
+        </div>
       ) : loading && !hasData ? (
         <p role="status" className="text-sm text-muted-foreground">
           Loading LLM usage…
@@ -123,9 +131,8 @@ export function UsageBreakdownView({
             <tbody>
               {rows.map((row) => (
                 <tr key={row.key} className="border-b border-border last:border-b-0">
-                  {row.dimensions.map((value, index) => {
-                    const column = selected.columns[index];
-                    if (column === undefined) return null;
+                  {selected.columns.map((column, index) => {
+                    const value = row.dimensions[index] ?? "—";
                     return index === 0 ? (
                       <th
                         key={`${row.key}:${column}`}
@@ -134,16 +141,20 @@ export function UsageBreakdownView({
                       >
                         {value}
                       </th>
+                    ) : column === "Provider" ? (
+                      <td key={`${row.key}:${column}`} className="px-3 py-1.5 text-xs text-muted-foreground">
+                        {value}
+                      </td>
                     ) : (
                       <td key={`${row.key}:${column}`} className="break-all px-3 py-1.5 font-mono text-xs">
                         {value}
                       </td>
                     );
                   })}
-                  <td className="px-3 py-1.5 text-right tabular-nums">{fmtInt(row.calls)}</td>
-                  <td className="px-3 py-1.5 text-right tabular-nums">{fmtInt(row.tokens_in)}</td>
-                  <td className="px-3 py-1.5 text-right tabular-nums">{fmtInt(row.tokens_out)}</td>
-                  <td className="px-3 py-1.5 text-right tabular-nums">{fmtInt(row.reasoning_tokens)}</td>
+                  <td className="tabular px-3 py-1.5 text-right">{fmtInt(row.calls)}</td>
+                  <td className="tabular px-3 py-1.5 text-right">{fmtInt(row.tokens_in)}</td>
+                  <td className="tabular px-3 py-1.5 text-right">{fmtInt(row.tokens_out)}</td>
+                  <td className="tabular px-3 py-1.5 text-right">{fmtInt(row.reasoning_tokens)}</td>
                 </tr>
               ))}
             </tbody>

@@ -277,7 +277,11 @@ def build_chat_model(
 
     Instances on the same event loop share one pooled `httpx.AsyncClient`
     (same pool shape as the raw hot path's client). Per-request `timeout_s`
-    still governs each call."""
+    still governs each call. Resolve the persisted endpoint here as well as
+    in the raw-call helpers: agents construct ChatOpenAI directly, often in a
+    Celery worker whose module-level endpoint was initialized before settings
+    credentials were warm."""
+    _apply_endpoint()
     kwargs: dict = {
         "base_url":          ENDPOINT.base_url,
         "api_key":           ENDPOINT.api_key,

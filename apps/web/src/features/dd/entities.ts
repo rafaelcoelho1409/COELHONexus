@@ -48,11 +48,23 @@ const manifestEntrySchema = z.looseObject({
   source_path: z.string().nullable().catch(null),
   section: z.string().nullable().catch(null),
   notes: z.string().nullable().catch(null),
+  page_selection: z
+    .looseObject({
+      status: z.enum(["selected", "excluded", "needs_review"]).optional(),
+      reason: z.string().optional(),
+      needs_review: z.boolean().optional(),
+      prompt_version: z.string().optional(),
+      content_digest: z.string().optional(),
+      duplicate_of: z.string().nullable().optional(),
+    })
+    .optional(),
 });
 export type ManifestEntry = z.infer<typeof manifestEntrySchema>;
 
 /** GET /api/v1/dd/ingestion/{slug}/manifest. */
 export const manifestSchema = z.looseObject({
+  /** Extraction run that last published this manifest; distinct from legacy Agentic AI's `agentic_run_id`. */
+  run_id: z.string().nullable().optional().catch(null),
   framework_name: z.string().nullable().catch(null),
   framework_slug: z.string().nullable().catch(null),
   entries: z.array(manifestEntrySchema),
@@ -66,37 +78,6 @@ export type PageVersion = "processed" | "original";
 
 /** GET /api/v1/dd/ingestion/{slug}/pages/{idx} — page body. */
 export const pageBodySchema = z.looseObject({ body: z.string() });
-
-/** GET /api/v1/dd/ingestion/{slug}/pages/{idx}/quality. */
-const pageQualityProposalSchema = z.looseObject({
-  target_text: z.string().catch(""),
-  replacement: z.string().catch(""),
-  rationale: z.string().catch(""),
-  confidence: z.number().catch(0),
-  risk: z.string().catch(""),
-});
-const pageQualityIssueSchema = z.looseObject({
-  issue_id: z.string(),
-  code: z.string(),
-  severity: z.string().catch(""),
-  description: z.string().catch(""),
-  evidence: z.array(z.string()).catch([]),
-  resolution: z.enum(["auto_applied", "review", "none"]).catch("none"),
-  proposal: pageQualityProposalSchema.nullable().catch(null),
-});
-export const pageQualitySchema = z.looseObject({
-  framework_slug: z.string(),
-  agentic_run_id: z.string(),
-  page: z.number(),
-  page_kind: z.string().catch("other"),
-  status: z.enum(["done", "review_required"]).catch("review_required"),
-  delivery_disposition: z.enum(["include", "discarded_blank", "image_only"]).catch("include"),
-  issues: z.array(pageQualityIssueSchema).catch([]),
-  mechanical_fixes: z.record(z.string(), z.number()).catch({}),
-  audit_warnings: z.array(z.string()).catch([]),
-  errors: z.array(z.string()).catch([]),
-});
-export type PageQuality = z.infer<typeof pageQualitySchema>;
 
 /** GET /api/v1/dd/ingestion/runs/{run_id} — live progress + manifest snapshot.
  * `post` is record_post's summary (split/dedup result); either field may
@@ -122,6 +103,15 @@ export const runStatusSchema = z.looseObject({
               current: z.number().nullable().catch(null),
               total: z.number().nullable().catch(null),
               last_url: z.string().nullable().catch(null),
+              error: z.string().nullable().catch(null),
+            })
+            .nullish()
+            .catch(null),
+          selection: z
+            .looseObject({
+              status: z.string().nullable().catch(null),
+              current: z.number().nullable().catch(null),
+              total: z.number().nullable().catch(null),
               error: z.string().nullable().catch(null),
             })
             .nullish()

@@ -7,6 +7,7 @@ import asyncio
 import json
 import logging
 import time
+from collections.abc import Callable
 from datetime import UTC, datetime
 
 logger = logging.getLogger(__name__)
@@ -44,10 +45,15 @@ class Store:
         self.r = r
         self.minio = minio
         self._cached_manifest: list[entities.ManifestEntry] = []
+        self._manifest_lock = asyncio.Lock()
+        self._live_write_lock = asyncio.Lock()
+        self._selection_by_identity: dict[tuple[str, str, str], dict] = {}
         self._next_idx = 0
         # idx-assign region atomic; slow MinIO PUT outside the lock.
         self._add_lock = asyncio.Lock()
         self._live_last_flush = 0.0
+        # Extraction dispatch may attach a non-blocking queue callback to start selection mid-run.
+        self.on_page_added: Callable[[entities.ManifestEntry], None] | None = None
         # Tier 2 index summary (llms.txt blockquote) — set by tier2.service.run,
         # read by dispatch.finalize into the manifest. "" = absent (all tiers).
         self.index_summary: str = ""
@@ -85,7 +91,7 @@ class Store:
         raw_key = keys.raw_page_key(self.framework_slug, idx, slug, self.run_id, tier)
         await write_immutable(self.minio, raw_key, body, params.MARKDOWN_TYPE)
 
-        async with self._add_lock:
+        async with self._manifest_lock:
             entry = domain.new_entry(
                 self.framework_slug, idx, key=raw_key,
                 slug = slug, url = url, tier = tier, size = len(body.encode("utf-8")),
@@ -94,6 +100,8 @@ class Store:
             )
             self._cached_manifest.append(entry)
             self._cached_manifest.sort(key=lambda item: item.idx)
+        if self.on_page_added is not None:
+            self.on_page_added(entry)
         await self._write_live_manifest()
         return entry
 
@@ -129,8 +137,19 @@ class Store:
 
     async def replace_manifest(self, entries: list[entities.ManifestEntry]) -> None:
         """Atomically replace the manifest. Caller writes new bodies first."""
-        self._cached_manifest = list(entries)
-        self._next_idx = max((e.idx for e in entries), default=-1) + 1
+        async with self._manifest_lock:
+            for current in self._cached_manifest:
+                if current.page_selection:
+                    self._selection_by_identity.setdefault(
+                        domain.selection_identity(current),
+                        dict(current.page_selection),
+                    )
+            for entry in entries:
+                selection = self._selection_by_identity.get(domain.selection_identity(entry))
+                if selection is not None:
+                    entry.page_selection = dict(selection)
+            self._cached_manifest = list(entries)
+            self._next_idx = max((e.idx for e in entries), default=-1) + 1
         await self._write_live_manifest(force=True)
 
     async def read_body_by_key(self, key: str) -> str:
@@ -176,19 +195,37 @@ class Store:
             logger.exception("[store] canonical manifest publish failed")
             raise
 
-    async def _write_live_manifest(self, force: bool = False) -> None:
-        now = time.monotonic()
-        if not force and (now - self._live_last_flush) < params.LIVE_MANIFEST_THROTTLE_S:
+    async def record_page_selections(
+        self, selection_by_identity: dict[tuple[str, str, str], dict], *, force: bool = False,
+    ) -> None:
+        """Attach selector metadata by stable page identity and publish the live run snapshot."""
+        if not selection_by_identity and not force:
             return
-        self._live_last_flush = now
-        try:
-            await self.r.set(
-                keys.live_manifest_key(self.run_id),
-                domain.live_manifest_json(self._cached_manifest),
-                ex = params.TTL_S,
-            )
-        except Exception as e:
-            logger.warning(f"[store] live manifest write failed: {e}")
+        async with self._manifest_lock:
+            for identity, selection in selection_by_identity.items():
+                self._selection_by_identity[identity] = dict(selection)
+            for entry in self._cached_manifest:
+                selection = self._selection_by_identity.get(domain.selection_identity(entry))
+                if selection is not None:
+                    entry.page_selection = dict(selection)
+        await self._write_live_manifest(force=force)
+
+    async def _write_live_manifest(self, force: bool = False) -> None:
+        async with self._live_write_lock:
+            now = time.monotonic()
+            if not force and (now - self._live_last_flush) < params.LIVE_MANIFEST_THROTTLE_S:
+                return
+            self._live_last_flush = now
+            async with self._manifest_lock:
+                snapshot = domain.live_manifest_json(self._cached_manifest)
+            try:
+                await self.r.set(
+                    keys.live_manifest_key(self.run_id),
+                    snapshot,
+                    ex = params.TTL_S,
+                )
+            except Exception as e:
+                logger.warning(f"[store] live manifest write failed: {e}")
 
     @property
     def manifest(self) -> list[entities.ManifestEntry]:

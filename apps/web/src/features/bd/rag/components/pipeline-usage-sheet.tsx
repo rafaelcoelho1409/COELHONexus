@@ -108,7 +108,11 @@ const NODE_LABELS: Readonly<Record<string, string>> = {
   learning_extractor: "Extract lessons",
   evidence_verifier: "Verify evidence",
   chapter_synthesizer: "Explain chapters",
+  visual_artifact_builder: "Build chapter visuals",
   book_synthesizer: "Connect the book",
+  decision_brief_writer: "Write decision brief",
+  research_analyst: "Research book topics",
+  report_reviewer: "Review Learning Guide",
   rag_graph_extractor: "Extract knowledge graph",
 };
 

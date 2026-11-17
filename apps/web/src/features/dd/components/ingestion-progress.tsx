@@ -1,3 +1,5 @@
+import type { ReactNode } from "react";
+
 import { ingestionPercent } from "../domain/ingestion-progress";
 import { ActionButton } from "./action-button";
 import { SuccessMark } from "./success-mark";
@@ -56,6 +58,11 @@ export function ExtractionProgress({
   onStart,
   onStop,
   onWipe,
+  usageControl,
+  selectionStatusText = null,
+  selectionCurrent = 0,
+  selectionTotal = 0,
+  selectionActive = false,
 }: {
   statusText: string;
   current: number;
@@ -76,8 +83,15 @@ export function ExtractionProgress({
   onStart: () => void;
   onStop: () => void;
   onWipe: () => void;
+  usageControl?: ReactNode;
+  selectionStatusText?: string | null;
+  selectionCurrent?: number;
+  selectionTotal?: number;
+  selectionActive?: boolean;
 }) {
   const percent = ingestionPercent(current, total);
+  const showSelectionProgress = selectionStatusText !== null || usageControl !== undefined;
+  const selectionText = selectionStatusText ?? (ingested ? "Not recorded" : "Waiting");
 
   return (
     <section
@@ -94,6 +108,7 @@ export function ExtractionProgress({
             {statusText}
           </span>
           <div className="flex flex-wrap items-center justify-end gap-1.5">
+            {usageControl}
             <ActionButton
               onClick={onStart}
               disabled={live || startPending || ingested}
@@ -136,21 +151,72 @@ export function ExtractionProgress({
           </div>
         </div>
       </div>
-      <ProgressBar
-        label="Pages extracted"
-        current={current}
-        total={total}
-        valueText={total > 0 ? `${Math.min(current, total)} of ${total} pages` : "not started"}
-        indeterminate={extracting}
-      />
-      <p className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
-        <span className="tabular-nums">
-          {current} of {total > 0 ? total : "?"} pages
-          {percent !== null ? ` · ${percent}%` : ""}
-        </span>
-        {tierText ? <span>{tierText}</span> : null}
-      </p>
-      {lastUrl ? <p className="mt-1 break-all font-mono text-xs text-muted-foreground">{lastUrl}</p> : null}
+      <div
+        className={`mt-3 grid grid-cols-1 gap-3 ${showSelectionProgress ? "sm:grid-cols-2" : ""}`}
+      >
+        <div
+          role="group"
+          aria-label="Source extraction progress"
+          className="min-w-0 rounded-sm border border-border bg-background p-3"
+        >
+          <h4 className="text-xs font-medium">Extracted pages</h4>
+          <ProgressBar
+            label="Pages extracted"
+            current={current}
+            total={total}
+            valueText={total > 0 ? `${Math.min(current, total)} of ${total} pages` : "not started"}
+            indeterminate={extracting}
+          />
+          <p className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+            <span className="tabular-nums">
+              {current} of {total > 0 ? total : "?"} pages
+              {percent !== null ? ` · ${percent}%` : ""}
+            </span>
+            {tierText ? <span>{tierText}</span> : null}
+          </p>
+          {lastUrl ? (
+            <p className="mt-1 break-all font-mono text-xs text-muted-foreground">{lastUrl}</p>
+          ) : null}
+        </div>
+        {showSelectionProgress ? (
+          <div
+            role="group"
+            aria-label="Learning page selection progress"
+            className="min-w-0 rounded-sm border border-border bg-background p-3"
+          >
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h4 className="text-xs font-medium">Learning page selection</h4>
+              <span aria-live="polite" className="text-xs text-muted-foreground">
+                {selectionText}
+              </span>
+            </div>
+            <ProgressBar
+              label="Pages assessed for the learning set"
+              current={selectionCurrent}
+              total={selectionTotal}
+              valueText={
+                selectionTotal > 0
+                  ? `${Math.min(selectionCurrent, selectionTotal)} of ${selectionTotal} pages`
+                  : "not started"
+              }
+              indeterminate={selectionActive}
+            />
+            <p className="mt-1 text-xs text-muted-foreground tabular-nums">
+              {selectionTotal > 0
+                ? `${selectionCurrent} of ${selectionTotal} pages assessed`
+                : selectionText === "Complete"
+                  ? "No pages to assess."
+                  : selectionText === "Not recorded"
+                    ? "No selection results recorded for this run."
+                    : selectionText === "Failed"
+                      ? "Page selection did not complete."
+                      : selectionText === "Stopped" || selectionText === "Cancelled"
+                        ? "Page selection stopped."
+                        : "Waiting for extracted pages."}
+            </p>
+          </div>
+        ) : null}
+      </div>
       {statusUnavailable ? (
         <p role="status" className="mt-1 text-xs text-warning-text">
           Run progress is unavailable. The saved library remains available in Pages.
@@ -170,7 +236,7 @@ export function ExtractionProgress({
   );
 }
 
-/** How far the Agentic AI normalization is, with controls for the saved page set. */
+/** Legacy standalone Ingestion Agentic AI progress display. */
 export function AgenticProgress({
   statusText,
   current,

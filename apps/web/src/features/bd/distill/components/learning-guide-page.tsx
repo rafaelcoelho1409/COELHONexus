@@ -17,6 +17,7 @@ import {
 } from "./learning-guide-reader-domain";
 import { ReportChart as ReportChartView } from "./report-chart";
 import { ReportDiagram as ReportDiagramView } from "./report-diagram";
+import { ReportMapView } from "./report-map";
 
 export function StudyPageArticle({
   report,
@@ -175,6 +176,180 @@ function StudyPageContent({
     );
   }
 
+  if (page.kind === "decision-brief") {
+    const brief = report.decision_brief;
+    if (!brief) return null;
+    return (
+      <section id={anchor} aria-labelledby={`${anchor}-title`} className="space-y-5">
+        <h3 id={`${anchor}-title`} className="text-lg font-semibold">
+          Decision brief
+        </h3>
+        <section>
+          <h4 className="font-medium">Decision question</h4>
+          <p className="mt-1">{brief.decision_question}</p>
+        </section>
+        <section>
+          <h4 id={`${anchor}-recommendation`} className="font-medium">
+            Recommended approach
+          </h4>
+          <Lesson lesson={brief.recommendation} id={`${anchor}-recommendation-lesson`} pageHref={pageHref} />
+        </section>
+        {brief.options.length ? (
+          <section>
+            <h4 className="font-medium">Options</h4>
+            <div className="mt-3 space-y-4">
+              {brief.options.map((option, optionIndex) => (
+                <article
+                  id={`${anchor}-option-${optionIndex + 1}`}
+                  key={`${option.title}-${optionIndex}`}
+                  className="border-t border-border pt-3"
+                >
+                  <h5 className="font-medium">{option.title}</h5>
+                  <p className="mt-1 text-sm">{option.expected_outcome}</p>
+                  <Attribution value={option.attribution} />
+                  {option.tradeoffs.length ? (
+                    <p className="mt-2 text-sm text-muted-foreground">
+                      Trade-offs: {option.tradeoffs.join(" · ")}
+                    </p>
+                  ) : null}
+                  {option.risks.length ? (
+                    <p className="mt-1 text-sm text-muted-foreground">Risks: {option.risks.join(" · ")}</p>
+                  ) : null}
+                  <CitationList sources={option.source_refs} pageHref={pageHref} />
+                </article>
+              ))}
+            </div>
+          </section>
+        ) : null}
+        {brief.assumptions.length ? (
+          <section>
+            <h4 className="font-medium">Assumptions</h4>
+            <ul className="mt-2 list-disc space-y-1 pl-5 text-sm">
+              {brief.assumptions.map((assumption) => (
+                <li key={assumption}>{assumption}</li>
+              ))}
+            </ul>
+          </section>
+        ) : null}
+        {brief.risks.length ? (
+          <section>
+            <h4 className="font-medium">Risks</h4>
+            <ul className="mt-2 list-disc space-y-1 pl-5 text-sm">
+              {brief.risks.map((risk) => (
+                <li key={risk}>{risk}</li>
+              ))}
+            </ul>
+          </section>
+        ) : null}
+        {brief.action_plan.length ? (
+          <section id={`${anchor}-actions`}>
+            <h4 className="font-medium">Action plan</h4>
+            <ol className="mt-3 space-y-4">
+              {brief.action_plan.map((step) => (
+                <li key={step.sequence} className="border-l border-border pl-3">
+                  <h5 className="font-medium tabular-nums">
+                    {step.sequence}. {step.action}
+                  </h5>
+                  <p className="mt-1 text-sm">{step.rationale}</p>
+                  <Attribution value={step.attribution} />
+                  {step.prerequisites.length ? (
+                    <p className="mt-1 text-sm text-muted-foreground">
+                      Prerequisites: {step.prerequisites.join(" · ")}
+                    </p>
+                  ) : null}
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    Success measure: {step.success_measure}
+                  </p>
+                  <CitationList sources={step.source_refs} pageHref={pageHref} />
+                </li>
+              ))}
+            </ol>
+          </section>
+        ) : null}
+      </section>
+    );
+  }
+
+  if (page.kind === "research-context") {
+    const research = report.research_context;
+    return (
+      <section id={anchor} aria-labelledby={`${anchor}-title`} className="space-y-5">
+        <h3 id={`${anchor}-title`} className="text-lg font-semibold">
+          Current context and further reading
+        </h3>
+        {research.status !== "complete" ? (
+          <p className="text-sm text-muted-foreground">
+            {research.status === "unavailable"
+              ? "External research was unavailable for this run. The book-grounded report remains unchanged."
+              : research.status === "no_results"
+                ? "No usable external sources were found."
+                : "The selected research connection is not supported by this Distill adapter."}
+          </p>
+        ) : null}
+        {research.findings.map((finding, findingIndex) => {
+          const sources = finding.source_ids
+            .map((sourceId) => research.sources.find((source) => source.source_id === sourceId))
+            .filter((source) => source !== undefined);
+          return (
+            <article
+              id={`${anchor}-finding-${findingIndex + 1}`}
+              key={`${finding.title}-${findingIndex}`}
+              className="border-t border-border pt-3"
+            >
+              <h4 className="font-medium">{finding.title}</h4>
+              <p className="mt-1 text-sm">{finding.summary}</p>
+              <p className="mt-2 text-sm text-muted-foreground">
+                Relation to this book: {finding.relevance_to_book}
+              </p>
+              <ul className="mt-3 space-y-3">
+                {sources.map((source) => (
+                  <li key={source.source_id} className="border-l border-border pl-3">
+                    <a
+                      href={source.url}
+                      target="_blank"
+                      rel="noreferrer noopener"
+                      className="font-medium text-primary-text underline underline-offset-2"
+                    >
+                      {source.title}
+                    </a>
+                    <p className="mt-1 text-sm text-muted-foreground">{source.snippet}</p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      {source.publisher ?? source.provider_id}
+                      {source.published_at ? ` · Published ${source.published_at}` : ""}
+                    </p>
+                  </li>
+                ))}
+              </ul>
+            </article>
+          );
+        })}
+        {research.sources.length ? (
+          <section id={`${anchor}-sources`}>
+            <h4 className="font-medium">Retrieved sources</h4>
+            <p className="mt-1 text-xs text-muted-foreground">
+              External material adds context; it does not count as evidence for claims attributed to the book.
+            </p>
+            <ul className="mt-3 space-y-3">
+              {research.sources.map((source) => (
+                <li key={source.source_id} className="border-l border-border pl-3">
+                  <a
+                    href={source.url}
+                    target="_blank"
+                    rel="noreferrer noopener"
+                    className="font-medium text-primary-text underline underline-offset-2"
+                  >
+                    {source.title}
+                  </a>
+                  <p className="mt-1 text-sm text-muted-foreground">{source.snippet}</p>
+                </li>
+              ))}
+            </ul>
+          </section>
+        ) : null}
+      </section>
+    );
+  }
+
   if (page.kind === "chapter") {
     const chapter = report.chapters[page.chapterIndex ?? -1];
     if (!chapter) return null;
@@ -240,7 +415,13 @@ function StudyChapter({
   pageHref: (page: number) => string;
   anchor: string;
 }) {
-  const hasVisuals = chapter.diagrams.length + chapter.equations.length + chapter.charts.length > 0;
+  const hasVisuals =
+    chapter.diagrams.length +
+      chapter.equations.length +
+      chapter.charts.length +
+      chapter.timelines.length +
+      chapter.maps.length >
+    0;
   return (
     <section id={anchor} aria-labelledby={`${anchor}-title`} className="space-y-5">
       <h3 id={`${anchor}-title`} className="text-lg font-semibold">
@@ -286,7 +467,7 @@ function StudyChapter({
       ) : null}
       {hasVisuals ? (
         <section id={`${anchor}-visuals`} className="space-y-4">
-          <h4 className="font-medium">Figures and models</h4>
+          <h4 className="font-medium">Visuals and data structures</h4>
           {chapter.diagrams.map((diagram, visualIndex) => (
             <div
               id={`${anchor}-visual-${visualIndex + 1}`}
@@ -310,6 +491,16 @@ function StudyChapter({
               <ReportChartView chart={chart} pageHref={pageHref} />
             </div>
           ))}
+          {chapter.timelines.map((timeline, visualIndex) => (
+            <div id={`${anchor}-timeline-${visualIndex + 1}`} key={`timeline-${timeline.title}`}>
+              <TimelineView timeline={timeline} pageHref={pageHref} />
+            </div>
+          ))}
+          {chapter.maps.map((map, visualIndex) => (
+            <div id={`${anchor}-map-${visualIndex + 1}`} key={`map-${map.title}`}>
+              <ReportMapView map={map} pageHref={pageHref} />
+            </div>
+          ))}
         </section>
       ) : null}
     </section>
@@ -329,10 +520,10 @@ function VisualLibrary({
   return (
     <section id={anchor} aria-labelledby={`${anchor}-title`}>
       <h3 id={`${anchor}-title`} className="text-lg font-semibold">
-        Figures and models
+        Visuals and data structures
       </h3>
       <p className="mt-1 text-sm text-muted-foreground">
-        Visuals from the Learning Guide, grouped by the distilled section they explain.
+        Diagrams, equations, charts, timelines, and maps, grouped by the section they explain.
       </p>
       <div className="mt-4 space-y-6">
         {groups.map((group, groupIndex) => (
@@ -366,9 +557,49 @@ function VisualLibrary({
                 <ReportChartView chart={chart} pageHref={pageHref} />
               </div>
             ))}
+            {group.timelines.map((timeline, visualIndex) => (
+              <div
+                id={`${anchor}-timeline-${groupIndex + 1}-${visualIndex + 1}`}
+                key={`timeline-${timeline.title}`}
+              >
+                <TimelineView timeline={timeline} pageHref={pageHref} />
+              </div>
+            ))}
+            {group.maps.map((map, visualIndex) => (
+              <div id={`${anchor}-map-${groupIndex + 1}-${visualIndex + 1}`} key={`map-${map.title}`}>
+                <ReportMapView map={map} pageHref={pageHref} />
+              </div>
+            ))}
           </section>
         ))}
       </div>
+    </section>
+  );
+}
+
+function TimelineView({
+  timeline,
+  pageHref,
+}: {
+  timeline: LearningGuide["chapters"][number]["timelines"][number];
+  pageHref: (page: number) => string;
+}) {
+  return (
+    <section aria-label={`Timeline: ${timeline.title}`} className="border-t border-border pt-4">
+      <h4 className="font-medium">{timeline.title}</h4>
+      <p className="mt-1 text-sm text-muted-foreground">{timeline.accessible_description}</p>
+      <ol className="mt-3 space-y-4 border-l border-border pl-4">
+        {timeline.events.map((event, index) => (
+          <li key={`${event.date_or_order}-${event.label}-${index}`} className="relative">
+            <h5 className="font-medium">
+              <span className="tabular-nums">{event.date_or_order}</span> · {event.label}
+            </h5>
+            <p className="mt-1 text-sm">{event.description}</p>
+            <Attribution value={event.attribution} />
+            <CitationList sources={event.source_refs} pageHref={pageHref} />
+          </li>
+        ))}
+      </ol>
     </section>
   );
 }

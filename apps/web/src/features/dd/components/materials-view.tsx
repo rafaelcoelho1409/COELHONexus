@@ -34,7 +34,6 @@ import { MaterialsArticle, type PreviewMode } from "./materials-article";
 import { MaterialsPageList } from "./materials-page-list";
 import { MaterialsReadingMode } from "./materials-reading-mode";
 import { MaterialsSearch } from "./materials-search";
-import { PageQualityPanel } from "./page-quality";
 import { ReadingProgress } from "./reading-progress";
 import { StageBar } from "./stage-bar";
 import { StudyOutline } from "./study-outline";
@@ -67,6 +66,7 @@ export function MaterialsView({
   loadError = false,
   active = true,
   controlsInNavbar = false,
+  selectionPending = false,
 }: {
   slug: string;
   info?: string;
@@ -78,6 +78,8 @@ export function MaterialsView({
   active?: boolean;
   /** The Pages stage supplies the third navbar slot; embedded readers keep controls in the page header. */
   controlsInNavbar?: boolean;
+  /** Extraction or the selector is still running; only approved pages are shown as they arrive. */
+  selectionPending?: boolean;
 }) {
   const { layout, update } = useMaterialsLayout();
   const [mode, setMode] = useState<PreviewMode>("rendered");
@@ -95,18 +97,25 @@ export function MaterialsView({
   const pendingHeading = useRef<string | null>(null);
 
   const entries = useMemo(() => manifest?.entries ?? [], [manifest]);
+  const selectedEntries = useMemo(
+    () => entries.filter(
+      (entry) => entry.page_selection?.status === "selected" && !entry.page_selection.needs_review,
+    ),
+    [entries],
+  );
+  const baseEntries = selectedEntries;
   const filtered = useMemo(
     () =>
-      filterEntries(entries, tiers, query)
-        .map((index) => entries[index])
+      filterEntries(baseEntries, tiers, query)
+        .map((index) => baseEntries[index])
         .filter((entry) => entry != null),
-    [entries, tiers, query],
+    [baseEntries, tiers, query],
   );
   const groups = useMemo(() => groupEntries(filtered), [filtered]);
   const selected = useMemo(() => {
-    if (selectedIdx != null && entries.some((entry) => entry.idx === selectedIdx)) return selectedIdx;
+    if (selectedIdx != null && baseEntries.some((entry) => entry.idx === selectedIdx)) return selectedIdx;
     return filtered[0]?.idx ?? null;
-  }, [entries, filtered, selectedIdx]);
+  }, [baseEntries, filtered, selectedIdx]);
   const selectedEntry = entries.find((entry) => entry.idx === selected) ?? null;
   const neighbours = pageNeighbours(filtered, selected);
   const goPrevious = neighbours.previous === null ? null : () => setSelectedIdx(neighbours.previous);
@@ -126,18 +135,6 @@ export function MaterialsView({
   const runPage = useRunPageBody(runId, selected, selectedEntry?.key ?? null, selectedVersion);
   const page = runId ? runPage : canonicalPage;
   const text = page.data ?? "";
-  const qualityPanel = (defaultOpen: boolean) =>
-    selectedEntry && manifest?.agentic_run_id && !runId ? (
-      <PageQualityPanel
-        slug={slug}
-        page={selectedEntry.idx}
-        agenticRunId={manifest.agentic_run_id}
-        enabled
-        defaultOpen={defaultOpen}
-      />
-    ) : null;
-  const quality = reading ? null : qualityPanel(true);
-  const readingQuality = reading ? qualityPanel(false) : null;
 
   // Outline and scroll-spy. The text is drawn in one place at a time (the page, or the reading window), so the spy
   // watches the headings afresh whenever it moves.
@@ -291,20 +288,24 @@ export function MaterialsView({
     return () => document.removeEventListener("keydown", onKey);
   }, [active, neighbours.next, neighbours.previous]);
 
-  if (entries.length === 0) {
+  if (entries.length === 0 || selectedEntries.length === 0) {
     return (
       <>
         {stageBar}
         <section
-          aria-label="Ingested library"
+          aria-label="Pages"
           className="rounded-md border border-border bg-card p-8 text-center text-sm text-muted-foreground"
         >
           {loadError ? (
             <p role="alert">Could not load the ingested pages. Refresh the page to try again.</p>
           ) : manifest ? (
-            "This ingestion has no pages."
+            entries.length === 0
+              ? "This extraction has no pages."
+              : selectionPending
+                ? "The AI Agent is assessing extracted pages. Approved pages will appear here."
+                : "The AI Agent has not approved any pages for display. The extracted source remains saved."
           ) : (
-            "No ingested pages yet."
+            "No extracted pages yet."
           )}
         </section>
       </>
@@ -316,10 +317,10 @@ export function MaterialsView({
       groups={groups}
       selected={selected}
       shown={filtered.length}
-      total={entries.length}
+      total={selectedEntries.length}
       query={query}
       onQuery={setQuery}
-      tierValues={explorerTierValues(entries)}
+      tierValues={explorerTierValues(selectedEntries)}
       tiers={tiers}
       onToggleTier={(tier) =>
         setTiers((current) => {
@@ -331,7 +332,7 @@ export function MaterialsView({
       onPick={setSelectedIdx}
       onMove={step}
       filterRef={filterRef}
-      emptyHint="No pages match the current filters."
+      emptyHint="No approved pages match the current filters."
     />
   );
   const outlineView = hasOutline ? <StudyOutline entries={outline} activeId={activeId} /> : null;
@@ -385,7 +386,7 @@ export function MaterialsView({
     <>
       {stageBar}
       <section
-        aria-label="Ingested library"
+        aria-label="Pages"
         onKeyDown={(event) => {
           if (event.key === "/" && !isTyping(event.target)) {
             event.preventDefault();
@@ -423,7 +424,6 @@ export function MaterialsView({
             onVersion={setVersion}
             hasVersions={hasVersions}
             toolbar={pageToolbar}
-            quality={quality}
           >
             {reading ? null : body}
           </MaterialsArticle>
@@ -459,7 +459,6 @@ export function MaterialsView({
               version={selectedVersion}
               onVersion={setVersion}
               hasVersions={hasVersions}
-              quality={readingQuality}
             >
               {body}
             </MaterialsArticle>
@@ -470,7 +469,7 @@ export function MaterialsView({
           <MaterialsSearch
             slug={slug}
             runId={runId}
-            entries={entries}
+            entries={selectedEntries}
             onChoose={chooseHit}
             onClose={() => setSearchOpen(false)}
           />

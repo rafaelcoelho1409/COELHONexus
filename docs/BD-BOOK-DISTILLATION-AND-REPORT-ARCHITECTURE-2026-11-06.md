@@ -1,8 +1,10 @@
 # Book Distiller: Distill feature, learning report, visuals, and later RAG
 
-**Status:** Product and architecture reference. The source-only Distill workflow, selection review, Settings connections, reader UI, and post-publication Qdrant indexing lifecycle are implemented; human evaluation, live research, and RAG chat remain later stages. See §12 for current status. Use it with the existing [Book Distiller product decision](BOOK-RESEARCH-FEATURE-SOTA-2026-10-30.md), [ingestion architecture](BD-INGESTION-AGENTIC-AI-ARCHITECTURE-2026-11-03.md), and [ingestion agent SOTA review](BD-INGESTION-AGENTIC-AI-SOTA-2026-11-06.md).
+**Status:** Product and architecture reference. The source-grounded Distill workflow, role-specific DeepAgents, optional Search MCP research appendix, report review, selection review, reader UI, and post-publication Qdrant indexing lifecycle are implemented. Research remains disabled by default; learning-outcome evaluation and user-facing RAG chat remain future work. See §18 for the latest implementation. Use it with the existing [Book Distiller product decision](BOOK-RESEARCH-FEATURE-SOTA-2026-10-30.md), [ingestion architecture](BD-INGESTION-AGENTIC-AI-ARCHITECTURE-2026-11-03.md), and [ingestion agent SOTA review](BD-INGESTION-AGENTIC-AI-SOTA-2026-11-06.md).
 
 **Research snapshot:** 2026-11-06. Recheck framework, renderer, and visualization versions before upgrades or implementing external research.
+
+**Architecture addendum:** 2026-11-16. See §§16–18 for decision-support reports, specialist agents, bounded external research, visual artifacts, the RAG boundary, evaluation gates, and replay behavior.
 
 ## 1. Product objective
 
@@ -324,3 +326,137 @@ Qdrant remains the hybrid passage index. Neo4j is now included for the requested
 The book-level retrieval manifest, API, task, stop/wipe lifecycle, and retry path live under apps/server/domains/bd/rag and /api/v1/bd/rag; Distill calls the RAG domain only after its report passes publication. The Agents page shows the two pipelines side by side, with independent graph/list views, controls, status, and counts. RAG execution is separately disabled by default with BD_RAG_EXECUTION_ENABLED=false; enabling it is an explicit deployment choice.
 
 This increment does not include online research, a book-chat/query endpoint, cross-book retrieval, or execution of generated code. The LLM graph stage reads book pages only; Search MCP enrichment remains a separately versioned future workflow. The retrieval UI represents indexing readiness, not a user-facing chat surface. Keep the existing learning-outcome evaluation gate before claiming that a shorter report preserves full-book learning quality.
+
+## 16. Architecture update — 2026-11-16: decision-support reports, research, artifacts, and replay
+
+This addendum recorded the intended architecture increment. Its original implementation-status statements describe the earlier state; §18 records the subsequent specialist-agent implementation. Generated-code execution and user-facing RAG chat remain outside the shipped scope.
+
+### Product standard and current implementation
+
+The product should help a reader understand and apply a book's important ideas in substantially less reading time. Treat learning parity as an evaluation target, not a promise. A report that is shorter but loses core explanations, caveats, or evidence is a failed result.
+
+The current Distill graph is `prepare_units → extract_unit → prepare_chapters → synthesize_chapter → synthesize_book → publish_report`. It extracts source-grounded learning units and synthesizes chapter and book artifacts. Today, the learning extractor is the only DeepAgent stage and receives no research or sandbox tools; chapter and book synthesis are structured LLM stages. Search connections in Settings are available, but Distill does not call them. Skills and OpenShell are not yet connected to Distill. The typed report supports lessons, source references, diagrams, equations, datasets, charts, evidence-backed timelines, and a source-cited Decision Brief when the source material supports one. These facts are consistent with the current [Distill graph](../apps/server/ai/bd/graphs/distill/graphs.py), [Distill agent](../apps/server/ai/bd/agents/distill/learning_extractor/agent.py), and [report schemas](../apps/server/domains/bd/distill/schemas.py).
+
+Keep LangGraph as the durable, observable workflow coordinator: it owns stage order, bounded parallel work, retries, checkpoints, validation gates, and publication. Use DeepAgents only at stages that benefit from a bounded role, tools, or context management. Prefer a small set of specialized stages over a free-running agent swarm. LangGraph's graph API supports explicit fan-out with `Send`; persistence supports resuming from saved graph state ([graph API](https://docs.langchain.com/oss/python/langgraph/graph-api), [persistence](https://docs.langchain.com/oss/python/langgraph/persistence)). DeepAgents skills are instructions loaded for the agent, while tools provide capabilities; omit neither distinction when designing stage contracts ([DeepAgents overview](https://docs.langchain.com/oss/python/deepagents/overview), [skills](https://docs.langchain.com/oss/python/deepagents/skills), [Agent Skills specification](https://agentskills.io/specification)).
+
+### Recommended report workflow
+
+Keep the source-only Learning Guide as the trusted baseline, then add enhancements behind independently versioned stages so they can be measured and resumed separately:
+
+1. **Pin inputs:** record book, extraction run, Ingestion manifest/selection revision, outline, prompts, model policy, and skill versions. Preserve source page and span references throughout.
+2. **Plan bounded learning work:** process selected chapters and appendices as explicit hierarchy-aware jobs; persist completed artifacts outside compact graph state so retries do not repeat completed work.
+3. **Extract evidence-backed lessons:** capture concepts, methods, definitions, examples, caveats, and source citations. Keep claims small enough to validate against the cited source spans.
+4. **Check coverage and evidence:** deterministically validate citations, source IDs, required chapter coverage, unsupported claims, omissions, contradictions, and numeric/source fidelity. Route uncertain material to a review artifact instead of silently inventing or dropping it.
+5. **Synthesize each chapter:** produce a concise but teachable chapter guide with explanations, examples, assumptions, caveats, application prompts, and recall questions.
+6. **Connect the book:** identify cross-chapter themes and dependencies, while preserving citations to the originating chapter artifacts and source pages.
+7. **Optionally research current context:** use one selected Search MCP connection for a bounded research plan when a claim is time-sensitive, contested, or benefits from current evidence. Keep the stage optional and dated; failure or missing credentials must not block a source-only report.
+8. **Create a decision brief:** translate relevant book lessons into options, trade-offs, assumptions, risks, recommended actions, measures of success, and what evidence would change the recommendation. Label this as synthesis/inference, distinct from the author's claims.
+9. **Validate report assets:** check evidence, chart data, labels/units, accessibility descriptions, link safety, and renderer output before publication.
+10. **Publish from a typed report model:** generate navigable HTML and PDF from validated content objects and trusted renderers. Keep report publication independent of later RAG indexing.
+
+Present two complementary report layers: a **Learning Guide** that teaches the book chapter by chapter, and a **Decision Brief** that helps the reader act. Attribute each claim as book-derived, external research, or agent synthesis; retain citations and research dates. Do not say the report teaches “exactly the same thing” unless paired learning evaluations support that conclusion.
+
+### Search, skills, and sandbox boundaries
+
+- Use the user's COELHO Search MCP as the first research adapter when available. Keep Tavily, Exa, Jina, or other configured providers as selectable adapters, not concurrent unbounded fan-out. Expose only normalized search and fetch/read operations required for a research task.
+- Store each external source's title, URL, publisher/author when available, publication date, access date, and its relationship to a book claim (`supports`, `updates`, `challenges`, or `contextualizes`). Search only for defined questions; do not add freshness research to every book claim by default.
+- Use narrow, versioned skills for chapter teaching, evidence/citation review, research synthesis, decision briefs, visual design, and final editorial review. Pin skill versions to the run for reproducibility. A skill gives a method; a tool performs an operation.
+- Treat MCP tools as externally supplied capabilities. Show tool activity and preserve user control over which provider is used. Follow the current [MCP tools specification](https://modelcontextprotocol.io/specification/2026-07-28/server/tools) and its [authorization specification](https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization) when implementing connections.
+- Do not execute agent-generated code by default. Prefer typed specifications, deterministic calculation code, and safe renderers. If a real use case requires generated code or a calculation sandbox, run it in a restricted OpenShell environment with scoped filesystem, network, process, time, and resource limits; never pass application credentials into it. See the [OpenShell overview](https://docs.nvidia.com/openshell/latest/about/overview).
+
+### Canonical report structures and rendering
+
+Use a validated, versioned JSON report model as the canonical representation. Markdown may be generated for reading, export, and downstream text processing, but it is not expressive enough to serve as the only source of truth for datasets, chart encodings, geospatial features, and interactive artifacts. Every artifact should carry stable IDs, captions, source references, and any relevant units, assumptions, and accessible text alternatives.
+
+| Content | Recommended representation | Rendering and guardrails |
+|---|---|---|
+| Lessons, glossary, examples, caveats | Typed report objects plus Markdown prose | Preserve claim-level source references and hierarchy. |
+| Comparisons and decisions | Evidence-linked tables or decision matrices | Include units, assumptions, options, criteria, and citations per row/cell when practical. |
+| Flowcharts and conceptual relationships | Typed nodes/edges, rendered as Mermaid | Generate from constrained graph data; validate labels and render safely. See [Mermaid flowchart syntax](https://mermaid.js.org/syntax/flowchart). |
+| Timelines | Typed events with dates/order and evidence, optionally rendered as Mermaid or a chart | Keep uncertain dates explicit; do not imply precise chronology where the source does not provide it. |
+| Numeric charts | Dataset plus a Vega-Lite specification | Preserve data and transformations separately from the visual spec; include units, source, and a text summary. See [Vega-Lite](https://vega.github.io/vega-lite/). |
+| Geographic information | GeoJSON features with source-backed locations | Use [RFC 7946](https://www.rfc-editor.org/info/rfc7946); do not infer coordinates or locations from vague text. |
+| Equations | LaTeX expression plus symbol definitions, units, and assumptions | Validate delimiters and render in controlled HTML/PDF output. |
+| Action plans and checklists | Typed actions with owner/role, sequence, dependencies, evidence, risks, and success measures | Keep recommendation and source fact distinct. |
+| Code snippets | Fenced code with language and source/context | Display as reference by default; never execute merely because it appears in a book or report. |
+
+Render Mermaid and chart specs from validated data, not unrestricted model-authored HTML or scripts. Use static, accessible SVG/image output for PDF and interactive rendering only in the web report when the viewer safely supports it. Plotly can be an optional authoring/rendering tool, but retain chart data and a declarative specification so the result is reproducible; its static export depends on Kaleido and a compatible Chrome installation ([Plotly static image export](https://plotly.com/python/static-image-export/)).
+
+### Keep Agentic RAG independent
+
+Keep the full Agentic RAG indexing workflow separate from Distill. Distill's job is to publish a high-quality report; RAG's job is retrieval and later cited question answering. RAG must not delay or invalidate a published guide. The current separate post-publication path uses Qdrant for hybrid retrieval and Neo4j for the evidence graph; its feature flag is disabled by default. Keep Elasticsearch deferred until measured retrieval tests show a clear capability gap that the current stores cannot meet.
+
+If chapter synthesis later proves unable to find distant evidence reliably, consider a small, book-scoped retrieval operation over the pinned source corpus as an optional Distill tool. Evaluate that narrow need independently; it is not a reason to merge the whole RAG indexing and chat product into the report workflow. Cross-book chat remains a later feature after one-book retrieval, authorization, citation quality, and retrieval evaluation are sound.
+
+### Replay behavior now implemented for Distill
+
+The Distill node replay path now follows the BD Ingestion replay model. The implementation is in [`queue_node_replay`](../apps/server/domains/bd/distill/service.py), the graph-node and LLM-counter mappings in [`params.py`](../apps/server/domains/bd/distill/params.py), and the checkpoint selection helper in [`infra/postgres/service.py`](../apps/server/infra/postgres/service.py).
+
+- Replay is accepted only for a known graph node, when the run and any RAG job are stopped, and after every predecessor node has completed.
+- LangGraph resumes from the newest checkpoint scheduling the selected node. A checkpoint can contain multiple pending tasks when they all target that same node, which supports same-node fan-out. A checkpoint mixing different node names is rejected because it cannot safely replay just one node.
+- Saved learning-unit, chapter, synthesis, and report artifacts are invalidated from the selected stage onward; artifacts produced before that stage are retained. The checkpoint history remains available as an audit trail, with the replay continuing on a new branch.
+- LLM usage counters retain only calls belonging to graph stages before the selected node. For example, replaying `synthesize_chapter` retains extraction/verifier calls and clears chapter-synthesis and later calls. `prepare_units`, `prepare_chapters`, and `publish_report` have no direct LLM counter node mapping.
+- If the run has a materialized RAG index, replay wipes that dependent index to prevent stale retrieval content. Rebuild it only after the regenerated report has published successfully and when RAG execution is enabled.
+- The current replay UI should clearly disclose that replay invalidates dependent report artifacts and any existing RAG index before the user confirms. This copy is a follow-up UI refinement; the server-side invalidation behavior is implemented.
+
+### Evaluation gate and coding order
+
+Before adding research or more agents, establish a human-reviewed book set and a source-only baseline. Evaluate chapter/source coverage, citation accuracy, unsupported claims, important omissions, contradiction handling, numeric fidelity, renderer integrity, and run/replay reliability. For learning outcomes, compare readers using the original versus the guide: comprehension, delayed recall, transfer/application, and time. Do not claim learning parity until results justify it.
+
+Recommended implementation sequence:
+
+1. Run the existing source-only guide against a reviewed evaluation set and fix coverage/citation weaknesses.
+2. Extend the typed report schema with explicit provenance labels, decision-brief sections, timelines, action plans, decision trees, and declarative visualization specs.
+3. Add the optional, bounded Search MCP research stage with source dates and claim relationships; keep it independently resumable and non-blocking.
+4. Add decision-brief and visual-spec generation only where the source and research provide supporting evidence; validate with deterministic code and trusted renderers.
+5. Add final editorial, evidence, accessibility, asset-render, and publication checks; ensure HTML and PDF agree with the canonical report model.
+6. Evaluate the enhanced guide with paired readers, compare it to the source-only baseline, and promote only improvements that preserve or improve measured learning outcomes.
+7. After publication, run the independent RAG index; add one-book chat and then cross-book retrieval as separate evaluated product increments.
+
+Recheck the official framework and renderer documentation before implementation or upgrades. This research snapshot was reviewed on 2026-11-16; cited documentation can change.
+
+## 17. Implementation increment — 2026-11-16
+
+The first implementation increment applies the BD Ingestion graph pattern without changing Distill's stage order:
+
+- **Graph boundary:** `graphs.py` owns named stages, edges, retry policy, and `context_schema`; `states.py` contains checkpoint-safe state; `entities.py` holds immutable runtime dependencies. Node entry points accept `(state, Runtime[Context])` and delegate. Do not bind task resources into graph closures.
+- **Node/domain boundary:** `ai/bd/nodes/distill/<stage>/node.py` stays a thin LangGraph adapter; its `service.py` coordinates model/tool calls and artifact reads/writes; pure validation/transformation belongs in the domain layer. Do not import LangGraph or DeepAgents internals into `domains/`.
+- **Persistence/replay boundary:** graph state keeps compact IDs, counters, and artifact keys. Full page/unit/report bodies stay in immutable object storage. Any new stage must update replay order, downstream invalidation, LLM usage attribution, progress contract, and evaluation coverage together. Never reuse prior outputs across changed pinned inputs.
+- **Compatibility boundary:** report and run-manifest fields are additive and schema-versioned. Resume/replay is an explicit migration to the current worker versions; old source artifacts remain reusable only when their pinned hashes match. Prefer lazy/call-site imports where eager namespace imports could create cycles.
+- `distill_graph()` is compiled with `DistillDependencies` as `context_schema`. Node wrappers accept graph state and typed `Runtime` context; the graph no longer closes over storage, agents, controls, or callbacks. The Celery run passes dependencies with `context=...`. Checkpoint-only graph compilation therefore does not create agents or storage dependencies.
+- Report HTML/SVG rendering lives under `domains/bd/distill/rendering/domain.py`; report contracts live under `schemas.py`; source/citation checks live under `evaluation.py`. Node wrappers stay thin and stage-specific LLM/orchestration remains under `ai/bd/nodes/distill/`.
+- Report schema `1.3` adds typed decision briefs, evidence-linked timelines, and a separate optional research context. These are additive: older `1.2` report artifacts still validate, and absent new fields remain `None` or empty. Timeline and decision-brief citations resolve to pinned book learning units and are checked by the same deterministic publication integrity pass. Unsupported timeline visuals are omitted with a review note.
+- The chapter synthesizer is instructed to emit a timeline only when the source explicitly supports the sequence or dates. The book synthesizer can emit a Decision Brief only when source evidence supports it, labels synthesis as agent inference, and cites each recommendation, option, and action. No outside research is used in this increment.
+- Replay regression coverage verifies the current-node same-node fan-out checkpoint behavior and rejects mixed-node checkpoints. Graph compilation and report schema/rendering compatibility have focused unit coverage.
+- Resume and node replay update pinned schema/workflow/prompt/renderer versions to the worker's current code after explicit user action. Existing source artifacts remain reusable; a user can replay `synthesize_chapter` to regenerate chapter visuals/timelines or `synthesize_book` to regenerate the Decision Brief and optional research appendix, then publish from the retained upstream artifacts.
+
+Optional Search MCP context is implemented behind `BD_DISTILL_RESEARCH_ENABLED=true`, pinned on each new run, and disabled by default. The `synthesize_book` stage sends at most three deterministic queries through the selected, tested COELHO Search or Parallel MCP connection. It stores at most twelve validated HTTPS results with query, publisher, publication date when available, and access time. Search failures do not fail Distill. The report renders these references in a separate “Current context and further reading” appendix and explicitly says they do not support book-derived claims; the source synthesis does not consume external snippets. Other configured direct-search providers are not yet MCP adapters for Distill. Since this initial integration has no separate graph node, replay `synthesize_book` to refresh its search context; a dedicated graph node and visible node resources can follow with a coordinated UI graph-contract change. Agent-generated code execution remains out of scope; trusted renderers consume validated typed artifacts.
+
+## 18. Specialist DeepAgents implementation — 2026-11-16
+
+Distill now routes its generative model work through eight focused DeepAgents with typed Pydantic response contracts. LangGraph remains the durable coordinator and keeps its six existing stage IDs, so the established resume/replay contract remains stable. Multiple specialists work inside the graph stage that owns their artifacts:
+
+| LangGraph stage | Specialist DeepAgents | Responsibility |
+|---|---|---|
+| `extract_unit` | `learning_extractor`, `evidence_verifier` | Extract source-cited lessons, then independently assess whether each cited passage supports the full claim. |
+| `synthesize_chapter` | `chapter_synthesizer`, `visual_artifact_builder` | Produce the teaching guide, then separately build diagrams, equations, datasets/charts, and timelines from exact source evidence. |
+| `synthesize_book` | `book_synthesizer`, `decision_brief_writer`, `research_analyst` | Connect chapter guides, produce a distinct cited decision brief, and optionally summarize external Search MCP results in a separately attributed appendix. |
+| `publish_report` | `report_reviewer` | Flag concise editorial issues after deterministic page, quote, and citation checks. The reviewer cannot rewrite the report or override those checks. |
+
+The corresponding agent factories live under [`ai/bd/agents/distill`](../apps/server/ai/bd/agents/distill), role prompts under [`ai/bd/prompts/distill`](../apps/server/ai/bd/prompts/distill), and versioned role skills under [`ai/bd/skills/distill`](../apps/server/ai/bd/skills/distill). Each agent uses the configured COELHO Rotator model, a constrained output schema, a role-specific skill, a model-call limit, and read-only `read_file` access for those skill files. It receives no shell, arbitrary file-write, or code-execution tools. MCP search remains a bounded service capability: the selected MCP adapter returns validated source records, then the research analyst receives only that bounded result set.
+
+This implementation deliberately assigns multiple agents to existing LangGraph stages instead of expanding the graph topology. Graph nodes continue to own checkpoint and replay boundaries; specialist calls are attributed to separate LLM-usage node IDs. The Agents UI now lists each specialist, role skill, and available tool under its owning stage. Replay from `synthesize_chapter`, `synthesize_book`, or `publish_report` clears the counters for every specialist at that stage and downstream while retaining all earlier usage.
+
+Every Distill LLM call—including malformed-response recovery—now invokes a typed DeepAgent. The former direct structured-chat and text-chat fallbacks were removed. A response that still fails validation follows the stage's existing bounded retry/error behavior; validators remain authoritative for source IDs, quotes, citation integrity, chart values, and page coverage.
+
+The visual builder only emits typed report structures and never executes generated code. The decision brief is generated after book synthesis and cites only the source-backed learning units available to that final synthesis. Search findings cite retrieved MCP `source_id` values and render separately from book citations. The report schema is version `1.4`; workflow and prompt versions are `1.20` and `1.15`. Search remains opt-in through `BD_DISTILL_RESEARCH_ENABLED`, and Agentic RAG indexing/chat remains a separate product process.
+
+These role boundaries improve separation of concerns, structured observability, and recovery from invalid output; they do not guarantee better factual quality by themselves. Measure citation precision, missed material, visual usefulness, decision-brief usefulness, latency, and token cost on the reviewed evaluation set before increasing fan-out or enabling research by default.
+
+## 19. Report artifact and Study reader increment — 2026-11-17
+
+The report schema now supports bounded GeoJSON FeatureCollections for points, lines, and polygons. A map feature is retained only when its learning-unit IDs and exact evidence resolve and every longitude/latitude value occurs in its cited source quote. The visual agent is explicitly forbidden from geocoding place names or inferring coordinates. The collection is capped at 10,000 coordinates to bound validation and rendering cost.
+
+Validated chapter maps now flow through report publication and deterministic HTML/SVG rendering, and the Study reader displays source-linked maps and timelines. The Study reader also exposes the already-published Decision Brief and optional research appendix. HTML and PDF use the same static, script-free report representation; the web reader uses trusted SVG/data rendering. A Markdown download is generated from the canonical report and includes Mermaid, LaTeX, data tables, timelines, GeoJSON, and page links.
+
+This increment continues to avoid generated-code execution and OpenShell: current diagrams, charts, timelines, and maps are emitted as bounded structured data and rendered by trusted code. If a later report feature requires generated Python, add a separately deployed, restricted sandbox runtime first; do not run agent code in the server worker. Chart rendering remains the existing deterministic SVG plus accessible data table, keeping the saved HTML and PDF self-contained.

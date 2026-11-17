@@ -35,10 +35,12 @@ import { useDdOverlays } from "../hooks/use-overlays";
 import { ingestionHref, pagesHref } from "../params";
 import { IngestionPipeline } from "./ingestion-pipeline";
 import { ExtractionProgress } from "./ingestion-progress";
+import { PageSelectionUsageControl } from "./ingestion-usage";
 import { MaterialsView } from "./materials-view";
 import { StageBar } from "./stage-bar";
 
 type IngestionView = "pipeline" | "materials";
+type ActiveIngestionRun = ReturnType<typeof useActiveRun>["runs"][number];
 
 function completedProgress(pageCount: number): NonNullable<RunStatus["progress"]> {
   return {
@@ -89,6 +91,7 @@ export function IngestionStage({
 }) {
   const { runs } = useActiveRun(true);
   const router = useRouter();
+  const activeRun = runs.find((candidate) => candidate.slug === slug);
   const finished = useRef<Set<string>>(new Set());
   const rememberFinished = useCallback((id: string) => {
     finished.current.add(id);
@@ -98,7 +101,7 @@ export function IngestionStage({
     const adopt = runToAdopt({
       slug,
       urlRunId: runId,
-      active: runs.find((candidate) => candidate.slug === slug),
+      active: activeRun,
       finished: finished.current,
     });
     if (adopt && slug) {
@@ -106,7 +109,7 @@ export function IngestionStage({
         scroll: false,
       });
     }
-  }, [runId, slug, runs, router, view]);
+  }, [runId, slug, activeRun, router, view]);
 
   if (!slug) {
     return (
@@ -122,23 +125,33 @@ export function IngestionStage({
     );
   }
   return (
-    <IngestionWorkspace key={slug} slug={slug} runId={runId} view={view} onRunFinished={rememberFinished} />
+    <IngestionWorkspace
+      key={slug}
+      slug={slug}
+      runId={runId}
+      activeRun={activeRun}
+      view={view}
+      onRunFinished={rememberFinished}
+    />
   );
 }
 
 function IngestionWorkspace({
   slug,
   runId,
+  activeRun,
   view,
   onRunFinished,
 }: {
   slug: string;
   runId: string | null;
+  activeRun: ActiveIngestionRun | undefined;
   view: IngestionView;
   onRunFinished: (runId: string) => void;
 }) {
   const manifestQuery = useManifest(slug);
   const effectiveRunId = runId ?? manifestQuery.data?.agentic_run_id ?? null;
+  const selectionRunId = runId ?? manifestQuery.data?.run_id ?? null;
   // A run named in the address is in flight (or just ended); the run saved with the library is finished, and its status is read once.
   const statusQuery = useRunPoll(effectiveRunId, runId !== null);
   const cancel = useCancelRun();
@@ -170,6 +183,30 @@ function IngestionWorkspace({
   const agentic = progress?.stages?.agentic ?? null;
   const terminal = isRunTerminal(status);
   const extraction = progress?.stages?.extraction ?? null;
+  const selection = progress?.stages?.selection ?? null;
+  const statusUnavailable = effectiveRunId !== null && statusQuery.isError;
+
+  // A Pages URL can outlive its run. Follow a newer active run, or the latest published manifest
+  // after a newer run finishes, so progress and usage stay aligned with the current page set.
+  const activeRunId = activeRun?.run_id ?? null;
+  const activeRunIsLive = activeRun !== undefined && !isRunTerminal(activeRun.progress?.status);
+  const savedRunId = manifestQuery.data?.run_id ?? null;
+  const savedRunIsNewer =
+    savedRunId !== null &&
+    savedRunId !== runId &&
+    (statusUnavailable || (manifestQuery.data?.ingested_at ?? 0) > (progress?.updated_at ?? 0));
+  const preferredRunId = activeRunIsLive ? activeRunId : savedRunIsNewer ? savedRunId : null;
+  const shouldFollowLatestRun =
+    view === "materials" &&
+    runId !== null &&
+    preferredRunId !== null &&
+    preferredRunId !== runId &&
+    (terminal || statusUnavailable);
+
+  useEffect(() => {
+    if (!shouldFollowLatestRun || !preferredRunId) return;
+    router.replace(pagesHref(slug, preferredRunId), { scroll: false });
+  }, [preferredRunId, router, shouldFollowLatestRun, slug]);
 
   useEffect(() => {
     if (!runId || !terminal) return;
@@ -189,8 +226,19 @@ function IngestionWorkspace({
         keepGoing,
       );
     }
-    if (status === "cancelled") noticeRef.current("Documentation extraction cancelled.");
-  }, [runId, terminal, status, slug, queryClient, onRunFinished, statusQuery.data?.manifest]);
+    if (status === "cancelled" && !shouldFollowLatestRun) {
+      noticeRef.current("Documentation extraction cancelled.");
+    }
+  }, [
+    runId,
+    terminal,
+    status,
+    slug,
+    queryClient,
+    onRunFinished,
+    statusQuery.data?.manifest,
+    shouldFollowLatestRun,
+  ]);
 
   const liveEntries = statusQuery.data?.manifest;
   const showLiveManifest = runId !== null && liveEntries != null;
@@ -211,22 +259,41 @@ function IngestionWorkspace({
   const cancelRequested =
     status === "cancelling" ||
     ((cancel.isPending || cancel.isSuccess) && cancel.variables === effectiveRunId);
-  const statusUnavailable = effectiveRunId !== null && statusQuery.isError;
   const extractionActive =
     effectiveRunId !== null && !terminal && !statusUnavailable && extraction?.status === "running";
-  const extractionStopping = extractionActive && cancelRequested;
+  const selectionActive =
+    effectiveRunId !== null && !terminal && !statusUnavailable && selection?.status === "running";
+  const pipelineActive = extractionActive || selectionActive;
+  const extractionStopping = pipelineActive && cancelRequested;
   const extractionCurrent =
     effectiveRunId !== null ? (extraction?.current ?? 0) : (manifestQuery.data?.entries.length ?? 0);
   const extractionTotal =
     effectiveRunId !== null ? (extraction?.total ?? 0) : (manifestQuery.data?.entries.length ?? 0);
-  const extractionStatusText =
-    effectiveRunId !== null
-      ? extractionStopping
-        ? "Stopping"
-        : phaseStatusText(extraction?.status, status)
-      : ingested
+  const selectionEntries = activeManifest?.entries ?? [];
+  const selectionRecorded = selectionEntries.filter((entry) => entry.page_selection?.status).length;
+  const selectionRecordedComplete =
+    selectionEntries.length > 0 && selectionRecorded === selectionEntries.length;
+  const selectionStatusText = selection?.status
+    ? selection.status === "running"
+      ? "Running"
+      : selection.status === "done"
         ? "Complete"
-        : "Not started";
+        : phaseStatusText(selection.status, status)
+    : selectionRecordedComplete
+      ? "Complete"
+      : effectiveRunId !== null && !terminal && !statusUnavailable
+        ? "Waiting"
+        : ingested
+          ? "Not recorded"
+          : "Waiting";
+  const selectionCurrent = selection?.current ?? selectionRecorded;
+  const selectionTotal =
+    selection?.total ?? (terminal || statusUnavailable ? selectionEntries.length : 0);
+  const extractionStatusText = (() => {
+    if (extractionStopping) return "Stopping";
+    if (effectiveRunId !== null) return phaseStatusText(extraction?.status, status);
+    return ingested ? "Complete" : "Not started";
+  })();
   const extractionDone = effectiveRunId !== null ? extraction?.status === "done" : ingested;
   const retryable = status === "failed" || status === "cancelled";
   const extractionCancelError =
@@ -392,9 +459,9 @@ function IngestionWorkspace({
               total={extractionTotal}
               tierText={extraction?.tier ? tierLabel(extraction.tier) : null}
               lastUrl={extraction?.last_url ?? null}
-              successful={extractionDone && !extraction?.error}
+              successful={extractionDone && !extraction?.error && (!selection || selection.status === "done")}
               live={effectiveRunId !== null && !terminal && !statusUnavailable}
-              extracting={extractionActive}
+              extracting={pipelineActive}
               ingested={ingested}
               retryable={retryable}
               stopping={extractionStopping}
@@ -406,6 +473,18 @@ function IngestionWorkspace({
                 terminal
                   ? `Documentation extraction ${phaseStatusText(extraction?.status, status).toLowerCase()}.`
                   : null
+              }
+              selectionStatusText={selectionStatusText}
+              selectionCurrent={selectionCurrent}
+              selectionTotal={selectionTotal}
+              selectionActive={selectionActive}
+              usageControl={
+                <PageSelectionUsageControl
+                  runId={selectionRunId}
+                  live={runId !== null && selectionActive}
+                  assessed={selectionCurrent}
+                  total={selectionTotal}
+                />
               }
               onStart={startExtraction}
               onStop={() => {
@@ -421,6 +500,7 @@ function IngestionWorkspace({
               controlsInNavbar
               manifest={activeManifest}
               runId={explorerRunId}
+              selectionPending={effectiveRunId !== null && !terminal && !statusUnavailable}
               active
               loadError={ingested && manifestQuery.isError && !manifestQuery.data && !showLiveManifest}
             />
@@ -430,7 +510,7 @@ function IngestionWorkspace({
               className="rounded-md border border-border bg-card p-8 text-center text-sm text-muted-foreground"
             >
               {effectiveRunId !== null && !terminal && !statusUnavailable
-                ? "Pages will appear here as extraction publishes them."
+                ? "AI-approved pages will appear here as extraction continues."
                 : "No source pages yet. Start documentation extraction above."}
             </section>
           )}

@@ -1,1 +1,1 @@
-from . import book, patch
+from . import book, patch, search_mcp

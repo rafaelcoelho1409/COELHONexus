@@ -32,7 +32,7 @@ class PlannerAgents:
         return self._once("page_distiller", lambda: agents.pipeline.planner.page_distiller.agent.page_distiller())
 
     def page_card(self):
-        return self._once("page_card", lambda: agents.pipeline.planner.page_card.agent.page_card())
+        return self._once("page_card", lambda: agents.pages.page_selector.agent.page_selector())
 
     def chapter_designer(self):
         return self._once("chapter_designer", lambda: agents.pipeline.planner.chapter_designer.agent.chapter_designer())

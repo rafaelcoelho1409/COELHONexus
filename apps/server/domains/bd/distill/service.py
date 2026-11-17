@@ -241,6 +241,7 @@ async def create_distill_run(
             processed_book_sha256 = processed_book_sha256,
             processed_book_revision = processed.selection_revision,
             processed_page_count = processed.source_page_count,
+            research_enabled = params.RESEARCH_ENABLED,
             prompt_version = versions.PROMPT_VERSION,
             model_name = domains.settings.chat.service.ENDPOINT.model,
             created_at = now,
@@ -301,6 +302,8 @@ async def queue_resume(book_id: str, run_id: str) -> dict[str, Any]:
         manifest["replay_from_node"] = None
         manifest["workflow_version"] = versions.WORKFLOW_VERSION
         manifest["prompt_version"] = versions.PROMPT_VERSION
+        manifest["renderer_version"] = versions.RENDERER_VERSION
+        manifest["schema_version"] = versions.MANIFEST_SCHEMA_VERSION
         manifest["finished_at"] = None
         manifest["error"] = None
         manifest["updated_at"] = time.time()
@@ -336,19 +339,28 @@ async def queue_node_replay(book_id: str, run_id: str, node_id: str) -> dict[str
         if rag_index is not None and rag_index.get("status") in {"queued", "running"}:
             raise ValueError("stop Agentic RAG before replaying Distill")
 
+        node_index = params.GRAPH_NODES.index(node_id)
+        node_status = (manifest.get("progress") or {}).get("node_status", {})
+        incomplete_predecessors = [
+            predecessor
+            for predecessor in params.GRAPH_NODES[:node_index]
+            if node_status.get(predecessor) != "done"
+        ]
+        if incomplete_predecessors:
+            predecessor = incomplete_predecessors[0]
+            raise ValueError(
+                f"Cannot replay {node_id} yet: {predecessor} has not completed. "
+                f"Resume the run from its saved checkpoint or replay {predecessor}."
+            )
+
         checkpointer = infra.postgres.service.get_checkpointer()
-        dependencies = ai.bd.graphs.distill.entities.DistillDependencies(
-            storage = storage,
-            extractor = ai.bd.agents.distill.learning_extractor.agent.learning_extractor(),
-            controls = ai.bd.graphs.distill.entities.DistillRunControls(
-                chapter_synthesis_semaphore = asyncio.Semaphore(params.CHAPTER_SYNTHESIS_CONCURRENCY),
-            ),
-        )
-        graph = ai.bd.graphs.distill.graphs.distill_graph(dependencies, checkpointer = checkpointer)
+        graph = ai.bd.graphs.distill.graphs.distill_graph(checkpointer = checkpointer)
         graph_config = {"configurable": {
             "thread_id": f"bd-distill:{book_id}:{manifest['extraction_run_id']}:{run_id}",
         }}
         await infra.postgres.service.checkpoint_before_node(graph, graph_config, node_id)
+        if rag_index is not None:
+            await domains.bd.rag.service.wipe_index(book_id, run_id)
         await progress.service.clear_cancel(book_id, run_id)
 
         prefix = keys.run_prefix(book_id, run_id)
@@ -362,6 +374,13 @@ async def queue_node_replay(book_id: str, run_id: str, node_id: str) -> dict[str
         await storage.delete_prefix(prefix + "report.html")
         await storage.delete_prefix(prefix + "report.pdf")
 
+        retained_llm_nodes = {
+            usage_node
+            for graph_node in params.GRAPH_NODES[:node_index]
+            for usage_node in params.LLM_COUNTER_NODES_BY_GRAPH_NODE[graph_node]
+        }
+        await domains.settings.llm_counter.service.retain_nodes("bd", run_id, retained_llm_nodes)
+
         downstream = set(params.REPLAY_DESCENDANTS[node_id])
         progress_state = manifest["progress"]
         for downstream_node in downstream:
@@ -371,6 +390,10 @@ async def queue_node_replay(book_id: str, run_id: str, node_id: str) -> dict[str
         progress_state["completed_chapters"] = len(await storage.list(prefix + "chapters/"))
         manifest.update(
             status = "queued",
+            schema_version = versions.MANIFEST_SCHEMA_VERSION,
+            workflow_version = versions.WORKFLOW_VERSION,
+            prompt_version = versions.PROMPT_VERSION,
+            renderer_version = versions.RENDERER_VERSION,
             resume_from_node = None,
             replay_from_node = node_id,
             finished_at = None,
@@ -547,13 +570,12 @@ async def read_html(book_id: str, run_id: str) -> str:
 
 
 async def _restore_chapter_resume_state(
-    ai_module: Any,
-    dependencies: Any,
+    storage: Any,
     initial_state: dict[str, Any],
 ) -> dict[str, Any] | None:
     """Rehydrate chapter-stage state from durable source and lesson artifacts."""
-    prepared = await ai_module.bd.nodes.distill.extract_learning_units.service.prepare_units(
-        dependencies,
+    prepared = await domains.bd.distill.extract_learning_units.service.prepare_units(
+        storage,
         initial_state,
     )
     completed_units = []
@@ -561,9 +583,9 @@ async def _restore_chapter_resume_state(
         artifact_key = keys.learning_unit_key(
             initial_state["book_id"], initial_state["run_id"], ref["unit_id"],
         )
-        if not await dependencies.storage.exists(artifact_key):
+        if not await storage.exists(artifact_key):
             return None
-        artifact = json.loads(await dependencies.storage.read_text(artifact_key))
+        artifact = json.loads(await storage.read_text(artifact_key))
         if artifact.get("text_sha256") != ref.get("text_sha256"):
             raise ValueError("a persisted learning-unit artifact no longer matches its source input")
         lesson_ids = [
@@ -701,7 +723,7 @@ async def run_distill(
     qa_content = await storage.read_text(manifest["ingestion_ai_manifest_key"])
     if hashlib.sha256(qa_content.encode("utf-8")).hexdigest() != manifest["ingestion_ai_manifest_sha256"]:
         raise ValueError("the ingestion QA manifest changed after this Distill run was created")
-    if manifest.get("schema_version") in {"1.1", "1.2"}:
+    if manifest.get("schema_version") in {"1.1", "1.2", "1.3"}:
         selection_content = await storage.read_text(manifest["content_selection_key"])
         if hashlib.sha256(selection_content.encode("utf-8")).hexdigest() != manifest["content_selection_sha256"]:
             raise ValueError("the content-selection revision changed after this Distill run was created")
@@ -717,7 +739,7 @@ async def run_distill(
             )
         ):
             raise ValueError("the pinned content-selection revision does not match this Distill run")
-    if manifest.get("schema_version") == "1.2":
+    if manifest.get("schema_version") in {"1.2", "1.3"}:
         processed_content = await storage.read_text(manifest["processed_book_key"])
         if hashlib.sha256(processed_content.encode("utf-8")).hexdigest() != manifest["processed_book_sha256"]:
             raise ValueError("the pinned processed-book manifest failed its integrity check")
@@ -806,18 +828,28 @@ async def run_distill(
             }, progress = manifest["progress"])
 
     try:
-        extractor = ai.bd.agents.distill.learning_extractor.agent.learning_extractor()
+        learning_extractor = ai.bd.agents.distill.learning_extractor.agent.learning_extractor()
+        research_search_session = ai.bd.tools.search_mcp.entities.SearchSession(run_id = run_id)
         dependencies = ai.bd.graphs.distill.entities.DistillDependencies(
             storage = storage,
-            extractor = extractor,
+            learning_extractor = learning_extractor,
+            evidence_verifier = ai.bd.agents.distill.evidence_verifier.agent.evidence_verifier(),
+            chapter_synthesizer = ai.bd.agents.distill.chapter_synthesizer.agent.chapter_synthesizer(),
+            visual_artifact_builder = ai.bd.agents.distill.visual_artifact_builder.agent.visual_artifact_builder(),
+            book_synthesizer = ai.bd.agents.distill.book_synthesizer.agent.book_synthesizer(),
+            decision_brief_writer = ai.bd.agents.distill.decision_brief_writer.agent.decision_brief_writer(),
+            research_analyst = ai.bd.agents.distill.research_analyst.agent.research_analyst(),
+            research_search_session = research_search_session,
+            report_reviewer = ai.bd.agents.distill.report_reviewer.agent.report_reviewer(),
             controls = ai.bd.graphs.distill.entities.DistillRunControls(
                 chapter_synthesis_semaphore = asyncio.Semaphore(
                     params.CHAPTER_SYNTHESIS_CONCURRENCY,
                 ),
             ),
             progress_callback = report_progress,
+            research_enabled = bool(manifest.get("research_enabled", False)),
         )
-        graph = ai.bd.graphs.distill.graphs.distill_graph(dependencies, checkpointer = checkpointer)
+        graph = ai.bd.graphs.distill.graphs.distill_graph(checkpointer = checkpointer)
         initial_state = {
             "book_id": book_id,
             "run_id": run_id,
@@ -934,7 +966,7 @@ async def run_distill(
         resume_from_node = manifest.get("resume_from_node")
         chapter_stage_nodes = {"prepare_chapters", "synthesize_chapter", "synthesize_book", "publish_report"}
         if graph_input is not None and resume_from_node in chapter_stage_nodes:
-            restored_state = await _restore_chapter_resume_state(ai, dependencies, initial_state)
+            restored_state = await _restore_chapter_resume_state(storage, initial_state)
             if restored_state is None:
                 resume_from_node = "prepare_units"
                 manifest["resume_from_node"] = resume_from_node
@@ -958,12 +990,16 @@ async def run_distill(
                     resume_from_node,
                 )
         if completed_checkpoint_state is not None:
-            result = await ai.bd.nodes.distill.publish_report.node.publish_report(
+            result = await ai.bd.nodes.distill.publish_report.node.publish_report_with_dependencies(
                 dependencies,
                 completed_checkpoint_state,
             )
         else:
-            result = await graph.ainvoke(graph_input, config = graph_config)
+            result = await graph.ainvoke(
+                graph_input,
+                config = graph_config,
+                context = dependencies,
+            )
         required = ("report_key", "report_sha256", "html_key", "html_sha256")
         missing = [field for field in required if not isinstance(result.get(field), str)]
         if missing:

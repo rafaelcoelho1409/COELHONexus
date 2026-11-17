@@ -5,6 +5,7 @@ import { apiErrorMessage } from "@/shared/lib/api-error";
 import type { StreamStatus } from "@/shared/sse";
 import { useRagIndex } from "../../rag/hooks/use-index-data";
 import { learningGuideHtmlUrl, learningGuidePdfUrl } from "../api";
+import { learningGuideMarkdown, learningGuideMarkdownFilename } from "../domain/learning-guide-markdown";
 import type { DistillRunViewState } from "../domain/run-state";
 import type { DistillRun } from "../entities";
 import { useLearningGuide } from "../hooks/use-distill-data";
@@ -24,6 +25,17 @@ export function DistillRunPanel({
   const report = useLearningGuide(bookId, run.run_id, state.status === "done");
   const ragIndex = useRagIndex(bookId, run.run_id, state.status === "done");
 
+  function downloadMarkdown() {
+    if (!report.data) return;
+    const blob = new Blob([learningGuideMarkdown(report.data)], { type: "text/markdown;charset=utf-8" });
+    const objectUrl = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = objectUrl;
+    link.download = learningGuideMarkdownFilename(report.data);
+    link.click();
+    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 0);
+  }
+
   if (state.status !== "done") return null;
 
   return (
@@ -36,6 +48,15 @@ export function DistillRunPanel({
           <p className="mt-1 break-all font-mono text-xs text-muted-foreground">{run.run_id}</p>
         </div>
         <div className="flex flex-wrap gap-2">
+          {report.data ? (
+            <button
+              type="button"
+              onClick={downloadMarkdown}
+              className="inline-flex min-h-9 items-center gap-2 rounded-sm border border-border px-3 text-sm"
+            >
+              <ArrowDownToLine aria-hidden className="size-4" /> Download Markdown
+            </button>
+          ) : null}
           <a
             href={learningGuideHtmlUrl(bookId, run.run_id)}
             target="_blank"

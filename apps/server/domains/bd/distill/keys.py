@@ -58,3 +58,7 @@ def synthesis_key(book_id: str, run_id: str, level: int, batch: int) -> str:
     if level < 0 or batch < 0:
         raise ValueError("synthesis level and batch must be non-negative")
     return f"{run_prefix(book_id, run_id)}synthesis/{level:03d}-{batch:05d}.json"
+
+
+def research_context_key(book_id: str, run_id: str) -> str:
+    return f"{run_prefix(book_id, run_id)}synthesis/research-context.json"

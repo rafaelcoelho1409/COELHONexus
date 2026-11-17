@@ -1,5 +1,5 @@
 """Saved Search connections available to product integrations."""
-from . import params, service
+from . import entities, params, service
 
 
-__all__ = ["params", "service"]
+__all__ = ["entities", "params", "service"]

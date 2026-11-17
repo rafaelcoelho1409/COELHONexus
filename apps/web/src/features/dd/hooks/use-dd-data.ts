@@ -19,8 +19,6 @@ import {
   getDdIngestionSlugManifestOptions,
   getDdIngestionSlugManifestQueryKey,
   getDdIngestionSlugPagesIdxOptions,
-  getDdIngestionSlugPagesIdxQuality,
-  getDdIngestionSlugPagesIdxQualityQueryKey,
   getDdIngestionSlugPagesIdxQueryKey,
   postDdIngestionRuns,
   postDdIngestionRunsRunIdCancel,
@@ -42,7 +40,6 @@ import {
   manifestSchema,
   type PageVersion,
   pageBodySchema,
-  pageQualitySchema,
   resolverCatalogSchema,
   runStatusSchema,
   startRunResponseSchema,
@@ -248,22 +245,6 @@ export function usePageBody(slug: string | null, idx: number | null, version: Pa
   return { data: query.data ?? null, isPending: query.isPending, isError: query.isError };
 }
 
-/** GET /dd/ingestion/{slug}/pages/{idx}/quality — the finalized page's audit and repair report. */
-export function usePageQuality(slug: string, idx: number, agenticRunId: string, enabled: boolean) {
-  return useQuery({
-    queryKey: [...getDdIngestionSlugPagesIdxQualityQueryKey({ path: { slug, idx } }), agenticRunId],
-    queryFn: async () => {
-      const result = await getDdIngestionSlugPagesIdxQuality({
-        path: { slug, idx },
-        throwOnError: true,
-      });
-      return pageQualitySchema.parse(result.data);
-    },
-    retry: false,
-    enabled,
-  });
-}
-
 /** GET /dd/ingestion/runs/{run_id}/pages/{idx} — page bodies from the in-flight raw-to-agentic manifest. */
 export function useRunPageBody(
   runId: string | null,
@@ -281,11 +262,11 @@ export function useRunPageBody(
 }
 
 /** Live while ingestion runs; the endpoint switches to its MinIO snapshot after Redis expires. */
-export function useIngestionUsage(runId: string | null, live: boolean) {
+export function useIngestionUsage(runId: string | null, live: boolean, enabled = true) {
   return useQuery({
     queryKey: ["dd", "ingestion", "usage", runId],
     queryFn: () => fetchIngestionUsage(runId ?? ""),
-    enabled: runId !== null,
+    enabled: enabled && runId !== null,
     retry: false,
     refetchInterval: live ? USAGE_REFRESH_MS : false,
     select: (raw: unknown) => usagePayloadSchema.parse(raw),

@@ -39,6 +39,7 @@ const TIER_LABELS: Record<string, string> = {
   playwright: "Rendering documentation pages",
   github: "Fetching GitHub repository",
   post: "Splitting & deduplicating pages",
+  page_selection: "Selecting learning pages",
   vault_backfill: "Building citation index",
   finalize: "Finalizing",
 };

@@ -131,7 +131,9 @@ export function ReportChart({
                         height={Math.max(Math.abs(valueY - zeroY), 1)}
                         fill={seriesColor(seriesIndex)}
                         rx="2"
-                      />
+                      >
+                        <title>{`${series.name} · ${point.label}: ${formatNumber(point.value)}`}</title>
+                      </rect>
                     );
                   }),
                 )
@@ -140,6 +142,8 @@ export function ReportChart({
                     x: xPosition(point.x),
                     y: yPosition(point.value, model.yMin, model.yMax),
                     rowIndex: point.rowIndex,
+                    label: point.label,
+                    value: point.value,
                   }));
                   const line = points
                     .map((point, index) => `${index === 0 ? "M" : "L"}${point.x},${point.y}`)
@@ -163,7 +167,9 @@ export function ReportChart({
                           cy={point.y}
                           r="5"
                           fill={seriesColor(seriesIndex)}
-                        />
+                        >
+                          <title>{`${series.name} · ${point.label}: ${formatNumber(point.value)}`}</title>
+                        </circle>
                       ))}
                     </g>
                   );

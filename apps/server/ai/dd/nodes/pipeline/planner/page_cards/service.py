@@ -33,6 +33,11 @@ async def page_cards_run(state: graphs.pipeline.planner.states.PlannerState, run
     graphs.service.emit(params.STEP, "start", n_pages = len(source_keys))
     manifest_obj = await domains.dd.ingestion.storage.service.read_framework_manifest(blobs, slug) or {}
     entries = _manifest_entry_map(manifest_obj.get("entries") or [])
+    selection_is_authoritative = bool(entries) and all(
+        isinstance(entry.get("page_selection"), dict)
+        and entry["page_selection"].get("status") in {"selected", "excluded", "needs_review"}
+        for entry in entries.values()
+    )
     bodies = await domains.dd.pipeline.storage.service.read_all(blobs, source_keys)
     body_by_key = {key: body or "" for key, body in zip(source_keys, bodies)}
     body_digests = {key: domain.content_digest(body_by_key[key]) for key in source_keys}
@@ -82,7 +87,7 @@ async def page_cards_run(state: graphs.pipeline.planner.states.PlannerState, run
             async with semaphore:
                 answer = await agents.service.ask(
                     role,
-                    agents.pipeline.planner.page_card.schemas.PageCard,
+                    agents.pages.page_selector.schemas.PageCard,
                     request,
                     attempts = params.ATTEMPTS,
                     wait_base_s = params.RETRY_WAIT_S,
@@ -126,6 +131,15 @@ async def page_cards_run(state: graphs.pipeline.planner.states.PlannerState, run
             title = entry.get("title") or canonical.rsplit("/", 1)[-1],
             url = entry.get("url") or entry.get("source_path") or "",
         )
+        selection = entry.get("page_selection") or {}
+        if selection_is_authoritative and selection.get("status") == "selected":
+            # Extraction-time selection is the source of truth. A cache miss or a later nondeterministic response
+            # must not remove a page that the Pages selector already accepted.
+            card = {
+                **card,
+                "keep": True,
+                "reason": selection.get("reason") or card.get("reason"),
+            }
         if original_kind == "reference" and card.get("kind") != "reference":
             reference_kind_reclassified_digests.add(digest)
         body = body_by_key[canonical]

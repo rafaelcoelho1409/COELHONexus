@@ -4,8 +4,9 @@ from __future__ import annotations
 import json
 import math
 from typing import Annotated, Any, Literal
+from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator, model_validator
 
 from . import versions
 
@@ -14,9 +15,11 @@ Sha256Hex = Annotated[str, StringConstraints(pattern = r"^[0-9a-f]{64}$")]
 NonEmptyText = Annotated[str, StringConstraints(strip_whitespace = True, min_length = 1)]
 
 _JSON_ARRAY_FIELDS = frozenset({
+    "action_plan",
     "assumptions",
     "charts",
     "columns",
+    "coordinates",
     "diagrams",
     "edges",
     "equations",
@@ -29,9 +32,17 @@ _JSON_ARRAY_FIELDS = frozenset({
     "overview_learning_unit_ids",
     "rows",
     "transformations",
+    "timelines",
+    "events",
+    "features",
+    "maps",
+    "options",
+    "research_queries",
+    "research_sources",
     "y_fields",
 })
 _JSON_OBJECT_ARRAY_FIELDS = frozenset({
+    "action_plan",
     "charts",
     "columns",
     "diagrams",
@@ -42,8 +53,14 @@ _JSON_OBJECT_ARRAY_FIELDS = frozenset({
     "nodes",
     "open_questions",
     "rows",
+    "timelines",
+    "events",
+    "features",
+    "maps",
+    "options",
+    "research_sources",
 })
-_JSON_OBJECT_FIELDS = frozenset({"dataset", "values"})
+_JSON_OBJECT_FIELDS = frozenset({"dataset", "decision_brief", "geojson", "geometry", "properties", "values"})
 _JSON_COLLECTION_FIELDS = _JSON_ARRAY_FIELDS | _JSON_OBJECT_FIELDS
 
 
@@ -130,6 +147,25 @@ class EvidenceReview(BaseModel):
     verdicts: list[EvidenceVerdict] = Field(max_length = 8)
 
 
+class TimelineEvent(BaseModel):
+    model_config = ConfigDict(extra = "forbid")
+
+    label: NonEmptyText = Field(max_length = 180)
+    description: NonEmptyText = Field(max_length = 800)
+    date_or_order: NonEmptyText = Field(max_length = 80)
+    attribution: Literal["book", "agent_inference"] = "book"
+    learning_unit_ids: list[SafeSegment] = Field(min_length = 1, max_length = 8)
+    evidence: list[EvidenceQuote] = Field(min_length = 1, max_length = 8)
+
+
+class TimelineSpec(BaseModel):
+    model_config = ConfigDict(extra = "forbid")
+
+    title: NonEmptyText = Field(max_length = 180)
+    accessible_description: NonEmptyText = Field(max_length = 600)
+    events: list[TimelineEvent] = Field(min_length = 2, max_length = 32)
+
+
 class ChapterLesson(BaseModel):
     model_config = ConfigDict(extra = "forbid")
 
@@ -150,6 +186,8 @@ class ChapterSynthesis(BaseModel):
     diagrams: list[DiagramSpec] = Field(default_factory = list, max_length = 8)
     equations: list[EquationBlock] = Field(default_factory = list, max_length = 8)
     charts: list[ChartSpec] = Field(default_factory = list, max_length = 8)
+    timelines: list[TimelineSpec] = Field(default_factory = list, max_length = 4)
+    maps: list["GeoMapSpec"] = Field(default_factory = list, max_length = 4)
 
     @model_validator(mode = "before")
     @classmethod
@@ -166,6 +204,57 @@ class BookSynthesisOutputLesson(BaseModel):
     explanation: NonEmptyText = Field(max_length = 320)
     attribution: Literal["book", "agent_inference"] = "book"
     learning_unit_ids: list[SafeSegment] = Field(min_length = 1, max_length = 6)
+
+
+class BookDecisionOption(BaseModel):
+    model_config = ConfigDict(extra = "forbid")
+
+    title: NonEmptyText = Field(max_length = 120)
+    expected_outcome: NonEmptyText = Field(max_length = 400)
+    attribution: Literal["book", "agent_inference"] = "agent_inference"
+    tradeoffs: list[NonEmptyText] = Field(default_factory = list, max_length = 5)
+    risks: list[NonEmptyText] = Field(default_factory = list, max_length = 5)
+    learning_unit_ids: list[SafeSegment] = Field(min_length = 1, max_length = 6)
+
+
+class BookActionStep(BaseModel):
+    model_config = ConfigDict(extra = "forbid")
+
+    sequence: int = Field(ge = 1, le = 12, strict = True)
+    action: NonEmptyText = Field(max_length = 300)
+    rationale: NonEmptyText = Field(max_length = 400)
+    attribution: Literal["book", "agent_inference"] = "agent_inference"
+    prerequisites: list[NonEmptyText] = Field(default_factory = list, max_length = 5)
+    success_measure: NonEmptyText = Field(max_length = 240)
+    learning_unit_ids: list[SafeSegment] = Field(min_length = 1, max_length = 6)
+
+
+class BookDecisionBrief(BaseModel):
+    model_config = ConfigDict(extra = "forbid")
+
+    decision_question: NonEmptyText = Field(max_length = 300)
+    recommendation: NonEmptyText = Field(max_length = 600)
+    recommendation_attribution: Literal["book", "agent_inference"] = "agent_inference"
+    recommendation_learning_unit_ids: list[SafeSegment] = Field(min_length = 1, max_length = 6)
+    options: list[BookDecisionOption] = Field(default_factory = list, max_length = 3)
+    assumptions: list[NonEmptyText] = Field(default_factory = list, max_length = 8)
+    risks: list[NonEmptyText] = Field(default_factory = list, max_length = 8)
+    action_plan: list[BookActionStep] = Field(default_factory = list, max_length = 8)
+
+    @model_validator(mode = "after")
+    def _validate_action_sequence(self) -> BookDecisionBrief:
+        sequence = [step.sequence for step in self.action_plan]
+        if sequence != sorted(set(sequence)):
+            raise ValueError("decision action steps must use unique, ascending sequence numbers")
+        return self
+
+
+class DecisionBriefOutput(BaseModel):
+    """Nullable decision brief from its focused DeepAgent role."""
+
+    model_config = ConfigDict(extra = "forbid")
+
+    decision_brief: BookDecisionBrief | None = None
 
 
 class BookSynthesisOutput(BaseModel):
@@ -195,6 +284,7 @@ class BookSynthesis(BaseModel):
     key_takeaways: list[ChapterLesson] = Field(max_length = 16)
     cross_chapter_connections: list[ChapterLesson] = Field(max_length = 12)
     limitations: list[ChapterLesson] = Field(max_length = 12)
+    decision_brief: BookDecisionBrief | None = None
 
     @model_validator(mode = "before")
     @classmethod
@@ -230,6 +320,127 @@ class ReportLesson(BaseModel):
     confidence: float = Field(ge = 0, le = 1, default = 0.0)
 
 
+class ReportDecisionOption(BaseModel):
+    model_config = ConfigDict(extra = "forbid")
+
+    title: NonEmptyText
+    expected_outcome: NonEmptyText
+    tradeoffs: list[NonEmptyText] = Field(default_factory = list)
+    risks: list[NonEmptyText] = Field(default_factory = list)
+    attribution: Literal["book", "agent_inference"] = "agent_inference"
+    source_refs: list[SourceRef] = Field(min_length = 1)
+
+
+class ReportActionStep(BaseModel):
+    model_config = ConfigDict(extra = "forbid")
+
+    sequence: int = Field(ge = 1, le = 12, strict = True)
+    action: NonEmptyText
+    rationale: NonEmptyText
+    attribution: Literal["book", "agent_inference"] = "agent_inference"
+    prerequisites: list[NonEmptyText] = Field(default_factory = list)
+    success_measure: NonEmptyText
+    source_refs: list[SourceRef] = Field(min_length = 1)
+
+
+class DecisionBrief(BaseModel):
+    model_config = ConfigDict(extra = "forbid")
+
+    decision_question: NonEmptyText
+    recommendation: ReportLesson
+    options: list[ReportDecisionOption] = Field(default_factory = list, max_length = 3)
+    assumptions: list[NonEmptyText] = Field(default_factory = list)
+    risks: list[NonEmptyText] = Field(default_factory = list)
+    action_plan: list[ReportActionStep] = Field(default_factory = list, max_length = 8)
+
+
+class ResearchSource(BaseModel):
+    model_config = ConfigDict(extra = "forbid")
+
+    source_id: SafeSegment
+    provider_id: Literal["coelho_search", "parallel"]
+    title: NonEmptyText = Field(max_length = 240)
+    url: NonEmptyText = Field(max_length = 2048)
+    snippet: NonEmptyText = Field(max_length = 1200)
+    query: NonEmptyText = Field(max_length = 400)
+    publisher: str | None = Field(default = None, max_length = 160)
+    published_at: str | None = Field(default = None, max_length = 80)
+    accessed_at: float = Field(gt = 0)
+
+    @field_validator("url")
+    @classmethod
+    def _require_safe_https_url(cls, value: str) -> str:
+        parsed = urlsplit(value)
+        if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
+            raise ValueError("research source URLs must use HTTPS without embedded credentials")
+        return value
+
+
+class ResearchFinding(BaseModel):
+    """A concise external-context finding linked only to retrieved MCP sources."""
+
+    model_config = ConfigDict(extra = "forbid")
+
+    title: NonEmptyText = Field(max_length = 180)
+    summary: NonEmptyText = Field(max_length = 900)
+    relevance_to_book: NonEmptyText = Field(max_length = 600)
+    source_ids: list[SafeSegment] = Field(min_length = 1, max_length = 6)
+
+
+class ResearchContext(BaseModel):
+    model_config = ConfigDict(extra = "forbid")
+
+    status: Literal["disabled", "unavailable", "unsupported_provider", "no_results", "complete"]
+    provider_id: str | None = None
+    queries: list[NonEmptyText] = Field(default_factory = list, max_length = 3)
+    sources: list[ResearchSource] = Field(default_factory = list, max_length = 12)
+    findings: list[ResearchFinding] = Field(default_factory = list, max_length = 8)
+    error_type: str | None = Field(default = None, max_length = 80)
+
+
+class ResearchAnalysisOutput(BaseModel):
+    """Structured output for the optional, separately sourced research appendix."""
+
+    model_config = ConfigDict(extra = "forbid")
+
+    findings: list[ResearchFinding] = Field(default_factory = list, max_length = 8)
+
+
+class ReportReviewFinding(BaseModel):
+    model_config = ConfigDict(extra = "forbid")
+
+    severity: Literal["note", "warning", "critical"]
+    area: Literal["coverage", "clarity", "consistency", "evidence", "visuals", "decision_brief"]
+    issue: NonEmptyText = Field(max_length = 500)
+    recommendation: NonEmptyText = Field(max_length = 500)
+
+
+class ReportReviewOutput(BaseModel):
+    """Non-mutating editorial review; deterministic source validation remains authoritative."""
+
+    model_config = ConfigDict(extra = "forbid")
+
+    findings: list[ReportReviewFinding] = Field(default_factory = list, max_length = 12)
+
+
+class ReportTimelineEvent(BaseModel):
+    model_config = ConfigDict(extra = "forbid")
+
+    label: NonEmptyText
+    description: NonEmptyText
+    date_or_order: NonEmptyText
+    attribution: Literal["book", "agent_inference"] = "book"
+    source_refs: list[SourceRef] = Field(min_length = 1)
+
+
+class ReportTimeline(BaseModel):
+    model_config = ConfigDict(extra = "forbid")
+
+    title: NonEmptyText
+    accessible_description: NonEmptyText
+    events: list[ReportTimelineEvent] = Field(min_length = 2)
+
+
 class ReportSection(BaseModel):
     model_config = ConfigDict(extra = "forbid")
 
@@ -242,6 +453,8 @@ class ReportSection(BaseModel):
     diagrams: list[DiagramSpec] = Field(default_factory = list)
     equations: list[EquationBlock] = Field(default_factory = list)
     charts: list[ChartSpec] = Field(default_factory = list)
+    timelines: list[ReportTimeline] = Field(default_factory = list)
+    maps: list["GeoMapSpec"] = Field(default_factory = list, max_length = 4)
 
 
 class GlossaryEntry(BaseModel):
@@ -381,10 +594,144 @@ class ChartSpec(BaseModel):
         return self
 
 
+Longitude = Annotated[float, Field(ge = -180, le = 180, allow_inf_nan = False)]
+Latitude = Annotated[float, Field(ge = -90, le = 90, allow_inf_nan = False)]
+GeoPosition = tuple[Longitude, Latitude]
+LineCoordinates = Annotated[list[GeoPosition], Field(min_length = 2, max_length = 2_000)]
+LinearRing = Annotated[list[GeoPosition], Field(min_length = 4, max_length = 2_000)]
+
+
+class GeoJSONPoint(BaseModel):
+    model_config = ConfigDict(extra = "forbid")
+
+    type: Literal["Point"]
+    coordinates: GeoPosition
+
+
+class GeoJSONMultiPoint(BaseModel):
+    model_config = ConfigDict(extra = "forbid")
+
+    type: Literal["MultiPoint"]
+    coordinates: list[GeoPosition] = Field(min_length = 1, max_length = 500)
+
+
+class GeoJSONLineString(BaseModel):
+    model_config = ConfigDict(extra = "forbid")
+
+    type: Literal["LineString"]
+    coordinates: LineCoordinates
+
+
+class GeoJSONMultiLineString(BaseModel):
+    model_config = ConfigDict(extra = "forbid")
+
+    type: Literal["MultiLineString"]
+    coordinates: list[LineCoordinates] = Field(min_length = 1, max_length = 100)
+
+
+class GeoJSONPolygon(BaseModel):
+    model_config = ConfigDict(extra = "forbid")
+
+    type: Literal["Polygon"]
+    coordinates: list[LinearRing] = Field(min_length = 1, max_length = 50)
+
+    @model_validator(mode = "after")
+    def _require_closed_rings(self) -> GeoJSONPolygon:
+        if any(ring[0] != ring[-1] for ring in self.coordinates):
+            raise ValueError("GeoJSON polygon rings must be closed")
+        return self
+
+
+class GeoJSONMultiPolygon(BaseModel):
+    model_config = ConfigDict(extra = "forbid")
+
+    type: Literal["MultiPolygon"]
+    coordinates: list[list[LinearRing]] = Field(min_length = 1, max_length = 100)
+
+    @model_validator(mode = "after")
+    def _require_closed_rings(self) -> GeoJSONMultiPolygon:
+        if any(ring[0] != ring[-1] for polygon in self.coordinates for ring in polygon):
+            raise ValueError("GeoJSON polygon rings must be closed")
+        return self
+
+
+GeoJSONGeometry = Annotated[
+    GeoJSONPoint | GeoJSONMultiPoint | GeoJSONLineString | GeoJSONMultiLineString | GeoJSONPolygon | GeoJSONMultiPolygon,
+    Field(discriminator = "type"),
+]
+
+
+class GeoJSONFeatureProperties(BaseModel):
+    model_config = ConfigDict(extra = "forbid")
+
+    label: NonEmptyText = Field(max_length = 180)
+    description: str = Field(default = "", max_length = 800)
+    attribution: Literal["book", "agent_inference"] = "book"
+    learning_unit_ids: list[SafeSegment] = Field(min_length = 1, max_length = 8)
+    evidence: list[EvidenceQuote] = Field(min_length = 1, max_length = 8)
+
+
+class GeoJSONFeature(BaseModel):
+    model_config = ConfigDict(extra = "forbid")
+
+    type: Literal["Feature"] = "Feature"
+    id: SafeSegment
+    properties: GeoJSONFeatureProperties
+    geometry: GeoJSONGeometry
+
+
+class GeoJSONFeatureCollection(BaseModel):
+    model_config = ConfigDict(extra = "forbid")
+
+    type: Literal["FeatureCollection"] = "FeatureCollection"
+    features: list[GeoJSONFeature] = Field(min_length = 1, max_length = 100)
+
+    @model_validator(mode = "after")
+    def _require_unique_feature_ids(self) -> GeoJSONFeatureCollection:
+        feature_ids = [feature.id for feature in self.features]
+        if len(feature_ids) != len(set(feature_ids)):
+            raise ValueError("GeoJSON feature IDs must be unique")
+        coordinate_count = sum(
+            _geojson_coordinate_count(feature.geometry.coordinates)
+            for feature in self.features
+        )
+        if coordinate_count > 10_000:
+            raise ValueError("GeoJSON feature collections are limited to 10,000 coordinates")
+        return self
+
+
+def _geojson_coordinate_count(value: Any) -> int:
+    if isinstance(value, (list, tuple)):
+        if len(value) == 2 and all(isinstance(item, (int, float)) and not isinstance(item, bool) for item in value):
+            return 1
+        return sum(_geojson_coordinate_count(item) for item in value)
+    return 0
+
+
+class GeoMapSpec(BaseModel):
+    model_config = ConfigDict(extra = "forbid")
+
+    title: NonEmptyText = Field(max_length = 180)
+    accessible_description: NonEmptyText = Field(max_length = 600)
+    geojson: GeoJSONFeatureCollection
+
+
+class VisualArtifactOutput(BaseModel):
+    """Optional visual representations grounded in the supplied learning units."""
+
+    model_config = ConfigDict(extra = "forbid")
+
+    diagrams: list[DiagramSpec] = Field(default_factory = list, max_length = 8)
+    equations: list[EquationBlock] = Field(default_factory = list, max_length = 8)
+    charts: list[ChartSpec] = Field(default_factory = list, max_length = 8)
+    timelines: list[TimelineSpec] = Field(default_factory = list, max_length = 4)
+    maps: list[GeoMapSpec] = Field(default_factory = list, max_length = 4)
+
+
 class StudyGuideDocument(BaseModel):
     model_config = ConfigDict(extra = "forbid")
 
-    schema_version: Literal["1.0", "1.1", "1.2"] = versions.REPORT_SCHEMA_VERSION
+    schema_version: Literal["1.0", "1.1", "1.2", "1.3", "1.4", "1.5"] = versions.REPORT_SCHEMA_VERSION
     title: NonEmptyText
     book_id: SafeSegment
     extraction_run_id: SafeSegment
@@ -410,6 +757,9 @@ class StudyGuideDocument(BaseModel):
     diagrams: list[DiagramSpec] = Field(default_factory = list)
     equations: list[EquationBlock] = Field(default_factory = list)
     charts: list[ChartSpec] = Field(default_factory = list)
+    maps: list[GeoMapSpec] = Field(default_factory = list, max_length = 4)
+    decision_brief: DecisionBrief | None = None
+    research_context: ResearchContext = Field(default_factory = lambda: ResearchContext(status = "disabled"))
     covered_pages: list[int]
     uncovered_pages: list[int]
     review_required: bool
@@ -447,10 +797,10 @@ class StructuralQuality(BaseModel):
 class DistillRunManifest(BaseModel):
     model_config = ConfigDict(extra = "forbid")
 
-    schema_version: Literal["1.0", "1.1", "1.2"] = versions.MANIFEST_SCHEMA_VERSION
+    schema_version: Literal["1.0", "1.1", "1.2", "1.3"] = versions.MANIFEST_SCHEMA_VERSION
     workflow_version: NonEmptyText = versions.WORKFLOW_VERSION
     prompt_version: NonEmptyText = versions.PROMPT_VERSION
-    renderer_version: NonEmptyText = "1.0"
+    renderer_version: NonEmptyText = versions.RENDERER_VERSION
     model_name: NonEmptyText
     run_id: SafeSegment
     book_id: SafeSegment
@@ -469,6 +819,7 @@ class DistillRunManifest(BaseModel):
     processed_book_sha256: Sha256Hex | None = None
     processed_book_revision: int | None = Field(default = None, ge = 1, strict = True)
     processed_page_count: int | None = Field(default = None, ge = 1, strict = True)
+    research_enabled: bool = False
     status: Literal["queued", "running", "done", "failed", "cancelled"] = "queued"
     resume_from_node: str | None = None
     replay_from_node: str | None = None
@@ -497,7 +848,7 @@ class DistillRunManifest(BaseModel):
             self.content_selection_revision,
         )):
             raise ValueError("1.1 Distill runs must pin their content-selection revision")
-        if self.schema_version == "1.2" and any(value is None for value in (
+        if self.schema_version in {"1.2", "1.3"} and any(value is None for value in (
             self.selected_page_count,
             self.content_selection_key,
             self.content_selection_sha256,

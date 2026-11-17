@@ -13,7 +13,7 @@ import httpx
 import domains
 from langchain_mcp_adapters.client import MultiServerMCPClient
 
-from . import params
+from . import entities, params
 
 
 def _provider(provider_id: str) -> params.SearchProvider:
@@ -95,6 +95,34 @@ def credential_fingerprint(provider_id: str) -> str | None:
     if not credential:
         return None
     return hashlib.sha256(f"{provider_id}\0{credential}".encode("utf-8")).hexdigest()
+
+
+def resolve_default_mcp_connection() -> entities.MCPConnection | None:
+    """Return a tested, selected MCP connection for internal search callers only."""
+    store = domains.settings.credentials.service.get_store()
+    settings = store.read_settings() or {}
+    provider_id = _records(settings).get("default_provider")
+    if provider_id not in {"coelho_search", "parallel"}:
+        return None
+    definition = _provider(provider_id)
+    endpoint = _endpoint(definition, settings)
+    credential = domains.settings.credentials.service.resolve_key(definition.key_env)
+    record = _provider_records(settings).get(provider_id)
+    if not isinstance(record, dict) or endpoint is None:
+        return None
+    if (
+        not record.get("last_test_ok")
+        or record.get("endpoint_fingerprint") != endpoint_fingerprint(provider_id, settings)
+        or record.get("credential_fingerprint") != credential_fingerprint(provider_id)
+        or (definition.key_required and not credential)
+    ):
+        return None
+    headers = {"Authorization": f"Bearer {credential}"} if credential else {}
+    return entities.MCPConnection(
+        provider_id = definition.provider_id,
+        endpoint = endpoint,
+        headers = headers,
+    )
 
 
 def _records(settings: dict[str, Any]) -> dict[str, Any]:

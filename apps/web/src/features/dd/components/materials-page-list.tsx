@@ -142,7 +142,7 @@ export function MaterialsPageList({
         ) : null}
       </div>
       <p aria-live="polite" className="text-xs text-muted-foreground">
-        {shown} of {total} pages
+        {shown} of {total} AI-approved pages
       </p>
     </nav>
   );

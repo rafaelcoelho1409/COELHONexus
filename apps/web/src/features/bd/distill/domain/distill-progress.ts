@@ -8,6 +8,7 @@ export const DISTILL_NODES = [
     detail: "Create source-linked learning units from the extracted book pages.",
     reads: ["Extracted pages", "Ingestion quality result"],
     writes: ["Learning units with page references"],
+    llm: "No LLM calls. This stage deterministically prepares and chunks the selected book pages.",
     resources: { agents: [], skills: [], tools: [] },
   },
   {
@@ -16,9 +17,10 @@ export const DISTILL_NODES = [
     detail: "Find the book’s central claims, methods, evidence, and useful examples in each learning unit.",
     reads: ["Learning units", "Source page references"],
     writes: ["Candidate lessons", "Evidence quotes"],
+    llm: "Learning Extractor for each new unit; Evidence Verifier when supported lesson candidates exist.",
     resources: {
       agents: ["learning_extractor", "evidence_verifier"],
-      skills: [],
+      skills: ["learning-extractor", "evidence-verifier"],
       tools: ["read_file"],
     },
   },
@@ -28,6 +30,7 @@ export const DISTILL_NODES = [
     detail: "Group source-backed lessons by chapter and topic while preserving their source locations.",
     reads: ["Candidate lessons", "Book chapter outline"],
     writes: ["Chapter lesson groups"],
+    llm: "No LLM calls. This stage deterministically groups persisted, source-backed lessons.",
     resources: { agents: [], skills: [], tools: [] },
   },
   {
@@ -36,7 +39,12 @@ export const DISTILL_NODES = [
     detail: "Turn each chapter’s supported lessons into a concise explanation and chapter-level guide.",
     reads: ["Chapter lesson groups", "Evidence quotes"],
     writes: ["Chapter explanations", "Chapter-level learning models"],
-    resources: { agents: ["chapter_synthesizer"], skills: [], tools: [] },
+    llm: "Chapter Synthesizer; Visual Artifact Builder when a chapter needs a structured visual.",
+    resources: {
+      agents: ["chapter_synthesizer", "visual_artifact_builder"],
+      skills: ["chapter-synthesizer", "visual-artifact-builder"],
+      tools: ["read_file"],
+    },
   },
   {
     id: "synthesize_book",
@@ -45,7 +53,12 @@ export const DISTILL_NODES = [
       "Connect chapter findings into the book’s thesis, key takeaways, and cross-chapter relationships.",
     reads: ["Chapter explanations", "Verified lessons"],
     writes: ["Central thesis", "Key takeaways", "Cross-chapter connections"],
-    resources: { agents: ["book_synthesizer"], skills: [], tools: [] },
+    llm: "Book Synthesizer and Decision Brief Writer; Research Analyst when research is enabled.",
+    resources: {
+      agents: ["book_synthesizer", "decision_brief_writer", "research_analyst"],
+      skills: ["book-synthesizer", "decision-brief-writer", "research-analyst"],
+      tools: ["read_file", "Search MCP when configured"],
+    },
   },
   {
     id: "publish_report",
@@ -53,7 +66,8 @@ export const DISTILL_NODES = [
     detail: "Check source coverage and citation integrity, then render the Learning Guide and its visuals.",
     reads: ["Synthesized book and chapters", "Source references"],
     writes: ["Learning Guide", "Coverage and citation checks"],
-    resources: { agents: [], skills: [], tools: [] },
+    llm: "Report Reviewer checks the assembled Learning Guide before publication.",
+    resources: { agents: ["report_reviewer"], skills: ["report-reviewer"], tools: ["read_file"] },
   },
 ] as const;
 
@@ -61,8 +75,9 @@ export type DistillNode = (typeof DISTILL_NODES)[number];
 
 export const DISTILL_USAGE_COUNTERS: Partial<Record<DistillNode["id"], readonly string[]>> = {
   extract_unit: ["learning_extractor", "evidence_verifier"],
-  synthesize_chapter: ["chapter_synthesizer"],
-  synthesize_book: ["book_synthesizer"],
+  synthesize_chapter: ["chapter_synthesizer", "visual_artifact_builder"],
+  synthesize_book: ["book_synthesizer", "decision_brief_writer", "research_analyst"],
+  publish_report: ["report_reviewer"],
 };
 
 export function distillNodeViews(

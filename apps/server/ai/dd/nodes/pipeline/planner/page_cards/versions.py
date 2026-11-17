@@ -2,4 +2,4 @@
 from __future__ import annotations
 
 
-PROMPT_VERSION = "v2-reference-lookup-only-fail-open-2026-11-09-r2"
+PROMPT_VERSION = "v3-pages-selector-combined-page-judge-2026-11-16"
