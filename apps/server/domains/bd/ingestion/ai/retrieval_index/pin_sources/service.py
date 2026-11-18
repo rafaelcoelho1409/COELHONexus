@@ -22,6 +22,7 @@ async def pin_sources(
     storage: infra.minio.service.MinIOStorage,
     *,
     progress_callback: Callable[[int, int], Awaitable[None]] | None = None,
+    cancel_check: Callable[[], Awaitable[bool]] | None = None,
 ) -> dict[str, Any]:
     book_id = state.get("book_id")
     run_id = state.get("agentic_run_id")
@@ -45,6 +46,8 @@ async def pin_sources(
     if progress_callback is not None:
         await progress_callback(0, len(processed.pages))
     for page_index, page in enumerate(processed.pages, start = 1):
+        if cancel_check is not None and await cancel_check():
+            raise RuntimeError("processed-book retrieval indexing was cancelled")
         content = await storage.read_text(page.content_key)
         if _sha256(content) != page.content_sha256:
             raise ValueError(f"processed page {page.processed_page_number} failed its integrity check")

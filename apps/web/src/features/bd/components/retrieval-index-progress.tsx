@@ -29,6 +29,7 @@ export function RetrievalIndexProgress({
   const { confirm, notice } = useBdOverlays();
   const agenticRunId = run?.agentic_run_id ?? "";
   const live = index?.status === "queued" || index?.status === "running";
+  const stopping = index?.cancel_requested === true;
   const busy = start.isPending || resume.isPending || cancel.isPending || wipe.isPending;
   const outdated = retrievalIndexNeedsUpdate(index, run);
   const canStart = run !== null && (!index || outdated);
@@ -113,43 +114,47 @@ export function RetrievalIndexProgress({
           {statusText}
           {index ? ` · ${completedNodes} / ${totalNodes} stages` : ""}
         </span>
-        <div className="ml-auto flex flex-wrap items-center justify-end gap-1.5">
-          <ActionButton
-            onClick={canResume ? resumeIndex : startIndex}
-            disabled={busy || live || (!canResume && !canStart)}
-            aria-busy={start.isPending || resume.isPending}
-            aria-label={canResume ? "Resume Agentic RAG" : "Start Agentic RAG"}
-            title={
-              !canResume && !canStart && index?.status === "done"
-                ? "This retrieval index is current. Wipe it to build it again."
-                : undefined
-            }
-          >
-            {start.isPending
-              ? "Starting…"
-              : resume.isPending
-                ? "Resuming…"
-                : canResume
-                  ? "Resume"
-                  : "Start"}
-          </ActionButton>
-          <ActionButton
-            onClick={stopIndex}
-            disabled={!live || busy}
-            aria-busy={cancel.isPending}
-            aria-label="Stop Agentic RAG"
-          >
-            {cancel.isPending ? "Stopping…" : "Stop"}
-          </ActionButton>
-          <ActionButton
-            onClick={() => void wipeIndex()}
-            disabled={!run || !index || live || busy}
-            aria-busy={wipe.isPending}
-            aria-label="Wipe Agentic RAG"
-          >
-            {wipe.isPending ? "Wiping…" : "Wipe"}
-          </ActionButton>
-        </div>
+      </div>
+      <div className="mt-2 grid w-full grid-cols-3 gap-2">
+        <ActionButton
+          onClick={canResume ? resumeIndex : startIndex}
+          disabled={busy || live || (!canResume && !canStart)}
+          aria-busy={start.isPending || resume.isPending}
+          aria-label={canResume ? "Resume Agentic RAG" : "Start Agentic RAG"}
+          className="w-full"
+          title={
+            !canResume && !canStart && index?.status === "done"
+              ? "This retrieval index is current. Wipe it to build it again."
+              : undefined
+          }
+        >
+          {start.isPending
+            ? "Starting…"
+            : resume.isPending
+              ? "Resuming…"
+              : canResume
+                ? "Resume"
+                : "Start"}
+        </ActionButton>
+        <ActionButton
+          onClick={stopIndex}
+          disabled={!live || busy || stopping}
+          aria-busy={cancel.isPending || stopping}
+          aria-label="Stop Agentic RAG"
+          className="w-full"
+          title={stopping ? "Stop requested; the active indexing batch is finishing." : undefined}
+        >
+          {cancel.isPending || stopping ? "Stopping…" : "Stop"}
+        </ActionButton>
+        <ActionButton
+          onClick={() => void wipeIndex()}
+          disabled={!run || !index || live || busy}
+          aria-busy={wipe.isPending}
+          aria-label="Wipe Agentic RAG"
+          className="w-full"
+        >
+          {wipe.isPending ? "Wiping…" : "Wipe"}
+        </ActionButton>
       </div>
       <div
         role="progressbar"

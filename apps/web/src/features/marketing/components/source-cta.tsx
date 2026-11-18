@@ -6,7 +6,7 @@ import { REPO_URL } from "../params";
 export function SourceCta() {
   return (
     <section id="source" aria-labelledby="source-title">
-      <div className="mx-auto grid max-w-6xl grid-cols-1 gap-10 px-4 py-16 sm:px-6 md:py-24 lg:grid-cols-[1fr_1.2fr] lg:items-center">
+      <div className="mx-auto grid max-w-screen-2xl grid-cols-1 gap-10 px-4 py-16 sm:px-6 md:py-24 lg:grid-cols-[1fr_1.2fr] lg:items-center">
         <div>
           <p className="mono-label">Source</p>
           <h2 id="source-title" className="mt-4 text-balance text-3xl font-semibold tracking-tight">

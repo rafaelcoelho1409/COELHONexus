@@ -10,6 +10,8 @@ import { useRouter, useSearchParams } from "next/navigation";
 import type { JSX } from "react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
+import { ContextBar } from "@/shared/layout/context-bar";
+
 import { branchThread, deleteThread, fetchAskUsage } from "../api";
 import { lastSourcedTurn, shortId } from "../ask";
 import { type AskSendOptions, useAskConversation } from "../hooks/use-ask-conversation";
@@ -236,28 +238,32 @@ function AskConversation({
 
   return (
     <div className="flex flex-col gap-4">
+      <ContextBar
+        pinned
+        start={
+          <div className="w-full min-w-0">
+            <AskToolbar
+              mode={mode}
+              onMode={setMode}
+              scope={locked ? lockedScope : scope}
+              scopeLocked={locked}
+              onScope={setScope}
+              threadId={threadId}
+              threadTitle={turns[0]?.question ?? ""}
+              onSwitchThread={(id) => (running ? busyNotice("switch threads") : onOpenThread(id))}
+              onDeleteThread={(id) => void onDeleteThread(id)}
+              onNewThread={() => (running ? busyNotice("start a new thread") : onNewThread())}
+              onSources={() => {
+                if (sourcesTurn === null) setSourcesTurn(lastSourcedTurn(turns));
+                setHighlight(null);
+                setSheet("sources");
+              }}
+              onUsage={() => setSheet("usage")}
+            />
+          </div>
+        }
+      />
       <div className="grid gap-4 lg:grid-cols-[minmax(20rem,35fr)_minmax(0,65fr)] lg:gap-x-6">
-        <div className="min-w-0 lg:col-start-2 lg:row-start-1">
-          <AskToolbar
-            mode={mode}
-            onMode={setMode}
-            scope={locked ? lockedScope : scope}
-            scopeLocked={locked}
-            onScope={setScope}
-            threadId={threadId}
-            threadTitle={turns[0]?.question ?? ""}
-            onSwitchThread={(id) => (running ? busyNotice("switch threads") : onOpenThread(id))}
-            onDeleteThread={(id) => void onDeleteThread(id)}
-            onNewThread={() => (running ? busyNotice("start a new thread") : onNewThread())}
-            onSources={() => {
-              if (sourcesTurn === null) setSourcesTurn(lastSourcedTurn(turns));
-              setHighlight(null);
-              setSheet("sources");
-            }}
-            onUsage={() => setSheet("usage")}
-          />
-        </div>
-
         <fieldset className="m-0 grid grid-cols-2 gap-2 border-0 p-0 lg:hidden">
           <legend className="sr-only">Ask workspace view</legend>
           <ActionButton

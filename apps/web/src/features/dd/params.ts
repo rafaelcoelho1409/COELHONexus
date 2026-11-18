@@ -20,6 +20,7 @@ export const DD_SECTION: Section = {
   href: "/dd",
   title: "Docs Distiller",
   description: "Browse source pages, plan distillation, study what was distilled",
+  showDescription: false,
   defaultTab: "catalog",
   carryParam: "slug",
   tabs: DD_STAGES.map((stage) => ({

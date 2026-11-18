@@ -28,4 +28,11 @@ class ProcessedBookIndexState(TypedDict, total = False):
     neo4j_node_count: int
     neo4j_relationship_count: int
     neo4j_pages_completed: int
+    neo4j_stage: str
+    neo4j_stage_completed: int
+    neo4j_stage_total: int
+    neo4j_node_write_batches_completed: int
+    neo4j_node_write_batches_total: int
+    neo4j_relationship_write_batches_completed: int
+    neo4j_relationship_write_batches_total: int
     status: str

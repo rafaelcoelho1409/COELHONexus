@@ -19,6 +19,7 @@ export const BD_SECTION: Section = {
   href: "/bd",
   title: "Book Distiller",
   description: "Upload, distill, study, ask, and inspect book knowledge",
+  showDescription: false,
   defaultTab: "ingestion",
   carryParam: BOOK_PARAM,
   tabs: BD_STAGES.map((stage) => ({ ...stage, tab: true })),
@@ -30,8 +31,6 @@ export const MAX_UPLOAD_LABEL = "300 MB";
 
 /** Which workspace the book page displays. Agents and Pages have their own section tabs. */
 export type BookViewId = "pipeline" | "materials";
-
-export const AUTO_CHAIN_STORAGE_KEY = "bd-ingestion-auto-chain";
 
 /** The reader's layout (which side columns are open, how wide the text runs) and the page each book was left on are
  * per-browser preferences. */

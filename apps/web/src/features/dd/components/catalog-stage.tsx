@@ -112,6 +112,7 @@ export function CatalogStage() {
     <div className={selectedEntry ? "pb-24" : undefined}>
       {/* The third navbar: search and filters; the match count sits beside Status. */}
       <ContextBar
+        pinned
         start={
           <>
             <Input
@@ -208,7 +209,7 @@ export function CatalogStage() {
       </ul>
       {selectedEntry ? (
         <div className="fixed inset-x-0 bottom-0 z-40 border-t border-border bg-background">
-          <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3 px-4 py-3 sm:px-6">
+          <div className="mx-auto flex max-w-screen-2xl flex-wrap items-center justify-between gap-3 px-4 py-3 sm:px-6">
             <div className="min-w-0">
               <p className="text-sm font-medium">{tileName(selectedEntry)}</p>
               <p className="text-xs text-muted-foreground">

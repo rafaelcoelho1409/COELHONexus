@@ -78,6 +78,7 @@ def index_processed_book(self, book_id: str, agentic_run_id: str) -> dict:
                 if await service.cancel_requested(book_id, agentic_run_id):
                     manifest.update(
                         status = "cancelled",
+                        cancel_requested = False,
                         finished_at = max(time.time(), manifest["created_at"]),
                         error = None,
                     )
@@ -126,6 +127,19 @@ def index_processed_book(self, book_id: str, agentic_run_id: str) -> dict:
                     "neo4j_node_count": manifest.get("neo4j_node_count", 0),
                     "neo4j_relationship_count": manifest.get("neo4j_relationship_count", 0),
                     "neo4j_pages_completed": manifest.get("neo4j_pages_completed", 0),
+                    "neo4j_stage": manifest.get("neo4j_stage", "idle"),
+                    "neo4j_stage_completed": manifest.get("neo4j_stage_completed", 0),
+                    "neo4j_stage_total": manifest.get("neo4j_stage_total", 0),
+                    "neo4j_node_write_batches_completed": manifest.get(
+                        "neo4j_node_write_batches_completed", 0,
+                    ),
+                    "neo4j_node_write_batches_total": manifest.get("neo4j_node_write_batches_total", 0),
+                    "neo4j_relationship_write_batches_completed": manifest.get(
+                        "neo4j_relationship_write_batches_completed", 0,
+                    ),
+                    "neo4j_relationship_write_batches_total": manifest.get(
+                        "neo4j_relationship_write_batches_total", 0,
+                    ),
                 }
                 snapshot = await graph.aget_state(config)
                 replay_from_node = manifest.get("replay_from_node")
@@ -167,8 +181,22 @@ def index_processed_book(self, book_id: str, agentic_run_id: str) -> dict:
                             progress_field = page_progress_fields.get(node)
                             if progress_field is not None:
                                 current[progress_field] = 0
+                            if node == "neo4j":
+                                current.update(
+                                    neo4j_stage="idle",
+                                    neo4j_stage_completed=0,
+                                    neo4j_stage_total=0,
+                                    neo4j_node_write_batches_completed=0,
+                                    neo4j_node_write_batches_total=0,
+                                    neo4j_relationship_write_batches_completed=0,
+                                    neo4j_relationship_write_batches_total=0,
+                                )
                         current["current_node"] = node if status == "running" else (
                             None if current.get("current_node") == node else current.get("current_node")
+                        )
+                        current["cancel_requested"] = await service.cancel_requested(
+                            book_id,
+                            agentic_run_id,
                         )
                         if details:
                             for field in (
@@ -187,6 +215,13 @@ def index_processed_book(self, book_id: str, agentic_run_id: str) -> dict:
                                 "graph_batches_completed",
                                 "graph_batches_total",
                                 "neo4j_pages_completed",
+                                "neo4j_stage",
+                                "neo4j_stage_completed",
+                                "neo4j_stage_total",
+                                "neo4j_node_write_batches_completed",
+                                "neo4j_node_write_batches_total",
+                                "neo4j_relationship_write_batches_completed",
+                                "neo4j_relationship_write_batches_total",
                             ):
                                 if field in details:
                                     current[field] = details[field]
@@ -216,11 +251,14 @@ def index_processed_book(self, book_id: str, agentic_run_id: str) -> dict:
                     durability = "sync",
                 )
                 await ensure_lease()
+                if await service.cancel_requested(book_id, agentic_run_id):
+                    raise RuntimeError("processed-book retrieval indexing was cancelled")
                 completed = await service.read_index(book_id, agentic_run_id, storage = storage)
                 if completed is None:
                     raise FileNotFoundError("retrieval-index manifest disappeared after execution")
                 completed.update(
                     status = "done",
+                    cancel_requested = False,
                     current_node = None,
                     replay_from_node = None,
                     finished_at = max(time.time(), completed["created_at"]),
@@ -244,16 +282,20 @@ def index_processed_book(self, book_id: str, agentic_run_id: str) -> dict:
                         agentic_run_id,
                     )
                     return {"book_id": book_id, "agentic_run_id": agentic_run_id, "status": "lease_lost"}
-                logger.exception("[bd-retrieval-index] indexing failed for %s", agentic_run_id)
+                cancelled = await service.cancel_requested(book_id, agentic_run_id)
+                if cancelled:
+                    logger.info("[bd-retrieval-index] cancellation reached a safe boundary for %s", agentic_run_id)
+                else:
+                    logger.exception("[bd-retrieval-index] indexing failed for %s", agentic_run_id)
                 failed = await service.read_index(book_id, agentic_run_id, storage = storage)
                 if failed is not None:
-                    cancelled = await service.cancel_requested(book_id, agentic_run_id)
                     status = "cancelled" if cancelled else "failed"
                     current_node = failed.get("current_node")
                     if current_node in failed["node_status"]:
                         failed["node_status"][current_node] = status
                     failed.update(
                         status = status,
+                        cancel_requested = False,
                         current_node = None,
                         finished_at = max(time.time(), failed["created_at"]),
                         error = None if cancelled else f"Retrieval indexing failed ({type(error).__name__}).",
@@ -263,7 +305,7 @@ def index_processed_book(self, book_id: str, agentic_run_id: str) -> dict:
                         "bd",
                         keys.usage_run_id(book_id, agentic_run_id),
                     )
-                if await service.cancel_requested(book_id, agentic_run_id):
+                if cancelled:
                     return {"book_id": book_id, "agentic_run_id": agentic_run_id, "status": "cancelled"}
                 raise
             finally:

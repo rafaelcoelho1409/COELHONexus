@@ -640,7 +640,7 @@ async def repair_pages(
             return result
 
     page_results = await _gather_cancel_on_failure(process(page_ref) for page_ref in page_refs)
-    return {"page_results": page_results, "status": "repaired"}
+    return {"page_results": page_results}
 
 
 async def _write(writer: ArtifactWriter, key: str, content: str, content_type: str) -> None:

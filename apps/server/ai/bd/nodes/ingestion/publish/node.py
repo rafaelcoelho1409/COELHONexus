@@ -17,5 +17,6 @@ async def publish(
             graph_state,
             runtime.context.write_artifact,
             runtime.context.read_page,
+            runtime.context.progress_callback,
         ),
     )

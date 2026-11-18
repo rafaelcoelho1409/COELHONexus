@@ -118,19 +118,40 @@ class RetrievalIndexStatus(BaseModel):
     processed_book_revision: int
     processed_page_count: int
     status: Literal["queued", "running", "done", "failed", "cancelled"]
+    cancel_requested: bool = False
     current_node: str | None
     node_status: dict[str, str]
     attempt: int
     elasticsearch_index: str | None = None
     elasticsearch_document_count: int = 0
+    pin_sources_pages_completed: int = 0
+    elasticsearch_pages_completed: int = 0
     qdrant_collection: str | None = None
     embedding_model: str | None = None
     embedding_dimensions: int | None = None
     qdrant_point_count: int = 0
+    qdrant_pages_completed: int = 0
     neo4j_node_count: int = 0
     neo4j_relationship_count: int = 0
     graph_batches_completed: int = 0
     graph_batches_total: int = 0
+    neo4j_pages_completed: int = 0
+    neo4j_stage: Literal[
+        "idle",
+        "extracting",
+        "building_graph",
+        "clearing_graph",
+        "preparing_writes",
+        "writing_nodes",
+        "writing_relationships",
+        "complete",
+    ] = "idle"
+    neo4j_stage_completed: int = 0
+    neo4j_stage_total: int = 0
+    neo4j_node_write_batches_completed: int = 0
+    neo4j_node_write_batches_total: int = 0
+    neo4j_relationship_write_batches_completed: int = 0
+    neo4j_relationship_write_batches_total: int = 0
     created_at: float
     updated_at: float
     finished_at: float | None = None
@@ -142,6 +163,12 @@ class RetrievalIndexWipeResponse(BaseModel):
     agentic_run_id: str
     wiped: bool
     objects_deleted: int
+
+
+class AgenticNodePageProgress(BaseModel):
+    completed_count: int = 0
+    total_count: int = 0
+    active_count: int = 0
 
 
 class AgenticProgress(BaseModel):
@@ -158,6 +185,7 @@ class AgenticProgress(BaseModel):
     visual_completed_count: int = 0
     visual_converted_count: int = 0
     visual_failed_count: int = 0
+    node_page_progress: dict[str, AgenticNodePageProgress] = Field(default_factory = dict)
     selected_page_count: int = 0
     excluded_page_count: int = 0
 

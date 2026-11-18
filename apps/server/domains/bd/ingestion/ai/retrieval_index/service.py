@@ -62,7 +62,35 @@ async def read_index(
     manifest = schemas.RetrievalIndexManifest.model_validate_json(await storage.read_text(key))
     if manifest.book_id != book_id or manifest.agentic_run_id != agentic_run_id:
         raise ValueError("the retrieval-index manifest does not match the requested Ingestion run")
-    return manifest.model_dump(mode = "json")
+    result = manifest.model_dump(mode = "json")
+    if result["status"] not in {"queued", "running"}:
+        return result
+
+    async with infra.redis.service.client() as redis:
+        cancel_key = keys.cancel_key(book_id, agentic_run_id)
+        cancel_requested = result["cancel_requested"] or await infra.redis.service.flag_is_set(
+            redis,
+            cancel_key,
+        )
+        result["cancel_requested"] = cancel_requested
+        if not cancel_requested or await redis.exists(keys.lock_key(book_id, agentic_run_id)):
+            return result
+
+        # A worker can be killed during a deploy after Stop is requested. Once its
+        # execution lease is gone, no worker remains to publish the cancelled state.
+        current_node = result.get("current_node")
+        if current_node in result["node_status"] and result["node_status"][current_node] == "running":
+            result["node_status"][current_node] = "cancelled"
+        result.update(
+            status = "cancelled",
+            cancel_requested = False,
+            current_node = None,
+            finished_at = max(time.time(), result["created_at"]),
+            error = None,
+        )
+        result = await write_manifest(result, storage = storage)
+        await redis.delete(cancel_key)
+    return result
 
 
 async def read_sources(
@@ -198,6 +226,7 @@ async def resume_index(book_id: str, agentic_run_id: str) -> dict[str, Any]:
             elif manifest["status"] not in {"failed", "cancelled"}:
                 raise ValueError("only failed, cancelled, or stale retrieval indexes can be resumed")
             manifest["status"] = "queued"
+            manifest["cancel_requested"] = False
             manifest["attempt"] += 1
             manifest["finished_at"] = None
             manifest["error"] = None
@@ -428,6 +457,7 @@ async def replay_index_node(book_id: str, agentic_run_id: str, node_id: str) -> 
 
             manifest.update(
                 status = "queued",
+                cancel_requested = False,
                 current_node = None,
                 replay_from_node = node_id,
                 attempt = manifest["attempt"] + 1,
@@ -459,12 +489,9 @@ async def request_cancel(book_id: str, agentic_run_id: str) -> dict[str, Any]:
         if manifest["status"] not in {"queued", "running"}:
             return manifest
         await redis.set(keys.cancel_key(book_id, agentic_run_id), "1", ex = params.CANCEL_FLAG_TTL_S)
-        if manifest["status"] == "queued":
-            manifest["status"] = "cancelled"
-            manifest["finished_at"] = max(time.time(), manifest["created_at"])
-            manifest["current_node"] = None
-            manifest = await write_manifest(manifest, storage = storage)
-        return manifest
+        # Let the worker own terminal status updates. If it has already disappeared,
+        # read_index reconciles the stop request after checking the execution lease.
+        return await read_index(book_id, agentic_run_id, storage = storage) or manifest
 
 
 async def wipe_index(book_id: str, agentic_run_id: str) -> dict[str, Any]:
@@ -630,6 +657,7 @@ def initial_manifest(
         "processed_book_revision": processed_book_revision,
         "processed_page_count": processed_page_count,
         "status": "queued",
+        "cancel_requested": False,
         "current_node": None,
         "node_status": _initial_status(),
         "attempt": attempt,
@@ -639,6 +667,13 @@ def initial_manifest(
         "neo4j_pages_completed": 0,
         "graph_batches_completed": 0,
         "graph_batches_total": 0,
+        "neo4j_stage": "idle",
+        "neo4j_stage_completed": 0,
+        "neo4j_stage_total": 0,
+        "neo4j_node_write_batches_completed": 0,
+        "neo4j_node_write_batches_total": 0,
+        "neo4j_relationship_write_batches_completed": 0,
+        "neo4j_relationship_write_batches_total": 0,
         "created_at": now,
         "updated_at": now,
         "finished_at": None,

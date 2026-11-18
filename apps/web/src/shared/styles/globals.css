@@ -142,6 +142,13 @@
   --row-height: var(--row-comfortable);
 }
 
+/* A page-level third navbar sticks in the shell slot below the app and section bars when its page opts in. */
+#context-bar:has(> [data-pinned="true"]) {
+  position: sticky;
+  top: var(--chrome-top);
+  z-index: 30;
+}
+
 @keyframes status-pulse {
   0%,
   100% {
@@ -266,7 +273,7 @@
 
 @layer utilities {
   /* BD Pages is a reader workspace: the three navigation bars take their natural height, then the reader uses the
-     rest of the viewport. Keep the same centered width and side gutters as the other Nexus tabs. */
+     rest of the viewport. Keep the shared wide content limit and side gutters. */
   body:has(.bd-pages-workspace) {
     display: flex;
     height: 100dvh;
@@ -278,7 +285,7 @@
   body:has(.bd-pages-workspace) #main {
     display: flex;
     width: 100%;
-    max-width: 72rem;
+    max-width: 96rem;
     min-height: 0;
     flex: 1;
     flex-direction: column;

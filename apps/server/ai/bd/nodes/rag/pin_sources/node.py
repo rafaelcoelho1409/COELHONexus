@@ -26,6 +26,7 @@ async def pin_sources(
             state,
             context.storage,
             progress_callback = report_pages,
+            cancel_check = context.cancel_check,
         )
 
     return await graphs.rag.service.run_index_node(

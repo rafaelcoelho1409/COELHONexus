@@ -10,6 +10,15 @@ async def materialize_processed_book(
     graph_state: graphs.ingestion.states.IngestionRunState,
     runtime: Runtime[graphs.ingestion.entities.IngestionDependencies],
 ) -> dict:
+    async def report_page_progress(completed: int, total: int, active: int) -> None:
+        await graphs.service.report_node_page_progress(
+            runtime.context.progress_callback,
+            "materialize_processed_book",
+            completed,
+            total,
+            active,
+        )
+
     return await graphs.service.run_node(
         runtime.context.progress_callback,
         "materialize_processed_book",
@@ -18,5 +27,6 @@ async def materialize_processed_book(
             runtime.context.read_page,
             runtime.context.write_artifact,
             runtime.context.artifact_exists,
+            report_page_progress,
         ),
     )

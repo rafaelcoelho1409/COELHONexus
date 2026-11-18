@@ -6,6 +6,8 @@
 import type { JSX } from "react";
 import { useState } from "react";
 
+import { ContextBar } from "@/shared/layout/context-bar";
+
 import type { SourceMode } from "../params";
 import { ChannelTab } from "./channel-tab";
 import { ModeTabs } from "./mode-tabs";
@@ -46,8 +48,8 @@ export function SourceStage(): JSX.Element {
 
   return (
     <div>
-      <ModeTabs mode={mode} onChange={setMode} />
-      <div className="mt-4">
+      <ContextBar pinned start={<ModeTabs mode={mode} onChange={setMode} />} />
+      <div>
         {mode === "search" ? <SearchTab onRoute={onRoute} /> : null}
         {mode === "videos" ? (
           <VideosTab key={`videos-${routed.nonce}`} initialIds={routed.videos} onSwitch={onSwitch} />

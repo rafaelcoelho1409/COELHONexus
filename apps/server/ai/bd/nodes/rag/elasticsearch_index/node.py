@@ -30,6 +30,7 @@ async def index_pages(
             agentic_run_id = state["agentic_run_id"],
             revision = state["processed_book_revision"],
             progress_callback = report_pages,
+            cancel_check = context.cancel_check,
         )
         return {
             "elasticsearch_index": index,

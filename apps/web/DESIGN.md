@@ -47,7 +47,7 @@ Numbers that change use `tabular` (tabular-nums). Uppercase is for `.mono-label`
   gradient fills, no glass blur.
 - Density: `--row-height` is 40px (comfortable) or 32px (`data-density="compact"` on `<html>`), for the
   data-heavy screens that follow. Marketing sections use `py-16 md:py-24`.
-- Layout container `max-w-6xl`, gutters 16px (mobile) / 24px. Single-column grids use `grid-cols-1`
+- Layout container `max-w-screen-2xl`, gutters 16px (mobile) / 24px. Single-column grids use `grid-cols-1`
   (`minmax(0,1fr)`) so a long code line can never widen the page.
 
 ## Motion

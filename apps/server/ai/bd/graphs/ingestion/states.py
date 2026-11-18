@@ -12,6 +12,8 @@ class IngestionRunState(TypedDict, total = False):
     extraction_run_id: str
     agentic_run_id: str
     workflow_version: str
+    replay_from_node: str
+    replay_skip_nodes: list[str]
     source_manifest_key: str
     source_manifest_sha256: str
     run_created_at: float

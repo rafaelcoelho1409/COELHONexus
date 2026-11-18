@@ -5,7 +5,7 @@ import { PRODUCTS } from "../content";
 export function Products() {
   return (
     <section id="products" aria-labelledby="products-title" className="border-b border-border">
-      <div className="mx-auto max-w-6xl px-4 py-16 sm:px-6 md:py-24">
+      <div className="mx-auto max-w-screen-2xl px-4 py-16 sm:px-6 md:py-24">
         <p className="mono-label">Products</p>
         <h2 id="products-title" className="mt-4 max-w-2xl text-balance text-3xl font-semibold tracking-tight">
           Three tools, one platform.

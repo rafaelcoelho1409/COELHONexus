@@ -10,14 +10,15 @@ import {
   retrievalIndexNeedsUpdate,
   retrievalIndexStatusLabel,
 } from "../domain/retrieval-index";
-import type { AgenticRunStatus, RetrievalIndexStatus } from "../entities";
+import type { AgenticRunStatus, AgenticUsage, RetrievalIndexStatus } from "../entities";
 import { SideSheet } from "../rag/components/side-sheet";
 import { ActionButton } from "./action-button";
 import type { AgenticFlowConnection, AgenticFlowPosition } from "./agentic-flow";
 import { AgenticNodeDetailsList, AgenticNodeList, AgenticPills, AgenticStatusBadge } from "./agentic-parts";
-import { AgenticUsageSheet } from "./agentic-pipeline";
+import { AgenticUsageBreakdown, AgenticUsageSheet } from "./agentic-pipeline";
 import { ToggleGroup } from "./toggle-group";
 import { useReplayRetrievalIndexNode } from "../hooks/use-bd-data";
+import { useAgenticUsage } from "../hooks/use-agentic-run";
 
 const AgenticFlow = dynamic(() => import("./agentic-flow").then((module) => module.AgenticFlow), {
   ssr: false,
@@ -138,6 +139,14 @@ export function RetrievalIndexPanel({ bookId, run, index }: Props) {
   const views = nodeViews(index);
   const selectedNode = INDEX_NODES.find((node) => node.id === selectedNodeId);
   const selectedView = views.find((view) => view.id === selectedNodeId);
+  const usage = useAgenticUsage(
+    bookId,
+    index?.agentic_run_id ?? null,
+    live,
+    index !== null,
+    "retrieval-index",
+  );
+  const selectedNodeUsage = usageForNode(usage.data, selectedNodeId);
   const completedCount = views.filter((node) => node.status === "done").length;
   const statusText = retrievalIndexStatusLabel(index, run);
   const canReplay = Boolean(
@@ -282,6 +291,7 @@ export function RetrievalIndexPanel({ bookId, run, index }: Props) {
           <Tabs defaultValue="overview" className="w-full">
             <TabsList aria-label="Retrieval-index node details">
               <TabsTrigger value="overview">Overview</TabsTrigger>
+              <TabsTrigger value="llm-calls">LLM Calls</TabsTrigger>
               <TabsTrigger value="resources">Resources</TabsTrigger>
             </TabsList>
             <TabsContent value="overview" className="flex flex-col gap-4 pt-4">
@@ -298,6 +308,41 @@ export function RetrievalIndexPanel({ bookId, run, index }: Props) {
                   value={`${index.graph_batches_completed.toLocaleString()} / ${index.graph_batches_total.toLocaleString()}`}
                 />
               ) : null}
+              {selectedNodeId === "neo4j" && index ? (
+                <>
+                  <Metric label="Graph stage" value={neo4jStageLabel(index.neo4j_stage)} />
+                  {index.neo4j_node_write_batches_total > 0 ? (
+                    <Metric
+                      label="Node write batches"
+                      value={`${index.neo4j_node_write_batches_completed.toLocaleString()} / ${
+                        index.neo4j_node_write_batches_total.toLocaleString()
+                      }`}
+                    />
+                  ) : null}
+                  {index.neo4j_relationship_write_batches_total > 0 ? (
+                    <Metric
+                      label="Relationship write batches"
+                      value={`${index.neo4j_relationship_write_batches_completed.toLocaleString()} / ${
+                        index.neo4j_relationship_write_batches_total.toLocaleString()
+                      }`}
+                    />
+                  ) : null}
+                </>
+              ) : null}
+            </TabsContent>
+            <TabsContent value="llm-calls" className="flex flex-col gap-3 pt-4">
+              <AgenticUsageBreakdown
+                usage={selectedNodeUsage}
+                loading={index !== null && usage.isPending}
+                failed={index !== null && usage.isError}
+                hasRun={index !== null && selectedView.status !== "pending"}
+                pendingMessage={`Usage will appear after ${selectedNode.label} runs.`}
+                emptyMessage={
+                  selectedNodeId === "neo4j"
+                    ? "No LLM calls have been recorded for this node."
+                    : "This node does not make LLM calls."
+                }
+              />
             </TabsContent>
             <TabsContent value="resources" className="pt-4">
               <AgenticNodeDetailsList resources={selectedNode.resources} />
@@ -341,14 +386,16 @@ function nodeViews(index: RetrievalIndexStatus | null): AgenticNodeView[] {
     const liveLine = nodeLiveLine(index, node.id, status);
     const totalPages = index?.processed_page_count ?? 0;
     const pageProgress = PAGE_PROGRESS[node.id];
-    const progress = index && pageProgress && totalPages > 0 && status !== "pending"
-      ? {
-          current: status === "done" ? totalPages : Math.min(index[pageProgress.field], totalPages),
-          total: totalPages,
-          label: pageProgress.label,
-          active: 0,
-        }
-      : null;
+    const progress = node.id === "neo4j" && index && totalPages > 0 && status !== "pending"
+      ? neo4jNodeProgress(index, status, totalPages)
+      : index && pageProgress && totalPages > 0 && status !== "pending"
+        ? {
+            current: status === "done" ? totalPages : Math.min(index[pageProgress.field], totalPages),
+            total: totalPages,
+            label: pageProgress.label,
+            active: 0,
+          }
+        : null;
 
     return {
       id: node.id,
@@ -360,6 +407,87 @@ function nodeViews(index: RetrievalIndexStatus | null): AgenticNodeView[] {
       progress,
     };
   });
+}
+
+function neo4jNodeProgress(
+  index: RetrievalIndexStatus,
+  status: AgenticNodeStatus,
+  totalPages: number,
+): NonNullable<AgenticNodeView["progress"]> {
+  if (status === "done" || index.neo4j_stage === "complete") {
+    return { current: 1, total: 1, label: "graph stored", active: 0 };
+  }
+  if (index.neo4j_stage === "building_graph") {
+    return {
+      current: index.neo4j_stage_completed,
+      total: Math.max(index.neo4j_stage_total, 1),
+      label: "graph records assembled",
+      active: status === "running" && index.neo4j_stage_completed < index.neo4j_stage_total ? 1 : 0,
+    };
+  }
+  if (index.neo4j_stage === "clearing_graph") {
+    return {
+      current: index.neo4j_stage_completed,
+      total: Math.max(index.neo4j_stage_total, 1),
+      label: "previous graph cleared",
+      active: status === "running" && index.neo4j_stage_completed < index.neo4j_stage_total ? 1 : 0,
+    };
+  }
+  if (index.neo4j_stage === "preparing_writes") {
+    return {
+      current: index.neo4j_stage_completed,
+      total: Math.max(index.neo4j_stage_total, 1),
+      label: "graph write records prepared",
+      active: status === "running" && index.neo4j_stage_completed < index.neo4j_stage_total ? 1 : 0,
+    };
+  }
+  if (index.neo4j_stage === "writing_nodes") {
+    return {
+      current: Math.min(index.neo4j_node_write_batches_completed, index.neo4j_node_write_batches_total),
+      total: Math.max(index.neo4j_node_write_batches_total, 1),
+      label: "node batches written",
+      active:
+        status === "running" &&
+        index.neo4j_node_write_batches_completed < index.neo4j_node_write_batches_total
+          ? 1
+          : 0,
+    };
+  }
+  if (index.neo4j_stage === "writing_relationships") {
+    return {
+      current: Math.min(
+        index.neo4j_relationship_write_batches_completed,
+        index.neo4j_relationship_write_batches_total,
+      ),
+      total: Math.max(index.neo4j_relationship_write_batches_total, 1),
+      label: "relationship batches written",
+      active:
+        status === "running" &&
+        index.neo4j_relationship_write_batches_completed < index.neo4j_relationship_write_batches_total
+          ? 1
+          : 0,
+    };
+  }
+  return {
+    current: Math.min(index.neo4j_pages_completed, totalPages),
+    total: totalPages,
+    label: "pages analyzed",
+    active: status === "running" && index.neo4j_pages_completed < totalPages ? 1 : 0,
+  };
+}
+
+function neo4jStageLabel(stage: RetrievalIndexStatus["neo4j_stage"]): string {
+  const labels: Record<RetrievalIndexStatus["neo4j_stage"], string> = {
+    idle: "Waiting",
+    extracting: "Extracting graph facts",
+    building_graph: "Assembling graph records",
+    clearing_graph: "Replacing previous graph",
+    preparing_writes: "Preparing graph writes",
+    writing_nodes: "Writing graph nodes",
+    writing_relationships: "Writing relationships",
+    complete: "Graph stored",
+  };
+  return labels[stage];
 }
 
 function nodeStatus(index: RetrievalIndexStatus | null, nodeId: RetrievalNodeId): AgenticNodeStatus {
@@ -399,6 +527,15 @@ function nodeLiveLine(
 
 function isRetrievalNodeId(nodeId: string): nodeId is RetrievalNodeId {
   return INDEX_NODES.some((node) => node.id === nodeId);
+}
+
+function usageForNode(usage: AgenticUsage | undefined, nodeId: RetrievalNodeId): AgenticUsage | undefined {
+  if (!usage) return undefined;
+  const counts = usage.by_node[nodeId];
+  return {
+    total: counts ?? { calls: 0, tokens_in: 0, tokens_out: 0, reasoning_tokens: 0, errors: 0 },
+    by_node: counts ? { [nodeId]: counts } : {},
+  };
 }
 
 function nodeLabel(nodeId: string): string {

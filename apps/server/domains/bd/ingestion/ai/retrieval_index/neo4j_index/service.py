@@ -1,6 +1,7 @@
 """Idempotent, version-scoped Neo4j writes for processed-book graph records."""
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 import domains
@@ -10,6 +11,10 @@ from langchain_neo4j import LLMGraphTransformer
 
 from .. import params
 from . import domain
+
+
+WriteProgressReporter = Callable[[str, int, int], Awaitable[None]]
+CancelCheck = Callable[[], Awaitable[bool]]
 
 
 def build_graph_transformer(model: Any) -> LLMGraphTransformer:
@@ -45,7 +50,11 @@ async def write_graph(
     book_id: str,
     agentic_run_id: str,
     revision: int,
+    progress_callback: WriteProgressReporter | None = None,
+    cancel_check: CancelCheck | None = None,
 ) -> tuple[int, int]:
+    if progress_callback is not None:
+        await progress_callback("preparing_writes", 0, 1)
     node_rows = [
         {"id": node.id, "kind": node.kind, "name": node.name, "properties": node.properties}
         for node in nodes
@@ -59,8 +68,21 @@ async def write_graph(
         }
         for edge in edges
     ]
+    if progress_callback is not None:
+        await progress_callback("preparing_writes", 1, 1)
     async with infra.neo4j.service.session() as session:
-        for offset in range(0, len(node_rows), params.GRAPH_WRITE_BATCH_SIZE):
+        node_batch_count = (
+            len(node_rows) + params.GRAPH_WRITE_BATCH_SIZE - 1
+        ) // params.GRAPH_WRITE_BATCH_SIZE
+        if progress_callback is not None:
+            await progress_callback("writing_nodes", 0, node_batch_count)
+        for batch_index, offset in enumerate(
+            range(0, len(node_rows), params.GRAPH_WRITE_BATCH_SIZE),
+            start = 1,
+        ):
+            if cancel_check is not None and await cancel_check():
+                raise RuntimeError("processed-book retrieval indexing was cancelled")
+
             async def write_nodes(transaction):
                 result = await transaction.run(
                     """
@@ -80,7 +102,21 @@ async def write_graph(
                 )
                 await result.consume()
             await session.execute_write(write_nodes)
-        for offset in range(0, len(edge_rows), params.GRAPH_WRITE_BATCH_SIZE):
+            if progress_callback is not None:
+                await progress_callback("writing_nodes", batch_index, node_batch_count)
+
+        edge_batch_count = (
+            len(edge_rows) + params.GRAPH_WRITE_BATCH_SIZE - 1
+        ) // params.GRAPH_WRITE_BATCH_SIZE
+        if edge_rows and progress_callback is not None:
+            await progress_callback("writing_relationships", 0, edge_batch_count)
+        for batch_index, offset in enumerate(
+            range(0, len(edge_rows), params.GRAPH_WRITE_BATCH_SIZE),
+            start = 1,
+        ):
+            if cancel_check is not None and await cancel_check():
+                raise RuntimeError("processed-book retrieval indexing was cancelled")
+
             async def write_edges(transaction):
                 result = await transaction.run(
                     """
@@ -106,6 +142,8 @@ async def write_graph(
                 )
                 await result.consume()
             await session.execute_write(write_edges)
+            if progress_callback is not None:
+                await progress_callback("writing_relationships", batch_index, edge_batch_count)
     return len(node_rows), len(edge_rows)
 
 

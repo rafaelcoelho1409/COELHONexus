@@ -11,6 +11,16 @@ SafeSegment = Annotated[str, StringConstraints(pattern = r"^[A-Za-z0-9_-]+$")]
 ObjectKey = Annotated[str, StringConstraints(min_length = 1)]
 Sha256Hex = Annotated[str, StringConstraints(pattern = r"^[0-9a-f]{64}$")]
 NodeStatus = Literal["pending", "running", "done", "failed", "cancelled"]
+Neo4jStage = Literal[
+    "idle",
+    "extracting",
+    "building_graph",
+    "clearing_graph",
+    "preparing_writes",
+    "writing_nodes",
+    "writing_relationships",
+    "complete",
+]
 
 
 class RetrievalIndexManifest(BaseModel):
@@ -26,6 +36,7 @@ class RetrievalIndexManifest(BaseModel):
     processed_book_revision: int = Field(ge = 1, strict = True)
     processed_page_count: int = Field(ge = 1, strict = True)
     status: Literal["queued", "running", "done", "failed", "cancelled"]
+    cancel_requested: bool = False
     replay_from_node: str | None = None
     current_node: str | None = None
     node_status: dict[str, NodeStatus]
@@ -45,6 +56,13 @@ class RetrievalIndexManifest(BaseModel):
     graph_batches_completed: int = Field(default = 0, ge = 0, strict = True)
     graph_batches_total: int = Field(default = 0, ge = 0, strict = True)
     neo4j_pages_completed: int = Field(default = 0, ge = 0, strict = True)
+    neo4j_stage: Neo4jStage = "idle"
+    neo4j_stage_completed: int = Field(default = 0, ge = 0, strict = True)
+    neo4j_stage_total: int = Field(default = 0, ge = 0, strict = True)
+    neo4j_node_write_batches_completed: int = Field(default = 0, ge = 0, strict = True)
+    neo4j_node_write_batches_total: int = Field(default = 0, ge = 0, strict = True)
+    neo4j_relationship_write_batches_completed: int = Field(default = 0, ge = 0, strict = True)
+    neo4j_relationship_write_batches_total: int = Field(default = 0, ge = 0, strict = True)
     created_at: float = Field(gt = 0)
     updated_at: float = Field(gt = 0)
     finished_at: float | None = None

@@ -3,7 +3,7 @@ import { LAYERS } from "../content";
 export function System() {
   return (
     <section id="system" aria-labelledby="system-title" className="border-b border-border">
-      <div className="mx-auto max-w-6xl px-4 py-16 sm:px-6 md:py-24">
+      <div className="mx-auto max-w-screen-2xl px-4 py-16 sm:px-6 md:py-24">
         <p className="mono-label">System</p>
         <h2 id="system-title" className="mt-4 max-w-2xl text-balance text-3xl font-semibold tracking-tight">
           Six layers, each replaceable on its own.

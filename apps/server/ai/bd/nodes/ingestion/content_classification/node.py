@@ -10,6 +10,8 @@ async def classify_content(
     graph_state: graphs.ingestion.states.IngestionRunState,
     runtime: Runtime[graphs.ingestion.entities.IngestionDependencies],
 ) -> dict:
+    if "classify_content" in graph_state.get("replay_skip_nodes", []):
+        return {}
     context = runtime.context
     return await graphs.service.run_node(
         context.progress_callback,

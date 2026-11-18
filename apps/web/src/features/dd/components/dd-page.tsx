@@ -24,7 +24,7 @@ export function DocsDistillerPage() {
   const stage = legacyIngestionUrl ? "pages" : (STAGE_BY_PATH.get(pathname) ?? "catalog");
   return (
     <DdOverlaysProvider>
-      <div className="mx-auto w-full max-w-6xl p-4">
+      <div className="mx-auto w-full max-w-screen-2xl p-4">
         {stage === "catalog" ? (
           <CatalogStage />
         ) : (

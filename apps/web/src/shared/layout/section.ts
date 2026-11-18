@@ -15,6 +15,8 @@ export interface Section {
   href: string;
   title: string;
   description: string;
+  /** Keep the summary available to assistive technology without showing it in the second navbar. */
+  showDescription?: boolean;
   /** The tab marked current on a path that is none of the tabs (`/bd` opens the Ingestion stage). */
   defaultTab?: string;
   /** The search parameter that follows the reader from tab to tab. */

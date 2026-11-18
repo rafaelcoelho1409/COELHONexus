@@ -8,6 +8,10 @@
   background: transparent;
 }
 
+.query-graph .react-flow .react-flow__edges svg {
+  overflow: visible;
+}
+
 .query-graph .react-flow__node {
   padding: 0;
   border: 0;

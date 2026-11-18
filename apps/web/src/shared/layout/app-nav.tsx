@@ -21,8 +21,8 @@ export function AppNav() {
             aria-current={current ? "page" : undefined}
             className={
               current
-                ? "inline-flex h-9 items-center px-2 text-sm text-foreground transition-colors sm:px-3"
-                : "inline-flex h-9 items-center px-2 text-sm text-muted-foreground transition-colors hover:text-foreground sm:px-3"
+                ? "inline-flex h-9 items-center px-2 text-[0.875rem] font-semibold text-foreground transition-colors sm:px-3"
+                : "inline-flex h-9 items-center px-2 text-[0.875rem] font-medium text-muted-foreground transition-colors hover:text-foreground sm:px-3"
             }
           >
             {/* A phone shows the short label; the full one stays the accessible name. */}

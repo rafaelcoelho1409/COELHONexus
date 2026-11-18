@@ -18,6 +18,7 @@ export const YCS_SECTION: Section = {
   href: "/ycs",
   title: "YouTube Content Search",
   description: "Find videos, ingest transcripts, ask, and query",
+  showDescription: false,
   defaultTab: "source",
   tabs: YCS_STAGES.map((stage) => ({ ...stage, carry: false })),
 };

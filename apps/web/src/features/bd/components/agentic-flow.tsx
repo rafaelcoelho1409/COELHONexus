@@ -11,6 +11,8 @@ import "./agentic-flow.css";
 
 import { Controls, type Edge, Handle, MarkerType, type Node, type NodeProps, Position, ReactFlow } from "@xyflow/react";
 
+import { ReactFlowNodeInternals } from "@/shared/lib/react-flow-node-internals";
+
 import type { AgenticNodeStatus, AgenticNodeView } from "../domain/agentic-progress";
 import {
   AGENTIC_STATUS_LABEL,
@@ -217,6 +219,7 @@ export function AgenticFlow({
         preventScrolling
         proOptions={{ hideAttribution: false }}
       >
+        <ReactFlowNodeInternals nodeIds={nodes.map((node) => node.id)} revision={nodes} />
         <Controls showInteractive={false} position="bottom-right" />
       </ReactFlow>
     </figure>

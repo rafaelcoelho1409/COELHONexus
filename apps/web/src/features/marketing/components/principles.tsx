@@ -3,7 +3,7 @@ import { PRINCIPLES } from "../content";
 export function Principles() {
   return (
     <section id="principles" aria-labelledby="principles-title" className="border-b border-border">
-      <div className="mx-auto max-w-6xl px-4 py-16 sm:px-6 md:py-24">
+      <div className="mx-auto max-w-screen-2xl px-4 py-16 sm:px-6 md:py-24">
         <p className="mono-label">Principles</p>
         <h2
           id="principles-title"

@@ -17,6 +17,8 @@ import {
   ReactFlow,
 } from "@xyflow/react";
 
+import { ReactFlowNodeInternals } from "@/shared/lib/react-flow-node-internals";
+
 import type { AskAgenticNode, AskAgenticNodeStatus } from "./ask-agentic-types";
 import { StatusBadge } from "./status-badge";
 
@@ -316,7 +318,9 @@ export function AskAgenticFlow({
         zoomOnPinch={false}
         zoomOnDoubleClick={false}
         proOptions={{ hideAttribution: false }}
-      />
+      >
+        <ReactFlowNodeInternals nodeIds={flowNodes.map((node) => node.id)} revision={flowNodes} />
+      </ReactFlow>
     </figure>
   );
 }

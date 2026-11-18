@@ -27,7 +27,7 @@ import { StudyActionButton, studyActionLinkClassName } from "./study-action-butt
 /** How far the text runs: a comfortable line for prose, or most of a wide screen for tables and code. */
 const TEXT_WIDTH: Record<StudyLayout["width"], string> = {
   comfortable: "max-w-4xl",
-  wide: "max-w-7xl",
+  wide: "max-w-screen-2xl",
 };
 
 export function StudyReadingMode({

@@ -20,7 +20,7 @@ export function AppShell({
   return (
     <>
       <header className="sticky top-0 z-50 border-b border-border bg-background">
-        <div className="mx-auto flex h-14 max-w-6xl items-center justify-between gap-6 px-4 sm:px-6">
+        <div className="mx-auto flex h-14 max-w-screen-2xl items-center justify-between gap-6 px-4 sm:px-6">
           <Link href="/" className="flex items-center gap-2.5 text-foreground">
             <BrandMark className="size-5 text-primary-text" />
             {/* The wordmark gives way to the nav on a phone; it stays the link's accessible name. */}
@@ -36,7 +36,7 @@ export function AppShell({
       </header>
       <SectionBar sections={sections} />
       <ContextBarSlot />
-      <main id="main" className="mx-auto max-w-6xl px-4 py-6 sm:px-6 sm:py-8">
+      <main id="main" className="mx-auto max-w-screen-2xl px-4 py-6 sm:px-6 sm:py-8">
         {children}
       </main>
     </>

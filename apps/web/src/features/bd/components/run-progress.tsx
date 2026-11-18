@@ -49,8 +49,8 @@ export function RunProgress({
         <span aria-live="polite" className="text-xs text-muted-foreground">
           {statusText}
         </span>
-        {action ? <div className="ml-auto">{action}</div> : null}
       </div>
+      {action ? <div className="mt-2 w-full">{action}</div> : null}
       <div
         role="progressbar"
         aria-label={`${units.plural[0]?.toUpperCase()}${units.plural.slice(1)} extracted`}

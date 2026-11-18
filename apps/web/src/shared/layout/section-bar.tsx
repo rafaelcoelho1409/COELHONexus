@@ -34,11 +34,15 @@ function Bar({ section, pathname, carried }: { section: Section; pathname: strin
 
   return (
     <div data-section-bar className="border-b border-border bg-background sm:sticky sm:top-14 sm:z-40">
-      <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-x-6 gap-y-1 px-4 py-2 sm:h-12 sm:flex-nowrap sm:py-0 sm:px-6">
+      <div className="mx-auto flex max-w-screen-2xl flex-wrap items-center justify-between gap-x-6 gap-y-1 px-4 py-2 sm:h-12 sm:flex-nowrap sm:py-0 sm:px-6">
         <div className="flex min-w-0 items-baseline gap-x-3">
           <h1 className="shrink-0 text-lg font-semibold tracking-tight">{section.title}</h1>
-          {/* Room is tight below `lg`, so the description gives way there and stays the page's accessible summary. */}
-          <p className="sr-only min-w-0 truncate text-sm text-muted-foreground lg:not-sr-only">
+          {/* The section can keep this summary screen-reader-only to give its title and stage links more room. */}
+          <p
+            className={`sr-only min-w-0 truncate text-sm text-muted-foreground${
+              section.showDescription === false ? "" : " lg:not-sr-only"
+            }`}
+          >
             {section.description}
           </p>
         </div>
@@ -54,8 +58,8 @@ function Bar({ section, pathname, carried }: { section: Section; pathname: strin
                 aria-current={tab.key === current ? "page" : undefined}
                 className={
                   tab.key === current
-                    ? "inline-flex h-9 items-center px-2 text-base font-semibold text-foreground transition-colors sm:px-3"
-                    : "inline-flex h-9 items-center px-2 text-base font-medium text-muted-foreground transition-colors hover:text-foreground sm:px-3"
+                    ? "inline-flex h-9 items-center px-2 text-[0.875rem] font-semibold text-foreground transition-colors sm:px-3"
+                    : "inline-flex h-9 items-center px-2 text-[0.875rem] font-medium text-muted-foreground transition-colors hover:text-foreground sm:px-3"
                 }
               >
                 {tab.label}

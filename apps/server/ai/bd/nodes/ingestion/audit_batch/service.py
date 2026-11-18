@@ -265,7 +265,6 @@ async def audit_pages(
     return {
         "page_refs": [result[0] for result in results],
         "page_audits": [result[1] for result in results],
-        "status": "audited",
     }
 
 

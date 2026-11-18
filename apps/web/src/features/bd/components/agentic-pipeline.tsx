@@ -21,13 +21,20 @@ import {
 } from "../domain/agentic-progress";
 import { type AgenticUsageMode, agenticUsageRows, nodeUsageForAgenticStep } from "../domain/agentic-usage";
 import type { BookUnits } from "../domain/books";
-import type { AgenticProgress, AgenticRunStatus, AgenticUsage, ChapterRange } from "../entities";
+import type {
+  AgenticProgress,
+  AgenticRunStatus,
+  AgenticUsage,
+  ChapterRange,
+  RetrievalIndexStatus,
+} from "../entities";
 import { useAgenticUsage } from "../hooks/use-agentic-run";
 import { useModalDialog } from "../hooks/use-modal-dialog";
 import { SideSheet } from "../rag/components/side-sheet";
 import { ActionButton } from "./action-button";
 import { AgenticNodeDetailsList, AgenticNodeList, AgenticPills, AgenticStatusBadge } from "./agentic-parts";
 import { ToggleGroup } from "./toggle-group";
+import type { AgenticFlowConnection, AgenticFlowPosition } from "./agentic-flow";
 
 // The graph library is only needed once a graph is on screen.
 const AgenticFlow = dynamic(() => import("./agentic-flow").then((module) => module.AgenticFlow), {
@@ -45,6 +52,30 @@ const USAGE_MODES: readonly { id: AgenticUsageMode; label: string }[] = [
   { id: "model", label: "By model" },
   { id: "agent_model", label: "By agent + model" },
 ];
+
+const INGESTION_CONNECTIONS: readonly AgenticFlowConnection[] = [
+  { source: "audit_batch", target: "classify_content" },
+  { source: "audit_batch", target: "normalize_metadata" },
+  { source: "classify_content", target: "plan_repairs" },
+  { source: "plan_repairs", target: "repair_pages" },
+  { source: "repair_pages", target: "enrich_visuals" },
+  { source: "normalize_metadata", target: "enrich_visuals" },
+  { source: "enrich_visuals", target: "materialize_processed_book" },
+  { source: "materialize_processed_book", target: "reconcile_contents" },
+  { source: "reconcile_contents", target: "publish" },
+];
+
+const INGESTION_POSITIONS: Readonly<Record<string, AgenticFlowPosition>> = {
+  audit_batch: { x: 172, y: 16 },
+  classify_content: { x: 16, y: 182 },
+  normalize_metadata: { x: 328, y: 182 },
+  plan_repairs: { x: 16, y: 348 },
+  repair_pages: { x: 16, y: 514 },
+  enrich_visuals: { x: 172, y: 680 },
+  materialize_processed_book: { x: 172, y: 846 },
+  reconcile_contents: { x: 172, y: 1012 },
+  publish: { x: 172, y: 1178 },
+};
 
 export function AgenticProgressBar({
   status,
@@ -118,55 +149,58 @@ export function AgenticProgressBar({
         <span aria-live="polite" className="text-xs text-muted-foreground">
           {statusText}
         </span>
-        <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
-          <ActionButton
-            onClick={resumable ? onResume : onStart}
-            disabled={startDisabled}
-            aria-busy={actionPending}
-            aria-label={resumable ? "Resume Agentic AI" : "Start Agentic AI"}
-            title={
-              !extractionDone
-                ? "Complete Docling extraction before starting Agentic AI."
-                : status === "queued" || status === "running"
-                  ? "An Agentic AI run is already active."
-                  : status === "done"
-                    ? "Start a new candidate; the completed run and its artifacts are preserved."
-                    : undefined
-            }
-          >
-            {actionPending ? (resumable ? "Resuming…" : "Starting…") : resumable ? "Resume" : "Start"}
-          </ActionButton>
-          <ActionButton
-            onClick={onStop}
-            disabled={!(status === "queued" || status === "running") || cancelPending || cancelRequested}
-            aria-busy={cancelPending || cancelRequested}
-            aria-label="Stop Agentic AI"
-            title={
-              cancelRequested
-                ? "Stop requested; the active page operation is draining."
-                : status === "queued" || status === "running"
-                  ? undefined
-                  : "There is no active Agentic AI run to stop."
-            }
-          >
-            {cancelPending || cancelRequested ? "Stopping…" : "Stop"}
-          </ActionButton>
-          <ActionButton
-            onClick={onWipe}
-            disabled={!hasRun || status === "queued" || status === "running" || wipePending}
-            aria-busy={wipePending}
-            aria-label="Wipe Agentic AI"
-            title={
-              !hasRun
-                ? "There are no Agentic AI artifacts to wipe."
-                : status === "queued" || status === "running"
-                  ? "Stop Agentic AI and wait for it to finish before wiping."
+      </div>
+      <div className="mt-2 grid w-full grid-cols-3 gap-2">
+        <ActionButton
+          onClick={resumable ? onResume : onStart}
+          disabled={startDisabled}
+          aria-busy={actionPending}
+          aria-label={resumable ? "Resume Agentic AI" : "Start Agentic AI"}
+          className="w-full"
+          title={
+            !extractionDone
+              ? "Complete Docling extraction before starting Agentic AI."
+              : status === "queued" || status === "running"
+                ? "An Agentic AI run is already active."
+                : status === "done"
+                  ? "Start a new candidate; the completed run and its artifacts are preserved."
                   : undefined
-            }
-          >
-            {wipePending ? "Wiping…" : "Wipe"}
-          </ActionButton>
-        </div>
+          }
+        >
+          {actionPending ? (resumable ? "Resuming…" : "Starting…") : resumable ? "Resume" : "Start"}
+        </ActionButton>
+        <ActionButton
+          onClick={onStop}
+          disabled={!(status === "queued" || status === "running") || cancelPending || cancelRequested}
+          aria-busy={cancelPending || cancelRequested}
+          aria-label="Stop Agentic AI"
+          className="w-full"
+          title={
+            cancelRequested
+              ? "Stop requested; the active page operation is draining."
+              : status === "queued" || status === "running"
+                ? undefined
+                : "There is no active Agentic AI run to stop."
+          }
+        >
+          {cancelPending || cancelRequested ? "Stopping…" : "Stop"}
+        </ActionButton>
+        <ActionButton
+          onClick={onWipe}
+          disabled={!hasRun || status === "queued" || status === "running" || wipePending}
+          aria-busy={wipePending}
+          aria-label="Wipe Agentic AI"
+          className="w-full"
+          title={
+            !hasRun
+              ? "There are no Agentic AI artifacts to wipe."
+              : status === "queued" || status === "running"
+                ? "Stop Agentic AI and wait for it to finish before wiping."
+                : undefined
+          }
+        >
+          {wipePending ? "Wiping…" : "Wipe"}
+        </ActionButton>
       </div>
       <div
         role="progressbar"
@@ -215,6 +249,7 @@ export function AgenticPipelineOverview({
   chapters,
   onOpenUsage,
   onPlayNode,
+  replayDisabled = false,
   replayPending = false,
   replayPendingNodeId = null,
 }: {
@@ -228,6 +263,7 @@ export function AgenticPipelineOverview({
   chapters: readonly ChapterRange[];
   onOpenUsage: () => void;
   onPlayNode?: (nodeId: string) => void;
+  replayDisabled?: boolean;
   replayPending?: boolean;
   replayPendingNodeId?: string | null;
 }) {
@@ -332,8 +368,10 @@ export function AgenticPipelineOverview({
           {mode === "graph" ? (
             <AgenticFlow
               views={views}
+              connections={INGESTION_CONNECTIONS}
+              positions={INGESTION_POSITIONS}
               onOpenNode={setSelectedNodeId}
-              onPlayNode={onPlayNode}
+              onPlayNode={replayDisabled ? undefined : onPlayNode}
               replayPending={replayPending}
               replayPendingNodeId={replayPendingNodeId}
             />
@@ -343,6 +381,7 @@ export function AgenticPipelineOverview({
                 rows={views}
                 onOpen={setSelectedNodeId}
                 onPlay={onPlayNode}
+                replayDisabled={replayDisabled}
                 replayPending={replayPending}
                 replayPendingNodeId={replayPendingNodeId}
               />
@@ -433,22 +472,53 @@ export function AgenticPipelineUsage({
   bookId,
   run,
   status,
+  retrievalIndex,
 }: {
   bookId: string;
   run: AgenticRunStatus | null;
   status: AgenticRunStatus["status"] | null;
+  retrievalIndex: RetrievalIndexStatus | null;
 }) {
-  const live = status === "queued" || status === "running";
-  const usage = useAgenticUsage(bookId, run?.agentic_run_id ?? null, live, run !== null);
+  const ingestionLive = status === "queued" || status === "running";
+  const retrievalLive = retrievalIndex?.status === "queued" || retrievalIndex?.status === "running";
+  const ingestionUsage = useAgenticUsage(bookId, run?.agentic_run_id ?? null, ingestionLive, run !== null);
+  const retrievalUsage = useAgenticUsage(
+    bookId,
+    retrievalIndex?.agentic_run_id ?? null,
+    retrievalLive,
+    retrievalIndex !== null,
+    "retrieval-index",
+  );
+  const usage = addUsageTotals(ingestionUsage.data?.total, retrievalUsage.data?.total);
+  const hasRun = run !== null || retrievalIndex !== null;
+  const failed =
+    (run !== null && ingestionUsage.isError) || (retrievalIndex !== null && retrievalUsage.isError);
+  const loading =
+    usage === undefined &&
+    ((run !== null && ingestionUsage.isPending) || (retrievalIndex !== null && retrievalUsage.isPending));
 
   return (
     <PipelineUsageTotal
-      usage={usage.data}
-      hasRun={run !== null}
-      loading={run !== null && usage.isPending}
-      failed={run !== null && usage.isError}
+      usage={usage}
+      hasRun={hasRun}
+      loading={loading}
+      failed={failed}
     />
   );
+}
+
+function addUsageTotals(
+  ingestion: AgenticUsage["total"] | undefined,
+  retrieval: AgenticUsage["total"] | undefined,
+): AgenticUsage["total"] | undefined {
+  if (!ingestion && !retrieval) return undefined;
+  return {
+    calls: (ingestion?.calls ?? 0) + (retrieval?.calls ?? 0),
+    tokens_in: (ingestion?.tokens_in ?? 0) + (retrieval?.tokens_in ?? 0),
+    tokens_out: (ingestion?.tokens_out ?? 0) + (retrieval?.tokens_out ?? 0),
+    reasoning_tokens: (ingestion?.reasoning_tokens ?? 0) + (retrieval?.reasoning_tokens ?? 0),
+    errors: (ingestion?.errors ?? 0) + (retrieval?.errors ?? 0),
+  };
 }
 
 const PENDING_NOTE: Record<AgenticNodeStatus, string | null> = {
@@ -541,7 +611,7 @@ function AgenticNodeSheet({
             {note ? <p role="status" className="text-sm text-muted-foreground">{note}</p> : null}
           </TabsContent>
           <TabsContent value="llm-calls" className="flex flex-col gap-3 pt-4">
-            <UsageBreakdown usage={usage} nodeId={node.id} loading={loading} failed={failed} hasRun={hasRun} />
+            <AgenticUsageBreakdown usage={usage} nodeId={node.id} loading={loading} failed={failed} hasRun={hasRun} />
           </TabsContent>
           <TabsContent value="resources" className="pt-4">
             <section aria-label="Agents, skills, and tools">
@@ -560,7 +630,7 @@ function PipelineUsageTotal({
   loading,
   failed,
 }: {
-  usage: ReturnType<typeof useAgenticUsage>["data"];
+  usage: AgenticUsage["total"] | undefined;
   hasRun: boolean;
   loading: boolean;
   failed: boolean;
@@ -568,15 +638,15 @@ function PipelineUsageTotal({
   return (
     <section aria-label="Pipeline usage" className="min-w-0 rounded-md border border-border bg-card p-3">
       <h3 className="text-sm font-medium">Pipeline usage</h3>
-      <p className="mt-1 text-xs text-muted-foreground">Agentic ingestion calls and token counts.</p>
+      <p className="mt-1 text-xs text-muted-foreground">Combined Ingestion and Agentic RAG calls and token counts.</p>
       {usage ? (
         <dl className="mt-3 grid grid-cols-1 gap-2">
           {[
-            ["LLM calls", usage.total.calls],
-            ["Input tokens", usage.total.tokens_in],
-            ["Output tokens", usage.total.tokens_out],
-            ["Reasoning tokens", usage.total.reasoning_tokens],
-            ["Errors", usage.total.errors],
+            ["LLM calls", usage.calls],
+            ["Input tokens", usage.tokens_in],
+            ["Output tokens", usage.tokens_out],
+            ["Reasoning tokens", usage.reasoning_tokens],
+            ["Errors", usage.errors],
           ].map(([label, value]) => (
             <div key={label} className="rounded-sm border border-border px-3 py-2">
               <dt className="text-xs text-muted-foreground">{label}</dt>
@@ -593,6 +663,11 @@ function PipelineUsageTotal({
           {loading ? "Loading usage…" : hasRun ? "No usage has been reported yet." : "No Agentic AI run yet."}
         </p>
       )}
+      {usage && failed ? (
+        <p role="status" className="mt-3 text-xs text-warning-text">
+          Some usage data could not be loaded; these totals may be incomplete.
+        </p>
+      ) : null}
     </section>
   );
 }
@@ -668,7 +743,7 @@ function UsageSheet({
         </ActionButton>
       </header>
       <div className="flex flex-col gap-4 px-5 py-4">
-        <UsageBreakdown
+        <AgenticUsageBreakdown
           usage={usage.data}
           loading={runId !== null && usage.isPending}
           failed={usage.isError}
@@ -679,18 +754,22 @@ function UsageSheet({
   );
 }
 
-function UsageBreakdown({
+export function AgenticUsageBreakdown({
   usage,
   nodeId,
   loading,
   failed,
   hasRun,
+  pendingMessage,
+  emptyMessage,
 }: {
   usage: AgenticUsage | undefined;
   nodeId?: (typeof AGENTIC_NODES)[number]["id"];
   loading: boolean;
   failed: boolean;
   hasRun: boolean;
+  pendingMessage?: string;
+  emptyMessage?: string;
 }) {
   const [mode, setMode] = useState<AgenticUsageMode>("agent_model");
   const counts = nodeId ? nodeUsageForAgenticStep(usage, nodeId) : usage?.total;
@@ -730,17 +809,17 @@ function UsageBreakdown({
         </p>
       ) : !hasRun ? (
         <p className="text-sm text-muted-foreground">
-          {nodeId
+          {pendingMessage ?? (nodeId
             ? "Usage will appear after this node runs."
-            : "No Agentic AI run yet. Usage appears here once one has started."}
+            : "No Agentic AI run yet. Usage appears here once one has started.")}
         </p>
       ) : rows.length > 0 ? (
         <AgenticUsageTable rows={rows} mode={mode} caption={caption} />
       ) : (
         <p className="text-sm text-muted-foreground">
-          {nodeId
+          {emptyMessage ?? (nodeId
             ? "No LLM calls have been recorded for this node. This may be expected for deterministic stages."
-            : "No LLM calls have been recorded for this run."}
+            : "No LLM calls have been recorded for this run.")}
         </p>
       )}
     </>

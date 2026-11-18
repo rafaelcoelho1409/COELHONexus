@@ -32,6 +32,25 @@ async def report(progress_callback: ProgressReporter | None, **event: Any) -> No
         await result
 
 
+async def report_node_page_progress(
+    progress_callback: ProgressReporter | None,
+    node: str,
+    completed_count: int,
+    total_count: int,
+    active_count: int,
+) -> None:
+    """Report page-level work for a graph node through the standard progress stream."""
+    await report(
+        progress_callback,
+        kind = "node_page_progress",
+        node = node,
+        status = "running",
+        completed_count = completed_count,
+        total_count = total_count,
+        active_count = active_count,
+    )
+
+
 async def run_node(
     progress_callback: ProgressReporter | None,
     node: str,

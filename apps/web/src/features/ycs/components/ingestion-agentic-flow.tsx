@@ -8,6 +8,8 @@ import "./ingestion-agentic-flow.css";
 import { Play } from "lucide-react";
 import { type Edge, Handle, MarkerType, type Node, type NodeProps, Position, ReactFlow } from "@xyflow/react";
 
+import { ReactFlowNodeInternals } from "@/shared/lib/react-flow-node-internals";
+
 import { STATUS_WORD_LABEL, type StatusWord, statusWord } from "../domain";
 import { type Step, StepProgress } from "./pipeline-steps";
 import { StatusBadge } from "./status-badge";
@@ -188,7 +190,9 @@ export function IngestionAgenticFlow({
         zoomOnDoubleClick={false}
         preventScrolling={false}
         proOptions={{ hideAttribution: false }}
-      />
+      >
+        <ReactFlowNodeInternals nodeIds={nodes.map((node) => node.id)} revision={nodes} />
+      </ReactFlow>
     </figure>
   );
 }

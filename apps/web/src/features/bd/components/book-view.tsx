@@ -875,7 +875,7 @@ function BookDetail({
               }
               successful={status === "done" && run.error === null}
               action={
-                <div className="flex flex-wrap items-center justify-end gap-1.5">
+                <div className="grid w-full grid-cols-3 gap-2">
                   <ActionButton
                     onClick={start}
                     disabled={live || runBook.isPending || status === "done"}
@@ -892,6 +892,7 @@ function BookDetail({
                         ? "Resume Docling extraction"
                         : "Start Docling extraction"
                     }
+                    className="w-full"
                   >
                     {runBook.isPending
                       ? "Starting…"
@@ -905,6 +906,7 @@ function BookDetail({
                     aria-busy={cancelling}
                     aria-label="Stop Docling extraction"
                     title={live ? undefined : "There is no active Docling extraction to stop."}
+                    className="w-full"
                   >
                     {cancelling ? "Stopping…" : "Stop"}
                   </ActionButton>
@@ -918,6 +920,7 @@ function BookDetail({
                     }
                     aria-busy={wipeExtraction.isPending}
                     aria-label="Wipe Docling extraction"
+                    className="w-full"
                     title={
                       live || agentic.status === "queued" || agentic.status === "running"
                         ? "Stop both pipelines and wait for them to finish before wiping."
@@ -972,20 +975,24 @@ function BookDetail({
             units={units}
             chapters={state.chapters.length > 0 ? state.chapters : manifest.chapters}
             onOpenUsage={() => setUsageOpen(true)}
+            replayDisabled={
+              !agentic.run || !["done", "failed", "cancelled"].includes(agentic.status ?? "")
+            }
             replayPending={replayAgenticNode.isPending}
             replayPendingNodeId={replayPendingNodeId}
-            onPlayNode={
-              agentic.run && ["done", "failed", "cancelled"].includes(agentic.status ?? "")
-                ? (nodeId) => void replayAgenticFromNode(nodeId)
-                : undefined
-            }
+            onPlayNode={(nodeId) => void replayAgenticFromNode(nodeId)}
           />
           <RetrievalIndexPanel
             bookId={bookId}
             run={agentic.status === "done" ? agentic.run : null}
             index={agentic.status === "done" ? snapshot.retrievalIndex : null}
           />
-          <AgenticPipelineUsage bookId={bookId} run={agentic.run} status={agentic.status} />
+          <AgenticPipelineUsage
+            bookId={bookId}
+            run={agentic.run}
+            status={agentic.status}
+            retrievalIndex={agentic.status === "done" ? snapshot.retrievalIndex : null}
+          />
         </div>
       </section>
       <section

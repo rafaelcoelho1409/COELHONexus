@@ -159,21 +159,6 @@ def run_ingestion_ai(self, book_id: str, extraction_run_id: str, agentic_run_id:
                         cancel_check = cancel_check,
                         execution_check = execution_check,
                     )
-                    try:
-                        completed_run = await service.read_ingestion_ai_run(book_id, agentic_run_id)
-                        if completed_run is not None and completed_run.get("status") == (
-                            domains.bd.ingestion.ai.schemas.AgenticRunStatus.DONE.value
-                        ):
-                            await domains.bd.ingestion.ai.retrieval_index.service.queue_index(
-                                book_id,
-                                agentic_run_id,
-                            )
-                    except Exception:
-                        logger.exception(
-                            "[task] unable to queue processed-book retrieval indexing for %s/%s",
-                            book_id,
-                            agentic_run_id,
-                        )
                     return {
                         "book_id": book_id,
                         "extraction_run_id": extraction_run_id,

@@ -18,14 +18,29 @@ async def index_book_graph(
         rows = await domains.bd.ingestion.ai.retrieval_index.service.read_sources(state, context.storage)
         batches = domains.bd.ingestion.ai.retrieval_index.neo4j_index.domain.graph_batches(rows)
         extractions = []
-        pages_completed = 0
+        all_pages = {row["processed_page_number"] for row in rows}
+        chunks_remaining_by_page: dict[int, int] = {}
+        for _, batch_rows in batches:
+            for row in batch_rows:
+                page_number = row["processed_page_number"]
+                chunks_remaining_by_page[page_number] = chunks_remaining_by_page.get(page_number, 0) + 1
+        completed_pages = all_pages - chunks_remaining_by_page.keys()
+        pages_completed = len(completed_pages)
+        pages_total = len(all_pages)
+        node_write_batches_completed = 0
+        node_write_batches_total = 0
+        relationship_write_batches_completed = 0
+        relationship_write_batches_total = 0
         await context.progress_callback(
             "neo4j",
             "running",
             {
+                "neo4j_stage": "extracting",
+                "neo4j_stage_completed": pages_completed,
+                "neo4j_stage_total": pages_total,
                 "graph_batches_completed": 0,
                 "graph_batches_total": len(batches),
-                "neo4j_pages_completed": 0,
+                "neo4j_pages_completed": pages_completed,
             },
         )
         for batch_index, (section_title, batch_rows) in enumerate(batches):
@@ -50,16 +65,36 @@ async def index_book_graph(
                 "rows": batch_rows,
                 "extraction": extraction,
             })
-            pages_completed += len(batch_rows)
+            for row in batch_rows:
+                page_number = row["processed_page_number"]
+                chunks_remaining_by_page[page_number] -= 1
+                if chunks_remaining_by_page[page_number] == 0 and page_number not in completed_pages:
+                    completed_pages.add(page_number)
+                    pages_completed += 1
             await context.progress_callback(
                 "neo4j",
                 "running",
                 {
+                    "neo4j_stage": "extracting",
+                    "neo4j_stage_completed": pages_completed,
+                    "neo4j_stage_total": pages_total,
                     "graph_batches_completed": batch_index + 1,
                     "graph_batches_total": len(batches),
                     "neo4j_pages_completed": pages_completed,
                 },
             )
+        await context.progress_callback(
+            "neo4j",
+            "running",
+            {
+                "neo4j_stage": "building_graph",
+                "neo4j_stage_completed": 0,
+                "neo4j_stage_total": 1,
+                "graph_batches_completed": len(batches),
+                "graph_batches_total": len(batches),
+                "neo4j_pages_completed": pages_completed,
+            },
+        )
         nodes, edges = domains.bd.ingestion.ai.retrieval_index.neo4j_index.domain.build_graph(
             rows,
             extractions,
@@ -67,24 +102,98 @@ async def index_book_graph(
             agentic_run_id = state["agentic_run_id"],
             revision = state["processed_book_revision"],
         )
+        await context.progress_callback(
+            "neo4j",
+            "running",
+            {
+                "neo4j_stage": "building_graph",
+                "neo4j_stage_completed": 1,
+                "neo4j_stage_total": 1,
+            },
+        )
         if await context.cancel_check():
             raise RuntimeError("processed-book retrieval indexing was cancelled")
+        await context.progress_callback(
+            "neo4j",
+            "running",
+            {
+                "neo4j_stage": "clearing_graph",
+                "neo4j_stage_completed": 0,
+                "neo4j_stage_total": 1,
+            },
+        )
         await domains.bd.ingestion.ai.retrieval_index.neo4j_index.service.delete_graph(
             state["book_id"],
             state["agentic_run_id"],
             state["processed_book_revision"],
         )
+        await context.progress_callback(
+            "neo4j",
+            "running",
+            {
+                "neo4j_stage": "clearing_graph",
+                "neo4j_stage_completed": 1,
+                "neo4j_stage_total": 1,
+            },
+        )
+
+        async def report_write_progress(stage: str, completed: int, total: int) -> None:
+            nonlocal node_write_batches_completed, node_write_batches_total
+            nonlocal relationship_write_batches_completed, relationship_write_batches_total
+            details = {
+                "neo4j_stage": stage,
+                "neo4j_stage_completed": completed,
+                "neo4j_stage_total": total,
+            }
+            if stage == "writing_nodes":
+                node_write_batches_completed = completed
+                node_write_batches_total = total
+                details.update(
+                    neo4j_node_write_batches_completed=completed,
+                    neo4j_node_write_batches_total=total,
+                )
+            elif stage == "writing_relationships":
+                relationship_write_batches_completed = completed
+                relationship_write_batches_total = total
+                details.update(
+                    neo4j_relationship_write_batches_completed=completed,
+                    neo4j_relationship_write_batches_total=total,
+                )
+            await context.progress_callback("neo4j", "running", details)
+
         node_count, relationship_count = await domains.bd.ingestion.ai.retrieval_index.neo4j_index.service.write_graph(
             nodes,
             edges,
             book_id = state["book_id"],
             agentic_run_id = state["agentic_run_id"],
             revision = state["processed_book_revision"],
+            progress_callback = report_write_progress,
+            cancel_check = context.cancel_check,
+        )
+        await context.progress_callback(
+            "neo4j",
+            "running",
+            {
+                "neo4j_stage": "complete",
+                "neo4j_stage_completed": 1,
+                "neo4j_stage_total": 1,
+                "neo4j_node_write_batches_completed": node_write_batches_completed,
+                "neo4j_node_write_batches_total": node_write_batches_total,
+                "neo4j_relationship_write_batches_completed": relationship_write_batches_completed,
+                "neo4j_relationship_write_batches_total": relationship_write_batches_total,
+            },
         )
         return {
             "neo4j_node_count": node_count,
             "neo4j_relationship_count": relationship_count,
             "neo4j_pages_completed": pages_completed,
+            "neo4j_stage": "complete",
+            "neo4j_stage_completed": 1,
+            "neo4j_stage_total": 1,
+            "neo4j_node_write_batches_completed": node_write_batches_completed,
+            "neo4j_node_write_batches_total": node_write_batches_total,
+            "neo4j_relationship_write_batches_completed": relationship_write_batches_completed,
+            "neo4j_relationship_write_batches_total": relationship_write_batches_total,
         }
 
     return await graphs.rag.service.run_index_node(context, "neo4j", operation)

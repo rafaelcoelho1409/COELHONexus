@@ -1,7 +1,7 @@
 """Full-text indexing of canonical processed-book pages."""
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
 
 import domains
@@ -18,6 +18,7 @@ async def index_pages(
     agentic_run_id: str,
     revision: int,
     progress_callback: Callable[[int, int], Awaitable[None]] | None = None,
+    cancel_check: Callable[[], Awaitable[bool]] | None = None,
 ) -> tuple[str, int]:
     index = infra.elasticsearch.keys.INDEX_BD_INGESTION
     schema = infra.elasticsearch.schemas.BD_INGESTION_MAPPING
@@ -48,12 +49,23 @@ async def index_pages(
         ]
         if progress_callback is not None:
             await progress_callback(0, len(operations))
+
+        async def guarded_operations() -> AsyncIterator[dict[str, Any]]:
+            for operation_index, operation in enumerate(operations):
+                if (
+                    cancel_check is not None
+                    and operation_index % params.ELASTICSEARCH_BULK_SIZE == 0
+                    and await cancel_check()
+                ):
+                    raise RuntimeError("processed-book retrieval indexing was cancelled")
+                yield operation
+
         succeeded = 0
         failed = 0
         processed = 0
         async for result in async_streaming_bulk(
             client,
-            operations,
+            guarded_operations(),
             chunk_size = params.ELASTICSEARCH_BULK_SIZE,
             raise_on_error = False,
             raise_on_exception = False,

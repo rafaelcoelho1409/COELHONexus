@@ -13,14 +13,21 @@ async def run_index_node(
 ) -> dict[str, Any]:
     """Persist node lifecycle and propagate cancellation at safe node boundaries."""
     if await context.cancel_check():
+        await context.progress_callback(node, "cancelled", None)
         raise RuntimeError("processed-book retrieval indexing was cancelled")
     await context.progress_callback(node, "running", None)
     try:
         result = operation()
         if hasattr(result, "__await__"):
             result = await result
+        if await context.cancel_check():
+            raise RuntimeError("processed-book retrieval indexing was cancelled")
     except Exception:
-        await context.progress_callback(node, "failed", None)
+        try:
+            cancelled = await context.cancel_check()
+        except Exception:
+            cancelled = False
+        await context.progress_callback(node, "cancelled" if cancelled else "failed", None)
         raise
     await context.progress_callback(node, "done", result)
     return result

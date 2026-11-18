@@ -22,6 +22,8 @@ import {
   ReactFlow,
 } from "@xyflow/react";
 
+import { ReactFlowNodeInternals } from "@/shared/lib/react-flow-node-internals";
+
 import { QUERY_GRAPH_NODE_HEIGHT as HEIGHT, QUERY_GRAPH_NODE_WIDTH as WIDTH } from "../params";
 import { clipToNode, type Graph, neighborhood, type Point } from "../query";
 
@@ -155,6 +157,7 @@ export function QueryGraphCanvas({
       preventScrolling={false}
       proOptions={{ hideAttribution: false }}
     >
+      <ReactFlowNodeInternals nodeIds={nodes.map((node) => node.id)} revision={graph} />
       <Controls showInteractive={false} />
     </ReactFlow>
   );

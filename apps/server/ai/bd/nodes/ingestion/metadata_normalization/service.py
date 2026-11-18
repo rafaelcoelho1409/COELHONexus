@@ -103,5 +103,4 @@ async def normalize_metadata(
     return {
         "book_metadata": normalized_metadata,
         "book_metadata_sha256": hashlib.sha256(content.encode("utf-8")).hexdigest(),
-        "status": "metadata_normalized",
     }

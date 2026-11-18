@@ -36,6 +36,14 @@ class AgenticNodeStatus(StrEnum):
     FAILED = "failed"
 
 
+class AgenticNodePageProgress(BaseModel):
+    """Page work completed by one graph node, plus its current in-flight count."""
+
+    completed_count: int = Field(default = 0, ge = 0, strict = True)
+    total_count: int = Field(default = 0, ge = 0, strict = True)
+    active_count: int = Field(default = 0, ge = 0, strict = True)
+
+
 class AgenticRunProgress(BaseModel):
     """Small, durable progress snapshot for the live Ingestion view."""
 
@@ -53,6 +61,7 @@ class AgenticRunProgress(BaseModel):
     visual_completed_count: int = Field(default = 0, ge = 0, strict = True)
     visual_converted_count: int = Field(default = 0, ge = 0, strict = True)
     visual_failed_count: int = Field(default = 0, ge = 0, strict = True)
+    node_page_progress: dict[str, AgenticNodePageProgress] = Field(default_factory = dict)
     selected_page_count: int = Field(default = 0, ge = 0, strict = True)
     excluded_page_count: int = Field(default = 0, ge = 0, strict = True)
 
@@ -393,6 +402,7 @@ class ExtractionRequest(BaseModel):
 
 __all__ = [
     "AgenticNodeStatus",
+    "AgenticNodePageProgress",
     "AgenticPageStatus",
     "AgenticRunStatus",
     "AgenticRunProgress",

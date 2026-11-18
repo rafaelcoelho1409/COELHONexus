@@ -7,6 +7,10 @@
   background: transparent;
 }
 
+.ycs-ask-flow .react-flow .react-flow__edges svg {
+  overflow: visible;
+}
+
 .ycs-ask-flow .react-flow__node {
   padding: 0;
   border: 0;

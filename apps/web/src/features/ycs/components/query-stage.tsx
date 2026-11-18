@@ -9,6 +9,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { type JSX, useId, useRef, useState } from "react";
 
 import { apiErrorMessage } from "@/shared/lib/api-error";
+import { ContextBar } from "@/shared/layout/context-bar";
 
 import { fetchQueryLabels, runRawQuery, saveQueryHistory } from "../api";
 import { useQueryAi } from "../hooks/use-query-ai";
@@ -97,71 +98,70 @@ export function QueryStage(): JSX.Element {
   const entry = QUERY_BACKENDS.find((candidate) => candidate.id === backend);
 
   return (
-    <div className="flex flex-col gap-4">
-      <div className="border-b border-border">
-        <BackendTabs backend={backend} onChange={setBackend} />
-      </div>
-
-      <section
-        aria-label="Editor"
-        className="flex flex-col gap-3 rounded-md border border-border bg-card p-3"
-      >
-        <EditorHeader
-          backend={backend}
-          caption={labels.data?.[backend] ?? ""}
-          status={runStatus(current)}
-          running={running}
-          onRun={run}
-          onReset={() => setDraft(backend, QUERY_SCAFFOLDS[backend])}
-          onSchema={() => setSheet("schema")}
-          onHistory={() => setSheet("history")}
-        />
-        <QueryAiBar
-          prompt={prompt}
-          onPrompt={setPrompt}
-          state={ai.state}
-          running={ai.running}
-          onGenerate={generate}
-          onStop={ai.stop}
-          onRun={run}
-        />
-        <div className="flex flex-col gap-1.5">
-          {/* One editor per backend: its undo history never reaches back into another store's query. */}
-          <QueryEditor
-            key={backend}
-            value={drafts[backend]}
-            language={entry?.language ?? "json"}
-            label={EDITOR_LABEL}
-            describedBy={hintId}
-            locked={ai.running && aiBackend === backend}
-            onChange={(text) => setDraft(backend, text)}
+    <>
+      <ContextBar pinned start={<BackendTabs backend={backend} onChange={setBackend} />} />
+      <div className="flex flex-col gap-4">
+        <section
+          aria-label="Editor"
+          className="flex flex-col gap-3 rounded-md border border-border bg-card p-3"
+        >
+          <EditorHeader
+            backend={backend}
+            caption={labels.data?.[backend] ?? ""}
+            status={runStatus(current)}
+            running={running}
+            onRun={run}
+            onReset={() => setDraft(backend, QUERY_SCAFFOLDS[backend])}
+            onSchema={() => setSheet("schema")}
+            onHistory={() => setSheet("history")}
+          />
+          <QueryAiBar
+            prompt={prompt}
+            onPrompt={setPrompt}
+            state={ai.state}
+            running={ai.running}
+            onGenerate={generate}
+            onStop={ai.stop}
             onRun={run}
           />
-          <p id={hintId} className="text-xs text-muted-foreground">
-            Ctrl/Cmd+Enter runs. Tab indents; press Escape, then Tab, to move focus out of the editor.
-          </p>
-        </div>
-      </section>
+          <div className="flex flex-col gap-1.5">
+            {/* One editor per backend: its undo history never reaches back into another store's query. */}
+            <QueryEditor
+              key={backend}
+              value={drafts[backend]}
+              language={entry?.language ?? "json"}
+              label={EDITOR_LABEL}
+              describedBy={hintId}
+              locked={ai.running && aiBackend === backend}
+              onChange={(text) => setDraft(backend, text)}
+              onRun={run}
+            />
+            <p id={hintId} className="text-xs text-muted-foreground">
+              Ctrl/Cmd+Enter runs. Tab indents; press Escape, then Tab, to move focus out of the editor.
+            </p>
+          </div>
+        </section>
 
-      <QueryResults key={`${backend}-${versions[backend]}`} backend={backend} state={current} />
+        <QueryResults key={`${backend}-${versions[backend]}`} backend={backend} state={current} />
 
-      {sheet === "schema" ? (
-        <QuerySchemaSheet
-          backend={backend}
-          onInsert={(query) => setDraft(backend, query)}
-          onClose={() => setSheet(null)}
-        />
-      ) : null}
-      {sheet === "history" ? (
-        <QueryHistorySheet
-          backend={backend}
-          onRestore={(body) => setDraft(backend, body)}
-          onDeleted={() => {
-            lastSaved.current = {};
-          }}
-          onClose={() => setSheet(null)}
-        />
-      ) : null}
-    </div>
+        {sheet === "schema" ? (
+          <QuerySchemaSheet
+            backend={backend}
+            onInsert={(query) => setDraft(backend, query)}
+            onClose={() => setSheet(null)}
+          />
+        ) : null}
+        {sheet === "history" ? (
+          <QueryHistorySheet
+            backend={backend}
+            onRestore={(body) => setDraft(backend, body)}
+            onDeleted={() => {
+              lastSaved.current = {};
+            }}
+            onClose={() => setSheet(null)}
+          />
+        ) : null}
+      </div>
+    </>
   );
 }

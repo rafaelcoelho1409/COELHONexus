@@ -140,9 +140,19 @@ def _initial_progress() -> dict[str, Any]:
         "active_repair_pages": [],
         "classified_pages": [],
         "active_classification_pages": [],
+        "node_page_progress": {},
         "selected_page_count": 0,
         "excluded_page_count": 0,
     }
+
+
+def _clear_node_page_activity(progress: dict[str, Any]) -> None:
+    node_progress = progress.get("node_page_progress")
+    if not isinstance(node_progress, dict):
+        return
+    for item in node_progress.values():
+        if isinstance(item, dict):
+            item["active_count"] = 0
 
 
 def _safe_error_message(error: Exception | str) -> str:
@@ -1027,6 +1037,10 @@ async def _queue_ingestion_ai_resume_unlocked(
         domains.bd.ingestion.ai.schemas.AgenticRunStatus.CANCELLED.value,
     }:
         raise ValueError("only failed or cancelled agentic runs can be resumed")
+    if manifest.get("workflow_version") != domains.bd.ingestion.ai.versions.WORKFLOW_VERSION:
+        raise ValueError(
+            "This run uses an older ingestion graph. Start a fresh Agentic AI run to use the current graph."
+        )
     active_run = await find_active_ingestion_ai_run(
         book_id,
         storage = storage,
@@ -1105,6 +1119,10 @@ async def queue_ingestion_ai_node_replay(
             domains.bd.ingestion.ai.schemas.AgenticRunStatus.CANCELLED.value,
         }:
             raise ValueError("stop the active Agentic AI run before replaying a node")
+        if manifest.get("workflow_version") != domains.bd.ingestion.ai.versions.WORKFLOW_VERSION:
+            raise ValueError(
+                "This run uses an older ingestion graph. Start a fresh Agentic AI run to use the current graph."
+            )
         active_run = await find_active_ingestion_ai_run(
             book_id, storage = storage, exclude_run_id = agentic_run_id,
         )
@@ -1142,11 +1160,10 @@ async def queue_ingestion_ai_node_replay(
                 )
                 node_id = "materialize_processed_book"
 
-        node_index = domains.bd.ingestion.ai.params.GRAPH_NODES.index(node_id)
         node_status = (manifest.get("progress") or {}).get("node_status", {})
         incomplete_predecessors = [
             predecessor
-            for predecessor in domains.bd.ingestion.ai.params.GRAPH_NODES[:node_index]
+            for predecessor in domains.bd.ingestion.ai.params.REPLAY_PREREQUISITES[node_id]
             if node_status.get(predecessor)
             != domains.bd.ingestion.ai.schemas.AgenticNodeStatus.DONE.value
         ]
@@ -1156,7 +1173,7 @@ async def queue_ingestion_ai_node_replay(
                 f"Cannot replay {node_id} yet: {predecessor} has not completed. "
                 f"Resume the run from its saved checkpoint or replay {predecessor}."
             )
-        await infra.postgres.service.checkpoint_before_node(graph, graph_config, node_id)
+        await _checkpoint_before_ingestion_node(graph, graph_config, node_id)
 
         if node_id == "reconcile_contents":
             await domains.bd.ingestion.ai.processed_book.service.clear_manifest_for_replay(
@@ -1167,6 +1184,14 @@ async def queue_ingestion_ai_node_replay(
             )
 
         descendants = set(domains.bd.ingestion.ai.params.REPLAY_DESCENDANTS[node_id])
+        rerun_nodes = set(descendants)
+        if node_id in {"classify_content", "normalize_metadata"}:
+            branch_nodes = {"classify_content", "plan_repairs", "repair_pages", "normalize_metadata"}
+            rerun_nodes.update(
+                branch_node
+                for branch_node in branch_nodes - descendants
+                if node_status.get(branch_node) != domains.bd.ingestion.ai.schemas.AgenticNodeStatus.DONE.value
+            )
         progress = manifest.get("progress") or _initial_progress()
         for node in descendants:
             progress.setdefault("node_status", {})[node] = (
@@ -1191,6 +1216,10 @@ async def queue_ingestion_ai_node_replay(
             progress["visual_completed_count"] = 0
             progress["visual_converted_count"] = 0
             progress["visual_failed_count"] = 0
+        node_page_progress = progress.setdefault("node_page_progress", {})
+        if isinstance(node_page_progress, dict):
+            for node in {node_id, *descendants}:
+                node_page_progress.pop(node, None)
         manifest["progress"] = progress
         manifest["status"] = domains.bd.ingestion.ai.schemas.AgenticRunStatus.QUEUED.value
         manifest["updated_at"] = max(time.time(), manifest["created_at"])
@@ -1201,9 +1230,9 @@ async def queue_ingestion_ai_node_replay(
         prefix = domains.bd.ingestion.storage.keys.agentic_prefix(book_id, agentic_run_id)
         artifacts_by_node = {
             "audit_batch": ("pages/", "assessments/", "patch-proposals/", "book-metadata.json", "quality-report.json", "content-selection/", "visual-enrichment/pages/", "processed-book/"),
-            "classify_content": ("pages/", "patch-proposals/", "book-metadata.json", "quality-report.json", "content-selection/", "visual-enrichment/pages/", "processed-book/"),
-            "plan_repairs": ("pages/", "patch-proposals/", "book-metadata.json", "quality-report.json", "processed-book/", "visual-enrichment/pages/"),
-            "repair_pages": ("pages/", "patch-proposals/", "book-metadata.json", "quality-report.json", "processed-book/", "visual-enrichment/pages/"),
+            "classify_content": ("pages/", "patch-proposals/", "quality-report.json", "content-selection/", "visual-enrichment/pages/", "processed-book/"),
+            "plan_repairs": ("pages/", "patch-proposals/", "quality-report.json", "processed-book/", "visual-enrichment/pages/"),
+            "repair_pages": ("pages/", "patch-proposals/", "quality-report.json", "processed-book/", "visual-enrichment/pages/"),
             "normalize_metadata": ("book-metadata.json", "quality-report.json", "processed-book/", "visual-enrichment/pages/"),
             # Keep validated per-figure responses for reuse; the input fingerprint decides if changed context requires a fresh call.
             "enrich_visuals": ("visual-enrichment/pages/", "processed-book/"),
@@ -1219,11 +1248,15 @@ async def queue_ingestion_ai_node_replay(
         for path in sorted(artifact_paths):
             await storage.delete_prefix(prefix + path)
 
-        await domains.settings.llm_counter.service.retain_nodes(
-            "bd",
-            agentic_run_id,
-            set(domains.bd.ingestion.ai.params.GRAPH_NODES[:node_index]),
-        )
+        retained_counter_nodes = {
+            counter_node
+            for graph_node, counter_nodes in (
+                domains.bd.ingestion.ai.params.REPLAY_LLM_COUNTER_NODES_BY_GRAPH_NODE.items()
+            )
+            if graph_node not in rerun_nodes
+            for counter_node in counter_nodes
+        }
+        await domains.settings.llm_counter.service.retain_nodes("bd", agentic_run_id, retained_counter_nodes)
 
         manifest_key = domains.bd.ingestion.storage.keys.agentic_manifest_key(book_id, agentic_run_id)
         await storage.write(
@@ -1235,6 +1268,27 @@ async def queue_ingestion_ai_node_replay(
         await domains.bd.ingestion.ai.progress.service.clear_cancel(book_id, agentic_run_id)
         await domains.bd.ingestion.ai.progress.service.clear_events(book_id, agentic_run_id)
         return manifest
+
+
+async def _checkpoint_before_ingestion_node(
+    graph: Any,
+    config: dict[str, Any],
+    node_id: str,
+) -> tuple[dict[str, Any], str | None]:
+    """Find a replay point and the parent to resume when the selected node shares a fork checkpoint."""
+    fork_nodes = {"classify_content", "normalize_metadata"}
+    async for snapshot in graph.aget_state_history(config):
+        next_nodes = set(snapshot.next or ())
+        if node_id not in next_nodes:
+            continue
+        if next_nodes == {node_id}:
+            return snapshot.config, None
+        if node_id in fork_nodes and next_nodes == fork_nodes:
+            return snapshot.config, "audit_batch"
+        raise ValueError(
+            f"node {node_id!r} shares a checkpoint with unrelated pending nodes and cannot be replayed independently"
+        )
+    raise ValueError(f"no saved checkpoint schedules ingestion node {node_id!r}")
 
 
 async def mark_ingestion_ai_run_failed(
@@ -1263,6 +1317,8 @@ async def mark_ingestion_ai_run_failed(
     progress = manifest.get("progress") or _initial_progress()
     progress["active_audit_pages"] = []
     progress["active_repair_pages"] = []
+    progress["active_classification_pages"] = []
+    _clear_node_page_activity(progress)
     current_node = progress.get("current_node")
     if not current_node:
         current_node = next(
@@ -1502,7 +1558,9 @@ async def run_ingestion_ai(
         nonlocal progress_state
         kind = event.get("kind")
         if cancel_check is not None and event.get("status") == "running":
-            if kind == "node" or kind in {"page_audit", "page_repair", "content_classification"}:
+            if kind == "node" or kind in {
+                "page_audit", "page_repair", "content_classification", "node_page_progress",
+            }:
                 if await check_cancel_requested():
                     raise asyncio.CancelledError
         should_persist = False
@@ -1598,6 +1656,39 @@ async def run_ingestion_ai(
                     or progress_state["visual_completed_count"] >= progress_state["visual_candidate_count"]
                     or progress_state["visual_completed_count"] % 10 == 0
                 )
+            elif kind == "node_page_progress":
+                node = event.get("node")
+                completed = event.get("completed_count")
+                total = event.get("total_count")
+                active = event.get("active_count")
+                if (
+                    isinstance(node, str)
+                    and node in {"materialize_processed_book", "reconcile_contents", "publish"}
+                    and type(completed) is int
+                    and completed >= 0
+                    and type(total) is int
+                    and total >= completed
+                    and type(active) is int
+                    and active >= 0
+                    and active <= total - completed
+                ):
+                    node_progress = progress_state.setdefault("node_page_progress", {})
+                    previous = node_progress.get(node) if isinstance(node_progress, dict) else None
+                    previous_completed = previous.get("completed_count") if isinstance(previous, dict) else None
+                    previous_total = previous.get("total_count") if isinstance(previous, dict) else None
+                    node_progress[node] = {
+                        "completed_count": completed,
+                        "total_count": total,
+                        "active_count": active,
+                    }
+                    should_persist = (
+                        previous is None
+                        or previous_total != total
+                        or type(previous_completed) is not int
+                        or completed < previous_completed
+                        or completed - previous_completed >= 10
+                        or completed >= total
+                    )
             progress_state = domains.bd.ingestion.ai.schemas.AgenticRunProgress.model_validate(
                 progress_state,
             ).model_dump(mode = "json")
@@ -1750,9 +1841,7 @@ async def run_ingestion_ai(
             if replay_from_node is not None:
                 if replay_from_node not in domains.bd.ingestion.ai.params.GRAPH_NODES:
                     raise ValueError(f"unknown saved ingestion replay node {replay_from_node!r}")
-                replay_config = await infra.postgres.service.checkpoint_before_node(
-                    graph, config, replay_from_node,
-                )
+                replay_config, _ = await _checkpoint_before_ingestion_node(graph, config, replay_from_node)
                 descendants = set(domains.bd.ingestion.ai.params.REPLAY_DESCENDANTS[replay_from_node])
                 reset_state: dict[str, Any] = {}
                 if "audit_batch" in descendants:
@@ -1785,7 +1874,42 @@ async def run_ingestion_ai(
                         contents_status = "",
                     )
                 reset_state["status"] = "running"
-                replay_config = await graph.aupdate_state(replay_config, reset_state)
+                reset_state["replay_from_node"] = replay_from_node
+                node_status = (manifest_fields.get("progress") or {}).get("node_status", {})
+                replay_skip_nodes = [
+                    replay_node
+                    for replay_node in (
+                        "classify_content", "plan_repairs", "repair_pages", "normalize_metadata",
+                    )
+                    if replay_node not in descendants
+                    and node_status.get(replay_node) == domains.bd.ingestion.ai.schemas.AgenticNodeStatus.DONE.value
+                ]
+                reset_state["replay_skip_nodes"] = replay_skip_nodes
+                replay_state_fields = {
+                    "classify_content": (
+                        "content_selection",
+                        "content_selection_key",
+                        "content_selection_sha256",
+                        "content_selection_revision",
+                        "selected_page_count",
+                        "excluded_page_count",
+                    ),
+                    "plan_repairs": ("work_items",),
+                    "repair_pages": ("page_results",),
+                    "normalize_metadata": ("book_metadata", "book_metadata_sha256"),
+                }
+                for skipped_node in reset_state["replay_skip_nodes"]:
+                    for field in replay_state_fields.get(skipped_node, ()):
+                        if field in snapshot.values:
+                            reset_state[field] = snapshot.values[field]
+                if replay_from_node in {"classify_content", "normalize_metadata"}:
+                    replay_config = await graph.aupdate_state(
+                        replay_config,
+                        reset_state,
+                        as_node = "audit_batch",
+                    )
+                else:
+                    replay_config = await graph.aupdate_state(replay_config, reset_state)
                 config = replay_config
                 logger.info(
                     "[bd-agentic] replaying from selected node book_id=%s run_id=%s node=%s",
@@ -1864,6 +1988,7 @@ async def run_ingestion_ai(
             progress_state["active_audit_pages"] = []
             progress_state["active_repair_pages"] = []
             progress_state["active_classification_pages"] = []
+            _clear_node_page_activity(progress_state)
             progress_state["current_node"] = None
             progress_state["node_status"] = {
                 node: (
@@ -1899,6 +2024,8 @@ async def run_ingestion_ai(
             progress_closed = True
             progress_state["active_audit_pages"] = []
             progress_state["active_repair_pages"] = []
+            progress_state["active_classification_pages"] = []
+            _clear_node_page_activity(progress_state)
             current_node = progress_state.get("current_node")
             if not current_node:
                 current_node = next(

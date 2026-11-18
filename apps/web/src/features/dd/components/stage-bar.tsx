@@ -28,6 +28,7 @@ export function StageBar({
 }) {
   return (
     <ContextBar
+      pinned
       start={
         <>
           <FrameworkPicker stage={stage} currentSlug={slug} />

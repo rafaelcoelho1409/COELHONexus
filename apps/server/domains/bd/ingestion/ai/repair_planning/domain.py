@@ -116,4 +116,4 @@ def plan_repairs(state: Mapping[str, Any]) -> dict[str, Any]:
                 "evidence": evidence,
                 "rationale": f"Repair assigned {role} issues on page {page_number}.",
             })
-    return {"work_items": work_items, "status": "planned"}
+    return {"work_items": work_items}

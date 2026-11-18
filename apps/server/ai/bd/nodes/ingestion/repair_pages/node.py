@@ -10,6 +10,8 @@ async def repair_pages(
     graph_state: graphs.ingestion.states.IngestionRunState,
     runtime: Runtime[graphs.ingestion.entities.IngestionDependencies],
 ) -> dict:
+    if "repair_pages" in graph_state.get("replay_skip_nodes", []):
+        return {}
     return await graphs.service.run_node(
         runtime.context.progress_callback,
         "repair_pages",

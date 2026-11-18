@@ -22,6 +22,8 @@ import {
   ReactFlow,
 } from "@xyflow/react";
 
+import { ReactFlowNodeInternals } from "@/shared/lib/react-flow-node-internals";
+
 import {
   type FlowEdgeSpec,
   type FlowStage,
@@ -364,7 +366,9 @@ export function StageFlow({
         zoomOnDoubleClick={false}
         preventScrolling={false}
         proOptions={{ hideAttribution: false }}
-      />
+      >
+        <ReactFlowNodeInternals nodeIds={nodes.map((node) => node.id)} revision={nodes} />
+      </ReactFlow>
     </figure>
   );
 }

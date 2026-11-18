@@ -67,6 +67,7 @@ function DistillStage({ view }: { view: "agents" | "study" }) {
   return (
     <div className="min-w-0">
       <ContextBar
+        pinned
         start={
           <>
             <LibraryPicker
@@ -93,7 +94,7 @@ function DistillStage({ view }: { view: "agents" | "study" }) {
           ) : undefined
         }
       />
-      <div className="mx-auto w-full max-w-6xl p-4">
+      <div className="mx-auto w-full max-w-screen-2xl p-4">
         {bookId ? (
           <DistillBookStage
             key={`${bookId}:${view}`}

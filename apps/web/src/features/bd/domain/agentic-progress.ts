@@ -3,9 +3,9 @@ import type { AgenticProgress, ChapterRange } from "../entities";
 export const AGENTIC_NODES = [
   { id: "audit_batch", label: "Audit pages" },
   { id: "classify_content", label: "Select Distill pages" },
+  { id: "normalize_metadata", label: "Normalize metadata" },
   { id: "plan_repairs", label: "Plan repairs" },
   { id: "repair_pages", label: "Repair pages" },
-  { id: "normalize_metadata", label: "Normalize metadata" },
   { id: "enrich_visuals", label: "Convert source figures" },
   { id: "materialize_processed_book", label: "Build processed pages" },
   { id: "reconcile_contents", label: "Reconcile contents" },
@@ -440,6 +440,20 @@ function agenticNodeProgress(
   total: number,
 ): AgenticNodeProgress | null {
   if (total <= 0 || status === "pending") return null;
+  const pageProgress = progress.node_page_progress?.[nodeId];
+  if (pageProgress && pageProgress.total_count > 0) {
+    return {
+      current: Math.min(pageProgress.completed_count, pageProgress.total_count),
+      total: pageProgress.total_count,
+      label:
+        nodeId === "materialize_processed_book"
+          ? "pages materialized"
+          : nodeId === "reconcile_contents"
+            ? "page headings scanned"
+            : "pages verified",
+      active: pageProgress.active_count,
+    };
+  }
   if (nodeId === "enrich_visuals") {
     const visualTotal = progress.visual_candidate_count ?? 0;
     if (visualTotal <= 0) return null;

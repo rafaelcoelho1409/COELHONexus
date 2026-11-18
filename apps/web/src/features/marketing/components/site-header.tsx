@@ -9,7 +9,7 @@ import { REPO_URL } from "../params";
 export function SiteHeader() {
   return (
     <header className="sticky top-0 z-50 border-b border-border bg-background">
-      <div className="mx-auto flex h-14 max-w-6xl items-center justify-between gap-6 px-4 sm:px-6">
+      <div className="mx-auto flex h-14 max-w-screen-2xl items-center justify-between gap-6 px-4 sm:px-6">
         <a href="#top" className="flex items-center gap-2.5 text-foreground">
           <BrandMark className="size-5 text-primary-text" />
           {/* The wordmark gives way to the app links on a phone; it stays the link's accessible name. */}

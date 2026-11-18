@@ -8,7 +8,7 @@ import { PlatformPanel } from "./platform-panel";
 export function Hero() {
   return (
     <section id="top" aria-labelledby="hero-title" className="border-b border-border">
-      <div className="mx-auto grid max-w-6xl grid-cols-1 gap-12 px-4 py-16 sm:px-6 md:py-24 lg:grid-cols-[1.15fr_1fr] lg:items-center">
+      <div className="mx-auto grid max-w-screen-2xl grid-cols-1 gap-12 px-4 py-16 sm:px-6 md:py-24 lg:grid-cols-[1.15fr_1fr] lg:items-center">
         <div>
           <p className="mono-label">Docs Distiller · YouTube Content Search · Book Distiller</p>
           <h1

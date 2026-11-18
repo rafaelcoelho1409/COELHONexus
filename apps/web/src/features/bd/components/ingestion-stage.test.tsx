@@ -14,7 +14,7 @@ import { QueryProvider } from "@/shared/providers/query-provider";
 
 import type { AgenticProgress } from "../entities";
 import { agenticRunStatusSchema } from "../entities";
-import { AUTO_CHAIN_STORAGE_KEY, LAST_PAGE_STORAGE_PREFIX, READER_LAYOUT_STORAGE_KEY } from "../params";
+import { LAST_PAGE_STORAGE_PREFIX, READER_LAYOUT_STORAGE_KEY } from "../params";
 import {
   agenticRun,
   BOOK_ID,
@@ -46,7 +46,6 @@ const server = setupServer();
 beforeAll(() => server.listen({ onUnhandledFrame: "error" }));
 beforeEach(() => {
   push.mockClear();
-  window.localStorage.removeItem(AUTO_CHAIN_STORAGE_KEY);
   window.localStorage.removeItem(READER_LAYOUT_STORAGE_KEY);
   window.localStorage.removeItem(`${LAST_PAGE_STORAGE_PREFIX}${BOOK_ID}`);
   client.setConfig({ baseUrl: ORIGIN });
@@ -106,7 +105,7 @@ function pdf(name = "book.pdf", size?: number): File {
 }
 
 describe("The third navbar", () => {
-  it("holds the library picker, upload, hint and auto-chain choice on the left and the views on the right", async () => {
+  it("holds the library picker and upload on the left and the views on the right", async () => {
     serveLibrary([bookRow({ status: "done", n_pages: 1, pages_done: 1 })]);
     serveBook(snapshot({ status: "done", n_pages: 1, pages: [pageEntry(1)] }));
     renderStage(BOOK_ID);
@@ -116,17 +115,15 @@ describe("The third navbar", () => {
     const picker = screen.getByRole("button", { name: /Library|Book/ });
     const upload = screen.getByText("Upload book");
     const hint = screen.getByText(/PDF or EPUB · up to 300 MB/);
-    const autoChain = screen.getByLabelText("Run Agentic AI after extraction");
-
     const bar = pipeline.closest("div.border-b");
     expect(bar).not.toBeNull();
-    for (const control of [picker, upload, hint, autoChain, materials]) expect(bar).toContainElement(control);
+    for (const control of [picker, upload, hint, materials]) expect(bar).toContainElement(control);
+    expect(screen.queryByLabelText("Run Agentic AI after extraction")).not.toBeInTheDocument();
     const precedes = (first: Element, second: Element) =>
       Boolean(first.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING);
     expect(precedes(picker, upload)).toBe(true);
     expect(precedes(upload, hint)).toBe(true);
-    expect(precedes(hint, autoChain)).toBe(true);
-    expect(precedes(autoChain, pipeline)).toBe(true);
+    expect(precedes(hint, pipeline)).toBe(true);
     expect(precedes(pipeline, materials)).toBe(true);
   });
 
@@ -323,14 +320,6 @@ describe("Upload", () => {
       expect(push).toHaveBeenCalledWith(`/bd/ingestion?book=${BOOK_ID}`, { scroll: false }),
     );
     expect(await screen.findByText("Extraction queued.")).toBeInTheDocument();
-  });
-
-  it("persists the automatic chain preference for future runs", async () => {
-    serveLibrary();
-    renderStage();
-
-    await userEvent.click(screen.getByRole("checkbox", { name: "Run Agentic AI after extraction" }));
-    expect(window.localStorage.getItem(AUTO_CHAIN_STORAGE_KEY)).toBe("true");
   });
 
   it("opens a cached book and says it was already extracted", async () => {
@@ -1262,10 +1251,9 @@ describe("A book being extracted", () => {
     );
     renderStage(BOOK_ID);
 
-    await userEvent.click(screen.getByRole("checkbox", { name: "Run Agentic AI after extraction" }));
     await userEvent.click(await screen.findByRole("button", { name: BOOK_TITLE }));
     await userEvent.click(screen.getByRole("button", { name: `Refresh ${BOOK_TITLE}` }));
-    await waitFor(() => expect(runs).toEqual(["?refresh=true&auto_chain=true"]));
+    await waitFor(() => expect(runs).toEqual(["?refresh=true"]));
     expect(push).toHaveBeenCalledWith(`/bd/ingestion?book=${BOOK_ID}`, { scroll: false });
     expect(await screen.findByText("Extraction queued.")).toBeInTheDocument();
   });

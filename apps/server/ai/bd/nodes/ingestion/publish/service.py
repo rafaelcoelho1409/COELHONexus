@@ -20,6 +20,7 @@ PageReader = Callable[[str], str | None | Awaitable[str | None]]
 async def verify_pages(
     state: graphs.ingestion.states.IngestionRunState,
     read_page: PageReader,
+    progress_callback: graphs.service.ProgressReporter | None = None,
 ) -> dict[str, object]:
     """Re-read every delivered page's source and output and check them against each other, outside any agent."""
     source_keys = {ref["page"]: ref["source_key"] for ref in state["page_refs"]}
@@ -34,23 +35,59 @@ async def verify_pages(
             raise ValueError(f"{key} could not be read as Markdown text")
         return text
 
-    async def check(page: dict[str, Any]) -> tuple[int, bool, int]:
-        content_key = page.get("enriched_key") or page["normalized_key"]
-        content_sha256 = page.get("enriched_sha256") or page["normalized_sha256"]
-        async with semaphore:
-            source, normalized = await asyncio.gather(
-                read(source_keys[page["page"]]), read(content_key),
-            )
-        return (
-            page["page"],
-            publication.domain.sha256_matches(normalized, content_sha256),
-            publication.domain.lost_alphanumeric(source, normalized),
-        )
-
     delivered = [
         page for page in state["page_results"]
         if page.get("delivery_disposition", "include") != "discarded_blank"
     ]
+    total = len(delivered)
+    completed = 0
+    active = 0
+    progress_lock = asyncio.Lock()
+
+    async def update_progress(*, active_delta: int, completed_delta: int = 0) -> None:
+        nonlocal active, completed
+        async with progress_lock:
+            next_active = active + active_delta
+            next_completed = completed + completed_delta
+            await graphs.service.report_node_page_progress(
+                progress_callback,
+                "publish",
+                next_completed,
+                total,
+                next_active,
+            )
+            active = next_active
+            completed = next_completed
+
+    if progress_callback is not None and total > 0:
+        await graphs.service.report_node_page_progress(progress_callback, "publish", 0, total, 0)
+
+    async def check(page: dict[str, Any]) -> tuple[int, bool, int]:
+        content_key = page.get("enriched_key") or page["normalized_key"]
+        content_sha256 = page.get("enriched_sha256") or page["normalized_sha256"]
+        async with semaphore:
+            started = False
+            succeeded = False
+            try:
+                await update_progress(active_delta = 1)
+                started = True
+                source, normalized = await asyncio.gather(
+                    read(source_keys[page["page"]]), read(content_key),
+                )
+                result = (
+                    page["page"],
+                    publication.domain.sha256_matches(normalized, content_sha256),
+                    publication.domain.lost_alphanumeric(source, normalized),
+                )
+                succeeded = True
+                return result
+            finally:
+                if started:
+                    await update_progress(
+                        active_delta = -1,
+                        completed_delta = 1 if succeeded else 0,
+                    )
+
     rows = await asyncio.gather(*(check(page) for page in delivered))
     return domains.bd.ingestion.ai.publication.domain.summarize(
         len(rows),
@@ -63,6 +100,7 @@ async def publish(
     state: graphs.ingestion.states.IngestionRunState,
     write_artifact: ArtifactWriter,
     read_page: PageReader | None = None,
+    progress_callback: graphs.service.ProgressReporter | None = None,
 ) -> dict:
     """Write the quality report and the completed run manifest as the final object write."""
     page_results = state.get("page_results")
@@ -83,7 +121,10 @@ async def publish(
     if not state.get("processed_book_key") or not state.get("processed_book_sha256"):
         raise ValueError("the processed-book manifest must be persisted before run publication")
 
-    verification = await verify_pages(state, read_page) if read_page is not None else None
+    verification = (
+        await verify_pages(state, read_page, progress_callback)
+        if read_page is not None else None
+    )
     if verification is not None and verification["integrity_failure_pages"]:
         raise ValueError(
             f"pages {verification['integrity_failure_pages']} do not match the hash recorded when they were written"

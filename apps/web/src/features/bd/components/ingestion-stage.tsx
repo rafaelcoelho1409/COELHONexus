@@ -8,7 +8,6 @@ import { useState } from "react";
 
 import { ContextBar } from "@/shared/layout/context-bar";
 
-import { useAutoChainPreference } from "../hooks/use-auto-chain-preference";
 import { useLibrary } from "../hooks/use-bd-data";
 import { BOOK_PARAM, type BookViewId, bookHref, bookPagesHref, PAGE_PARAM, parsePageParam } from "../params";
 import { BookView } from "./book-view";
@@ -23,7 +22,7 @@ export function IngestionStage({ view = "pipeline" }: { view?: BookViewId }) {
   const [refreshKey, setRefreshKey] = useState(0);
   const [pageControlsHost, setPageControlsHost] = useState<HTMLDivElement | null>(null);
   const [uploadProgressHost, setUploadProgressHost] = useState<HTMLDivElement | null>(null);
-  const [autoChain, setAutoChain] = useAutoChainPreference();
+  const autoChain = false;
   const library = useLibrary();
   const selectedBook = library.data?.find((book) => book.book_id === bookId);
   const selectedTitle = selectedBook?.title.trim() || selectedBook?.filename;
@@ -38,6 +37,7 @@ export function IngestionStage({ view = "pipeline" }: { view?: BookViewId }) {
   return (
     <div className={view === "materials" ? "flex min-h-0 min-w-0 flex-1 flex-col" : "min-w-0"}>
       <ContextBar
+        pinned
         start={
           <>
             <LibraryPicker
@@ -51,18 +51,7 @@ export function IngestionStage({ view = "pipeline" }: { view?: BookViewId }) {
               <div ref={setPageControlsHost} className="flex min-w-0 flex-wrap items-center gap-1.5" />
             ) : null}
             {view !== "materials" ? (
-              <>
-                <UploadDropzone onOpen={open} autoChain={autoChain} progressHost={uploadProgressHost} />
-                <label className="flex min-h-9 items-center gap-2 text-xs text-muted-foreground">
-                  <input
-                    type="checkbox"
-                    checked={autoChain}
-                    onChange={(event) => setAutoChain(event.currentTarget.checked)}
-                    className="size-4 accent-primary"
-                  />
-                  Run Agentic AI after extraction
-                </label>
-              </>
+              <UploadDropzone onOpen={open} autoChain={autoChain} progressHost={uploadProgressHost} />
             ) : null}
           </>
         }

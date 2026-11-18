@@ -8,6 +8,10 @@
   background: transparent;
 }
 
+.stage-flow .react-flow .react-flow__edges svg {
+  overflow: visible;
+}
+
 /* Nodes are plain buttons we draw ourselves; the wrapper must not add a frame, shadow or focus box. */
 .stage-flow .react-flow__node {
   padding: 0;

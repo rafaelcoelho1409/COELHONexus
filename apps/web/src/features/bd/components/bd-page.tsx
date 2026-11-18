@@ -23,7 +23,7 @@ function BookDistillerWorkspace({ view }: { view: "pipeline" | "materials" }) {
         className={
           view === "materials"
             ? "bd-pages-workspace flex min-h-0 flex-1 flex-col"
-            : "mx-auto w-full max-w-6xl p-4"
+            : "mx-auto w-full max-w-screen-2xl p-4"
         }
       >
         <Suspense fallback={<p className="text-sm text-muted-foreground">Loading…</p>}>

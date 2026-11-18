@@ -19,6 +19,7 @@ PageReader = Callable[[str], str | None | Awaitable[str | None]]
 ArtifactWriter = Callable[[str, str, str], Any]
 ArtifactExists = Callable[[str], Awaitable[bool]]
 CancelCheck = Callable[[], Awaitable[bool]]
+PageProgressReporter = Callable[[int, int, int], Awaitable[None]]
 
 
 def _json(value: Any) -> str:
@@ -49,6 +50,7 @@ async def materialize_processed_book(
     read_page: PageReader,
     write_artifact: ArtifactWriter,
     artifact_exists: ArtifactExists,
+    progress_callback: PageProgressReporter | None = None,
 ) -> dict[str, Any]:
     """Persist one immutable candidate page set with dense numbers and raw-source references."""
     selection_key = state.get("content_selection_key")
@@ -80,6 +82,8 @@ async def materialize_processed_book(
             or candidate.selection_sha256 != selection_sha256
         ):
             raise ValueError("the saved processed-book candidate does not match this graph run")
+        if progress_callback is not None:
+            await progress_callback(len(candidate.pages), len(candidate.pages), 0)
         return {
             "processed_book_candidate_key": candidate_key,
             "processed_page_count": len(candidate.pages),
@@ -121,6 +125,7 @@ async def materialize_processed_book(
         selection_sha256,
         qa_pages,
         _CallbackReader(read_page),
+        progress_callback,
     )
     content = candidate_json(candidate)
     result = write_artifact(candidate_key, content, "application/json")
@@ -136,23 +141,54 @@ async def materialize_processed_book(
 async def _candidate_headings(
     candidate: schemas.ProcessedBookCandidate,
     read_page: PageReader,
+    progress_callback: PageProgressReporter | None = None,
 ) -> list[dict[str, Any]]:
     """Read selected-page headings, rebuilding legacy immutable candidates when needed."""
     if candidate.heading_candidates_built:
         return [item.model_dump(mode="json") for item in candidate.heading_candidates]
 
     semaphore = asyncio.Semaphore(domains.bd.ingestion.ai.params.PROCESSED_BOOK_READ_CONCURRENCY)
+    total = len(candidate.pages)
+    completed = 0
+    active = 0
+    progress_lock = asyncio.Lock()
+
+    async def update_progress(*, active_delta: int, completed_delta: int = 0) -> None:
+        nonlocal active, completed
+        async with progress_lock:
+            next_active = active + active_delta
+            next_completed = completed + completed_delta
+            if progress_callback is not None:
+                await progress_callback(next_completed, total, next_active)
+            active = next_active
+            completed = next_completed
+
+    if progress_callback is not None:
+        await progress_callback(0, total, 0)
 
     async def page_evidence_for(page: Any) -> dict[str, Any]:
         async with semaphore:
-            content = await _read_callback(read_page, page.content_key)
-        return {
-            "source_page_number": page.source_page_number,
-            "section_path": page.section_path,
-            "role": page.role,
-            "headings": domain.markdown_headings(content),
-            "evidence": domain.heading_evidence(content, page.section_path),
-        }
+            started = False
+            succeeded = False
+            try:
+                await update_progress(active_delta = 1)
+                started = True
+                content = await _read_callback(read_page, page.content_key)
+                result = {
+                    "source_page_number": page.source_page_number,
+                    "section_path": page.section_path,
+                    "role": page.role,
+                    "headings": domain.markdown_headings(content),
+                    "evidence": domain.heading_evidence(content, page.section_path),
+                }
+                succeeded = True
+                return result
+            finally:
+                if started:
+                    await update_progress(
+                        active_delta = -1,
+                        completed_delta = 1 if succeeded else 0,
+                    )
 
     page_evidence = await asyncio.gather(*(page_evidence_for(page) for page in candidate.pages))
     return domain.canonical_heading_candidates(page_evidence)
@@ -164,6 +200,7 @@ async def reconcile_contents(
     write_artifact: ArtifactWriter,
     artifact_exists: ArtifactExists,
     cancel_check: CancelCheck | None = None,
+    progress_callback: PageProgressReporter | None = None,
 ) -> dict[str, Any]:
     """Build canonical contents from selected-page headings and publish the processed-book manifest."""
     candidate_key = state.get("processed_book_candidate_key")
@@ -182,7 +219,7 @@ async def reconcile_contents(
 
     if cancel_check is not None and await cancel_check():
         raise asyncio.CancelledError
-    heading_candidates = await _candidate_headings(candidate, read_page)
+    heading_candidates = await _candidate_headings(candidate, read_page, progress_callback)
     contents, contents_status = domain.build_canonical_contents(
         heading_candidates,
         [page.model_dump(mode="json") for page in candidate.pages],
@@ -244,6 +281,7 @@ async def make_candidate(
     selection_sha256: str,
     qa_pages: list[Any],
     storage: infra.minio.service.MinIOStorage,
+    progress_callback: PageProgressReporter | None = None,
 ) -> schemas.ProcessedBookCandidate:
     """Build graph input from included, visually enriched pages and source contents evidence."""
     if (
@@ -276,6 +314,24 @@ async def make_candidate(
     if not selected:
         raise ValueError("the processed book must retain at least one nonblank page")
 
+    total = len(selected)
+    completed = 0
+    active = 0
+    progress_lock = asyncio.Lock()
+
+    async def update_progress(*, active_delta: int, completed_delta: int = 0) -> None:
+        nonlocal active, completed
+        async with progress_lock:
+            next_active = active + active_delta
+            next_completed = completed + completed_delta
+            if progress_callback is not None:
+                await progress_callback(next_completed, total, next_active)
+            active = next_active
+            completed = next_completed
+
+    if progress_callback is not None:
+        await progress_callback(0, total, 0)
+
     semaphore = asyncio.Semaphore(domains.bd.ingestion.ai.params.PROCESSED_BOOK_READ_CONCURRENCY)
 
     async def build_page(processed_number: int, selected_page: Any) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -292,37 +348,51 @@ async def make_candidate(
         content_sha256 = _page_value(qa_page, "enriched_sha256") or _page_value(qa_page, "normalized_sha256")
         if not isinstance(content_key, str) or not isinstance(content_sha256, str):
             raise ValueError(f"selected source page {selected_page.page_number} has incomplete processed references")
-        async with semaphore:
-            content = await storage.read_text(content_key)
-        actual_sha256 = _digest(content)
-        if actual_sha256 != content_sha256:
-            raise ValueError(f"processed source page {selected_page.page_number} failed its integrity check")
         source = source_by_page.get(selected_page.page_number, {})
         source_key = _page_value(qa_page, "source_key") or source.get("key")
         source_sha256 = _page_value(qa_page, "source_sha256") or source.get("source_sha256")
         if not isinstance(source_key, str) or not isinstance(source_sha256, str):
             raise ValueError(f"selected source page {selected_page.page_number} has incomplete raw-source references")
-        section_path = source.get("section_path", [])
-        if not isinstance(section_path, list) or not all(isinstance(item, str) for item in section_path):
-            section_path = []
-        page = {
-            "processed_page_number": processed_number,
-            "source_page_number": selected_page.page_number,
-            "source_key": source_key,
-            "source_sha256": source_sha256,
-            "content_key": content_key,
-            "content_sha256": actual_sha256,
-            "section_path": section_path,
-            "role": selected_page.role,
-        }
-        page_evidence = {
-            "source_page_number": selected_page.page_number,
-            "evidence": domain.heading_evidence(content, section_path),
-            "headings": domain.markdown_headings(content),
-            "section_path": section_path,
-            "role": selected_page.role,
-        }
-        return page, page_evidence
+        async with semaphore:
+            started = False
+            succeeded = False
+            try:
+                await update_progress(active_delta = 1)
+                started = True
+                content = await storage.read_text(content_key)
+                actual_sha256 = _digest(content)
+                if actual_sha256 != content_sha256:
+                    raise ValueError(
+                        f"processed source page {selected_page.page_number} failed its integrity check"
+                    )
+                section_path = source.get("section_path", [])
+                if not isinstance(section_path, list) or not all(isinstance(item, str) for item in section_path):
+                    section_path = []
+                page = {
+                    "processed_page_number": processed_number,
+                    "source_page_number": selected_page.page_number,
+                    "source_key": source_key,
+                    "source_sha256": source_sha256,
+                    "content_key": content_key,
+                    "content_sha256": actual_sha256,
+                    "section_path": section_path,
+                    "role": selected_page.role,
+                }
+                page_evidence = {
+                    "source_page_number": selected_page.page_number,
+                    "evidence": domain.heading_evidence(content, section_path),
+                    "headings": domain.markdown_headings(content),
+                    "section_path": section_path,
+                    "role": selected_page.role,
+                }
+                succeeded = True
+                return page, page_evidence
+            finally:
+                if started:
+                    await update_progress(
+                        active_delta = -1,
+                        completed_delta = 1 if succeeded else 0,
+                    )
 
     built_pages = await asyncio.gather(*(
         build_page(processed_number, selected_page)

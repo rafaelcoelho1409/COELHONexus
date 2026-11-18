@@ -7,6 +7,10 @@
   background: transparent;
 }
 
+.ycs-ingestion-flow .react-flow .react-flow__edges svg {
+  overflow: visible;
+}
+
 .ycs-ingestion-flow .react-flow__node {
   padding: 0;
   border: 0;

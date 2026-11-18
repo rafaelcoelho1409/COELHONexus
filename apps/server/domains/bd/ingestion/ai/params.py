@@ -45,15 +45,56 @@ AUTO_RUN_ID_PREFIX = "auto-"
 GRAPH_NODES = (
     "audit_batch",
     "classify_content",
+    "normalize_metadata",
     "plan_repairs",
     "repair_pages",
-    "normalize_metadata",
     "enrich_visuals",
     "materialize_processed_book",
     "reconcile_contents",
     "publish",
 )
+REPLAY_PREREQUISITES = {
+    "audit_batch": (),
+    "classify_content": ("audit_batch",),
+    "normalize_metadata": ("audit_batch",),
+    "plan_repairs": ("classify_content", "normalize_metadata"),
+    "repair_pages": ("plan_repairs", "normalize_metadata"),
+    "enrich_visuals": ("repair_pages", "normalize_metadata"),
+    "materialize_processed_book": ("enrich_visuals",),
+    "reconcile_contents": ("materialize_processed_book",),
+    "publish": ("reconcile_contents",),
+}
 REPLAY_DESCENDANTS = {
-    node: GRAPH_NODES[index:]
-    for index, node in enumerate(GRAPH_NODES)
+    "audit_batch": GRAPH_NODES,
+    "classify_content": (
+        "classify_content", "plan_repairs", "repair_pages", "enrich_visuals", "materialize_processed_book",
+        "reconcile_contents", "publish",
+    ),
+    "normalize_metadata": (
+        "normalize_metadata", "enrich_visuals", "materialize_processed_book", "reconcile_contents", "publish",
+    ),
+    "plan_repairs": (
+        "plan_repairs", "repair_pages", "enrich_visuals", "materialize_processed_book", "reconcile_contents",
+        "publish",
+    ),
+    "repair_pages": (
+        "repair_pages", "enrich_visuals", "materialize_processed_book", "reconcile_contents", "publish",
+    ),
+    "enrich_visuals": (
+        "enrich_visuals", "materialize_processed_book", "reconcile_contents", "publish",
+    ),
+    "materialize_processed_book": ("materialize_processed_book", "reconcile_contents", "publish"),
+    "reconcile_contents": ("reconcile_contents", "publish"),
+    "publish": ("publish",),
+}
+REPLAY_LLM_COUNTER_NODES_BY_GRAPH_NODE = {
+    "audit_batch": {"finding_verifier", "page_auditor"},
+    "classify_content": {"content_classifier"},
+    "normalize_metadata": {"metadata_normalizer"},
+    "plan_repairs": set(),
+    "repair_pages": {"text_patch_verifier", "text_repair", "structure_repair"},
+    "enrich_visuals": {"visual_extractor"},
+    "materialize_processed_book": set(),
+    "reconcile_contents": set(),
+    "publish": set(),
 }
