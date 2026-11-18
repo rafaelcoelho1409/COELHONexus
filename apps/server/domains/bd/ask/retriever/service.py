@@ -11,7 +11,6 @@ import infra
 
 from . import params
 
-
 _WORD_RE = re.compile(r"[\w'-]{2,}", re.UNICODE)
 
 
@@ -109,7 +108,7 @@ async def _retrieve_ingestion_full_text(book_id: str, query: str, index: dict[st
     profile_fingerprint = index.get("qdrant_index_profile_fingerprint")
     if profile_fingerprint:
         filters.append({"term": {"index_profile_fingerprint": profile_fingerprint}})
-    index_domain = domains.bd.rag.elasticsearch_index.domain
+    index_domain = domains.bd.rag.source.indexes.elasticsearch_index.domain
     filters.append({"term": {"book_fingerprint": index_domain.book_fingerprint(book_id)}})
     client = infra.elasticsearch.service.new_es()
     try:
@@ -314,7 +313,7 @@ async def retrieve(book_id: str, run_id: str, query: str) -> list[dict[str, Any]
     query = query.strip()[:params.MAX_QUERY_CHARS]
     if not query:
         return []
-    ingestion_index = await domains.bd.rag.service.read_current_index(book_id)
+    ingestion_index = await domains.bd.rag.ai.runs.service.read_current_index(book_id)
     if ingestion_index is None:
         raise ValueError("The book has no completed Ingestion retrieval index")
     if ingestion_index.get("agentic_run_id") != run_id:

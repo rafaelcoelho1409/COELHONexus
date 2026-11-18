@@ -3,17 +3,17 @@
 Ingestion is the first stage: `ingestion.source.runtime.dispatch.service.run(book_id, run_id)` extracts the book page by page.
 Cross-module references go through the dotted `domains.*` path (docs/CODE-CONVENTIONS.md §8)."""
 from __future__ import annotations
-from typing import TYPE_CHECKING
+
 import importlib
+from typing import TYPE_CHECKING
 
-from . import ask, distill, ingestion, search
-
+from . import ask, distill, ingestion
 
 if TYPE_CHECKING:
     from . import rag
 
 
-__all__ = ["ask", "distill", "ingestion", "rag", "search"]
+__all__ = ["ask", "distill", "ingestion", "rag"]
 
 
 def __getattr__(name: str):

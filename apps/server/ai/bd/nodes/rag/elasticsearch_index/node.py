@@ -15,7 +15,7 @@ async def index_pages(
     context = runtime.context
 
     async def operation() -> dict[str, Any]:
-        rows = await domains.bd.rag.service.read_sources(state, context.storage)
+        rows = await domains.bd.rag.source.storage.service.read_sources(state, context.storage)
 
         async def report_pages(completed: int, _total: int) -> None:
             await context.progress_callback(
@@ -24,7 +24,7 @@ async def index_pages(
                 {"elasticsearch_pages_completed": completed},
             )
 
-        index, count, passage_index, passage_count = await domains.bd.rag.elasticsearch_index.service.index_pages(
+        index, count, passage_index, passage_count = await domains.bd.rag.source.indexes.elasticsearch_index.service.index_pages(
             rows,
             book_id = state["book_id"],
             agentic_run_id = state["agentic_run_id"],

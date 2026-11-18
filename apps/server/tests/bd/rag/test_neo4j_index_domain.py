@@ -7,7 +7,7 @@ import domains
 
 class Neo4jIndexDomainTests(unittest.TestCase):
     def test_relationship_types_are_open_but_safe_for_cypher(self) -> None:
-        normalize = domains.bd.rag.neo4j_index.domain.neo4j_relationship_type
+        normalize = domains.bd.rag.source.indexes.neo4j_index.domain.neo4j_relationship_type
 
         self.assertEqual(normalize("mentions"), "BD_REL_MENTIONS")
         self.assertEqual(normalize("supports / leads to"), "BD_REL_SUPPORTS_LEADS_TO")
@@ -18,7 +18,7 @@ class Neo4jIndexDomainTests(unittest.TestCase):
         self.assertLessEqual(len(normalize("predicate " * 40)), 100)
 
     def test_supported_relationship_gets_addressable_page_evidence(self) -> None:
-        domain = domains.bd.rag.neo4j_index.domain
+        domain = domains.bd.rag.source.indexes.neo4j_index.domain
         row = self._row("Ada designed the Analytical Engine.")
 
         nodes, edges = domain.build_graph(
@@ -54,7 +54,7 @@ class Neo4jIndexDomainTests(unittest.TestCase):
         self.assertTrue(any(edge.kind == "evidence_target" for edge in edges))
 
     def test_relationship_without_sentence_local_source_support_is_dropped(self) -> None:
-        domain = domains.bd.rag.neo4j_index.domain
+        domain = domains.bd.rag.source.indexes.neo4j_index.domain
         row = self._row("Ada Lovelace was a mathematician. The Analytical Engine was a machine.")
 
         nodes, edges = domain.build_graph(
@@ -83,7 +83,7 @@ class Neo4jIndexDomainTests(unittest.TestCase):
         self.assertFalse(any(edge.kind == "DESIGNS" for edge in edges))
 
     def test_same_name_with_different_types_remains_distinct_and_resolves_by_type(self) -> None:
-        domain = domains.bd.rag.neo4j_index.domain
+        domain = domains.bd.rag.source.indexes.neo4j_index.domain
         row = self._row("Mercury orbits the Sun. Mercury is also a chemical element.")
 
         nodes, edges = domain.build_graph(
@@ -116,7 +116,7 @@ class Neo4jIndexDomainTests(unittest.TestCase):
         self.assertEqual(orbit_edge.source_id, planet_id)
 
     def test_ambiguous_name_without_endpoint_type_is_not_guessed(self) -> None:
-        domain = domains.bd.rag.neo4j_index.domain
+        domain = domains.bd.rag.source.indexes.neo4j_index.domain
         row = self._row("Mercury orbits the Sun. Mercury is also a chemical element.")
 
         _, edges = domain.build_graph(

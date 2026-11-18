@@ -24,7 +24,7 @@ Q_BD = domain.scoped_queue("bd", params.ENVIRONMENT)
 TASK_INCLUDE = [
     "domains.bd.ingestion.source.task",
     "domains.bd.ingestion.ai.task",
-    "domains.bd.rag.task",
+    "domains.bd.rag.ai.task",
     "domains.bd.distill.task",
     "domains.dd.pages.task",
     "domains.dd.pipeline.ai.task",
@@ -41,7 +41,7 @@ TASK_ROUTES = {
     # The source module moved, while its explicitly registered task ID stays stable for queued deliveries.
     "domains.bd.ingestion.task.*": {"queue": Q_BD},
     "domains.bd.ingestion.ai.task.*": {"queue": Q_BD},
-    "domains.bd.rag.task.*": {"queue": Q_BD},
+    "domains.bd.rag.ai.task.*": {"queue": Q_BD},
     # The independent RAG task retains its existing ID for queued deliveries and manifests.
     "domains.bd.ingestion.ai.retrieval_index.task.*": {"queue": Q_BD},
     "domains.bd.distill.task.*": {"queue": Q_BD},

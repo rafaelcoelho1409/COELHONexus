@@ -2,10 +2,8 @@
 from __future__ import annotations
 
 import asyncio
-
 from dataclasses import dataclass, field
 from typing import Any, Literal
-
 
 SearchStatus = Literal["unavailable", "unsupported_provider", "no_results", "complete"]
 

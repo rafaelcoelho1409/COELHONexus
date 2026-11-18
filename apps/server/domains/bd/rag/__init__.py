@@ -1,30 +1,19 @@
-"""Book Distiller RAG indexes for published processed-book revisions."""
-from . import (
-    params,
-    chunking,
-    domain,
-    qdrant_index,
-    elasticsearch_index,
-    keys,
-    neo4j_index,
-    pin_sources,
-    publish_retrieval_index,
-    schemas,
-    service,
-    versions,
-)
+"""Book Distiller RAG indexing, separated into workflow and data access."""
+from __future__ import annotations
 
-__all__ = [
-    "domain",
-    "chunking",
-    "params",
-    "qdrant_index",
-    "elasticsearch_index",
-    "keys",
-    "neo4j_index",
-    "pin_sources",
-    "publish_retrieval_index",
-    "schemas",
-    "service",
-    "versions",
-]
+import importlib
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from . import ai, source
+
+
+__all__ = ["ai", "source"]
+
+
+def __getattr__(name: str):
+    if name in __all__:
+        module = importlib.import_module(f"{__name__}.{name}")
+        globals()[name] = module
+        return module
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

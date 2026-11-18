@@ -1,7 +1,7 @@
 """Expose the configured Search MCP connection as a bounded DeepAgents tool."""
 from __future__ import annotations
 import domains
-from . import entities
+from . import domain, entities, params
 
 import asyncio
 import json
@@ -54,7 +54,7 @@ async def _resolve_remote_search(session: entities.SearchSession) -> Any | None:
         })
         tools = await asyncio.wait_for(
             client.get_tools(),
-            timeout = domains.bd.search.params.SEARCH_TIMEOUT_S,
+            timeout = params.SEARCH_TIMEOUT_S,
         )
     except asyncio.CancelledError:
         raise
@@ -96,7 +96,7 @@ async def search_mcp_web(query: str, runtime: ToolRuntime[entities.SearchSession
         cached = session.query_results.get(normalized_query.casefold())
         if cached is not None:
             return json.dumps({"status": session.status, "query": normalized_query, "sources": cached})
-        if len(session.queries) >= domains.bd.search.params.MAX_QUERIES:
+        if len(session.queries) >= params.MAX_QUERIES:
             return json.dumps({"status": "query_limit", "sources": []})
 
         session.queries.append(normalized_query)
@@ -109,7 +109,7 @@ async def search_mcp_web(query: str, runtime: ToolRuntime[entities.SearchSession
                 "sources": [],
             })
 
-        arguments = domains.bd.search.domain.search_arguments(
+        arguments = domain.search_arguments(
             remote_tool,
             normalized_query,
             session.run_id,
@@ -127,7 +127,7 @@ async def search_mcp_web(query: str, runtime: ToolRuntime[entities.SearchSession
         try:
             raw = await asyncio.wait_for(
                 remote_tool.ainvoke(arguments),
-                timeout = domains.bd.search.params.SEARCH_TIMEOUT_S,
+                timeout = params.SEARCH_TIMEOUT_S,
             )
         except asyncio.CancelledError:
             raise
@@ -141,8 +141,8 @@ async def search_mcp_web(query: str, runtime: ToolRuntime[entities.SearchSession
                 "sources": [],
             })
 
-        remaining = domains.bd.search.params.MAX_SOURCES - len(session.sources)
-        normalized_sources = domains.bd.search.domain.normalize_sources(
+        remaining = params.MAX_SOURCES - len(session.sources)
+        normalized_sources = domain.normalize_sources(
             raw,
             provider_id = session.provider_id or "coelho_search",
             query = normalized_query,

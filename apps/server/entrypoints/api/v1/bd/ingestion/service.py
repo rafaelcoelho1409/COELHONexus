@@ -1,9 +1,4 @@
 """HTTP orchestration for Book Distiller ingestion endpoints."""
-import ai, domains, infra
-import domains.bd.ingestion.ai.task
-import domains.bd.ingestion.source.task
-from . import params, schemas
-
 import asyncio
 import hashlib
 import json
@@ -13,6 +8,13 @@ from typing import Literal
 from fastapi import HTTPException, Response, UploadFile
 from starlette.responses import StreamingResponse
 
+import ai
+import domains
+import domains.bd.ingestion.ai.task
+import domains.bd.ingestion.source.task
+import infra
+
+from . import params, schemas
 
 logger = logging.getLogger(__name__)
 
@@ -77,7 +79,7 @@ async def get_book(book_id: str) -> dict:
     agentic_run = await domains.bd.ingestion.ai.service.read_current_ingestion_ai_run(book_id)
     snapshot["agentic"] = await _agentic_status(agentic_run) if agentic_run is not None else None
     retrieval_index = (
-        await domains.bd.rag.service.read_index(
+        await domains.bd.rag.ai.runs.service.read_index(
             book_id,
             agentic_run["agentic_run_id"],
         )
@@ -258,23 +260,23 @@ async def get_agentic_run(book_id: str, agentic_run_id: str) -> dict:
 
 
 async def get_retrieval_index(book_id: str, agentic_run_id: str) -> dict:
-    manifest = await domains.bd.rag.service.read_index(book_id, agentic_run_id)
+    manifest = await domains.bd.rag.ai.runs.service.read_index(book_id, agentic_run_id)
     if manifest is None:
         raise HTTPException(status_code = 404, detail = "Processed-book retrieval index not found")
     return manifest
 
 
 async def get_retrieval_index_llm_counters(book_id: str, agentic_run_id: str) -> dict:
-    manifest = await domains.bd.rag.service.read_index(book_id, agentic_run_id)
+    manifest = await domains.bd.rag.ai.runs.service.read_index(book_id, agentic_run_id)
     if manifest is None:
         raise HTTPException(status_code = 404, detail = "Processed-book retrieval index not found")
-    usage_run_id = domains.bd.rag.keys.usage_run_id(book_id, agentic_run_id)
+    usage_run_id = domains.bd.rag.ai.keys.usage_run_id(book_id, agentic_run_id)
     return await domains.settings.llm_counter.service.read_counters("bd", usage_run_id)
 
 
 async def start_retrieval_index(book_id: str, agentic_run_id: str) -> dict:
     try:
-        return await domains.bd.rag.service.queue_index(book_id, agentic_run_id)
+        return await domains.bd.rag.ai.runs.service.queue_index(book_id, agentic_run_id)
     except FileNotFoundError as error:
         raise HTTPException(status_code = 404, detail = str(error)) from error
     except ValueError as error:
@@ -283,7 +285,7 @@ async def start_retrieval_index(book_id: str, agentic_run_id: str) -> dict:
 
 async def resume_retrieval_index(book_id: str, agentic_run_id: str) -> dict:
     try:
-        return await domains.bd.rag.service.resume_index(book_id, agentic_run_id)
+        return await domains.bd.rag.ai.runs.service.resume_index(book_id, agentic_run_id)
     except FileNotFoundError as error:
         raise HTTPException(status_code = 404, detail = str(error)) from error
     except ValueError as error:
@@ -292,7 +294,7 @@ async def resume_retrieval_index(book_id: str, agentic_run_id: str) -> dict:
 
 async def replay_retrieval_index_node(book_id: str, agentic_run_id: str, node_id: str) -> dict:
     try:
-        return await domains.bd.rag.service.replay_index_node(
+        return await domains.bd.rag.ai.replay.service.replay_index_node(
             book_id,
             agentic_run_id,
             node_id,
@@ -305,14 +307,14 @@ async def replay_retrieval_index_node(book_id: str, agentic_run_id: str, node_id
 
 async def cancel_retrieval_index(book_id: str, agentic_run_id: str) -> dict:
     try:
-        return await domains.bd.rag.service.request_cancel(book_id, agentic_run_id)
+        return await domains.bd.rag.ai.runs.service.request_cancel(book_id, agentic_run_id)
     except FileNotFoundError as error:
         raise HTTPException(status_code = 404, detail = str(error)) from error
 
 
 async def wipe_retrieval_index(book_id: str, agentic_run_id: str) -> dict:
     try:
-        return await domains.bd.rag.service.wipe_index(book_id, agentic_run_id)
+        return await domains.bd.rag.ai.runs.service.wipe_index(book_id, agentic_run_id)
     except FileNotFoundError as error:
         raise HTTPException(status_code = 404, detail = str(error)) from error
     except ValueError as error:
