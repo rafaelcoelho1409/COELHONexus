@@ -49,6 +49,7 @@ const MANIFEST = {
       source_path: null,
       section: "Docs",
       notes: null,
+      page_selection: { status: "selected", needs_review: false },
     },
     {
       idx: 1,
@@ -60,6 +61,7 @@ const MANIFEST = {
       source_path: null,
       section: "Docs",
       notes: null,
+      page_selection: { status: "selected", needs_review: false },
     },
   ],
 };
@@ -76,22 +78,22 @@ async function mockRoutes(page: Page) {
       body: '<svg xmlns="http://www.w3.org/2000/svg" width="64" height="24"><rect width="64" height="24" fill="#888"/></svg>',
     }),
   );
-  await page.route("**/api/v1/dd/ingestion", (route) => {
+  await page.route("**/api/v1/dd/pages", (route) => {
     if (route.request().method() === "DELETE") {
       json(route, { ok: true });
       return;
     }
     json(route, LIBRARY);
   });
-  await page.route("**/api/v1/dd/ingestion/runs/active", (route) => json(route, { active: [] }));
-  await page.route("**/api/v1/dd/ingestion/runs", (route) => {
+  await page.route("**/api/v1/dd/pages/runs/active", (route) => json(route, { active: [] }));
+  await page.route("**/api/v1/dd/pages/runs", (route) => {
     if (route.request().method() === "POST") {
       route.fulfill({ json: { status: "queued", run_id: "run-1" } });
       return;
     }
     route.continue();
   });
-  await page.route("**/api/v1/dd/ingestion/runs/run-1", (route) =>
+  await page.route("**/api/v1/dd/pages/runs/run-1", (route) =>
     json(route, {
       progress: {
         tier: "post",
@@ -110,13 +112,10 @@ async function mockRoutes(page: Page) {
             last_url: null,
             error: null,
           },
-          agentic: {
-            status: "waiting",
-            current: 0,
-            total: 0,
-            current_node: null,
-            node_status: {},
-            node_progress: {},
+          selection: {
+            status: "running",
+            current: 1,
+            total: 3,
             error: null,
           },
         },
@@ -124,18 +123,18 @@ async function mockRoutes(page: Page) {
       post: null,
     }),
   );
-  await page.route("**/api/v1/dd/ingestion/runs/run-1/llm-counters", (route) =>
+  await page.route("**/api/v1/dd/pages/runs/run-1/llm-counters", (route) =>
     json(route, {
       total: { calls: 0, tokens_in: 0, tokens_out: 0, reasoning_tokens: 0, errors: 0 },
       by_node: {},
     }),
   );
-  await page.route("**/api/v1/dd/ingestion/runs/run-1/cancel", (route) => json(route, { ok: true }));
-  await page.route("**/api/v1/dd/ingestion/alpha/manifest", (route) => json(route, MANIFEST));
-  await page.route("**/api/v1/dd/ingestion/beta/manifest", (route) =>
+  await page.route("**/api/v1/dd/pages/runs/run-1/cancel", (route) => json(route, { ok: true }));
+  await page.route("**/api/v1/dd/pages/alpha/manifest", (route) => json(route, MANIFEST));
+  await page.route("**/api/v1/dd/pages/beta/manifest", (route) =>
     route.fulfill({ status: 404, json: { detail: "not ingested" } }),
   );
-  await page.route("**/api/v1/dd/ingestion/alpha/pages/*", (route) =>
+  await page.route("**/api/v1/dd/pages/alpha/pages/*", (route) =>
     json(route, { body: "# Quickstart\n\n**alpha** quickstart body" }),
   );
 }
@@ -352,7 +351,7 @@ test.describe("Docs Distiller", () => {
     await page.goto("/dd");
 
     await expect(page.getByRole("heading", { level: 1, name: "Docs Distiller" })).toBeVisible();
-    await expect(page.getByRole("link", { name: "Ingestion" })).toHaveAttribute("href", "/dd/ingestion");
+    await expect(page.getByRole("link", { name: "Pages" })).toHaveAttribute("href", "/dd/pages");
 
     await expect(page.getByText("Alpha")).toBeVisible();
     await expect(page.getByText("2 of 2 frameworks shown")).toBeVisible();
@@ -362,7 +361,7 @@ test.describe("Docs Distiller", () => {
 
     await page.getByRole("button", { name: "Beta" }).click();
     await page.getByRole("button", { name: "Start Ingestion" }).click();
-    await expect(page).toHaveURL(/\/dd\/ingestion\?slug=beta&run=run-1/);
+    await expect(page).toHaveURL(/\/dd\/pages\?slug=beta&run=run-1/);
   });
 
   test("catalog tiles draw their logos as images, never as an address, and fit the screen", async ({
@@ -444,27 +443,27 @@ test.describe("Docs Distiller", () => {
 
   test("a stage tab keeps the framework you are on", async ({ page }) => {
     await mockRoutes(page);
-    await page.goto("/dd/ingestion?slug=alpha");
+    await page.goto("/dd/pages?slug=alpha");
     const tabs = page.getByRole("navigation", { name: "Docs Distiller stages" });
     await tabs.getByRole("link", { name: "Pipeline" }).click();
     await expect(page).toHaveURL(/\/dd\/pipeline\?slug=alpha$/);
   });
 
-  test("the tabs are Catalog, Ingestion, Pipeline and Study: planner and synth run on the Pipeline tab", async ({
+  test("the tabs are Catalog, Pages, Pipeline and Study: planner and synth run on the Pipeline tab", async ({
     page,
   }) => {
     await mockRoutes(page);
-    await page.goto("/dd/ingestion?slug=alpha");
+    await page.goto("/dd/pages?slug=alpha");
     const tabs = page.getByRole("navigation", { name: "Docs Distiller stages" });
-    await expect(tabs.getByRole("link")).toHaveText(["Catalog", "Ingestion", "Pipeline", "Study"]);
-    await expect(tabs.getByRole("link", { name: "Ingestion" })).toHaveAttribute("aria-current", "page");
+    await expect(tabs.getByRole("link")).toHaveText(["Catalog", "Pages", "Pipeline", "Study"]);
+    await expect(tabs.getByRole("link", { name: "Pages" })).toHaveAttribute("aria-current", "page");
     await expect(tabs.getByText("Planner")).toHaveCount(0);
     await expect(tabs.getByText("Synth")).toHaveCount(0);
   });
 
   test("the sidebar lists pages by title, in the order of the original documentation", async ({ page }) => {
     await mockRoutes(page);
-    await page.goto("/dd/ingestion?slug=alpha");
+    await page.goto("/dd/pages?slug=alpha");
     await page.getByRole("tab", { name: "Pages" }).click();
     const tree = page.getByRole("region", { name: "Ingested library" });
     // the manifest holds Quickstart before CLI; sorted by name CLI would come first
@@ -476,9 +475,9 @@ test.describe("Docs Distiller", () => {
     await expect(page.getByText("New framework?")).toHaveCount(0);
   });
 
-  test("the ingestion preview renders the page, and Source shows the raw text", async ({ page }) => {
+  test("the Pages preview renders the page, and Source shows the raw text", async ({ page }) => {
     await mockRoutes(page);
-    await page.goto("/dd/ingestion?slug=alpha");
+    await page.goto("/dd/pages?slug=alpha");
     await page.getByRole("tab", { name: "Pages" }).click();
     const preview = page.getByRole("region", { name: "Ingested library" });
 
@@ -517,10 +516,8 @@ test.describe("Docs Distiller", () => {
 
   async function openMaterials(page: Page) {
     await mockRoutes(page);
-    await page.route("**/api/v1/dd/ingestion/alpha/pages/*", (route) =>
-      json(route, { body: MATERIALS_BODY }),
-    );
-    await page.goto("/dd/ingestion?slug=alpha");
+    await page.route("**/api/v1/dd/pages/alpha/pages/*", (route) => json(route, { body: MATERIALS_BODY }));
+    await page.goto("/dd/pages?slug=alpha");
     await page.getByRole("tab", { name: "Pages" }).click();
     const library = page.getByRole("region", { name: "Ingested library" });
     await expect(library.getByText("Intro text for the quickstart.")).toBeVisible();
@@ -621,23 +618,21 @@ test.describe("Docs Distiller", () => {
     });
   }
 
-  test("ingestion stage shows the Pipeline cards and graph, and stops the run", async ({ page }) => {
+  test("Pages shows extraction and page-selection progress, and stops the run", async ({ page }) => {
     await mockRoutes(page);
-    await page.goto("/dd/ingestion?slug=alpha&run=run-1");
+    await page.goto("/dd/pages?slug=alpha&run=run-1");
 
     const extraction = page.getByRole("region", { name: "Documentation extraction progress" });
     await expect(extraction).toBeVisible();
     await expect(extraction.getByText("2 of 3 pages · 67%")).toBeVisible();
     await expect(extraction.getByText("Fetching documentation bundle")).toBeVisible();
-    const agentic = page.getByRole("region", { name: "Agentic AI progress" });
-    await expect(agentic.getByText("Preparing page boundaries for Agentic AI.")).toBeVisible();
-    const pipeline = page.getByRole("region", { name: "Agentic pipeline stages" });
-    await expect(pipeline.getByRole("button", { name: /Audit pages/ })).toBeVisible();
-    await expect(pipeline.getByRole("button", { name: /Publish pages/ })).toBeVisible();
+    const selection = extraction.getByRole("group", { name: "Learning page selection progress" });
+    await expect(selection.getByText("Running")).toBeVisible();
+    await expect(selection.getByText("1 of 3 pages assessed")).toBeVisible();
 
     const cancelRequest = page.waitForRequest(
       (request) =>
-        request.method() === "POST" && request.url().includes("/api/v1/dd/ingestion/runs/run-1/cancel"),
+        request.method() === "POST" && request.url().includes("/api/v1/dd/pages/runs/run-1/cancel"),
     );
     await extraction.getByRole("button", { name: "Stop documentation extraction" }).click();
     await expect(cancelRequest).resolves.toHaveProperty("url");
@@ -657,7 +652,7 @@ test.describe("Docs Distiller", () => {
   }) => {
     await mockRoutes(page);
     // Right after a run ends the cached active list can still list it; the page must not flip the address.
-    await page.route("**/api/v1/dd/ingestion/runs/active", (route) =>
+    await page.route("**/api/v1/dd/pages/runs/active", (route) =>
       json(route, {
         active: [
           {
@@ -668,7 +663,7 @@ test.describe("Docs Distiller", () => {
         ],
       }),
     );
-    await page.route("**/api/v1/dd/ingestion/runs/run-1", (route) =>
+    await page.route("**/api/v1/dd/pages/runs/run-1", (route) =>
       json(route, {
         progress: { tier: "finalize", status: "done", current: 0, total: 0, last_url: "" },
         post: null,
@@ -679,19 +674,19 @@ test.describe("Docs Distiller", () => {
       if (frame === page.mainFrame()) addresses.push(new URL(frame.url()).search);
     });
 
-    await page.goto("/dd/ingestion?slug=alpha&run=run-1");
-    await expect(page.getByText("Ingestion complete.")).toBeVisible();
+    await page.goto("/dd/pages?slug=alpha&run=run-1");
+    await expect(page.getByText("Documentation extraction complete.")).toBeVisible();
     await page.waitForTimeout(1500); // long enough for a flicker to show itself
-    await expect(page).toHaveURL(/\/dd\/ingestion\?slug=alpha&run=run-1$/);
+    await expect(page).toHaveURL(/\/dd\/pages\?slug=alpha&run=run-1$/);
     expect(
       addresses.length,
       `the address changed ${addresses.length} times: ${addresses.join(" → ")}`,
     ).toBeLessThanOrEqual(3);
   });
 
-  test("ingestion stage without a run falls back to the library state", async ({ page }) => {
+  test("Pages without a run falls back to the library state", async ({ page }) => {
     await mockRoutes(page);
-    await page.goto("/dd/ingestion?slug=alpha");
+    await page.goto("/dd/pages?slug=alpha");
 
     await expect(page.getByText("Alpha · 2 pages · 640 B")).toBeVisible();
     const extraction = page.getByRole("region", { name: "Documentation extraction progress" });
@@ -1122,7 +1117,7 @@ test.describe("Docs Distiller", () => {
     await mockPipelineRoutes(page, { synthBusy: false });
     for (const route of [
       "/dd",
-      "/dd/ingestion?slug=alpha",
+      "/dd/pages?slug=alpha",
       "/dd/pipeline?slug=alpha",
       "/dd/planner?slug=alpha",
       "/dd/synth?slug=alpha",
@@ -1157,7 +1152,7 @@ test.describe("Docs Distiller", () => {
   const AXE_PAGES: { route: string; ready: (page: Page) => Promise<void> }[] = [
     { route: "/dd", ready: (page) => expect(page.getByText("2 of 2 frameworks shown")).toBeVisible() },
     {
-      route: "/dd/ingestion?slug=alpha",
+      route: "/dd/pages?slug=alpha",
       ready: (page) =>
         expect(
           page

@@ -41,11 +41,6 @@ def run_distill(self, book_id: str, run_id: str) -> dict:
                 run_id,
                 checkpointer = infra.postgres.service.get_checkpointer(),
             )
-            if result.get("status") == "done" and domains.bd.rag.params.RAG_EXECUTION_ENABLED:
-                try:
-                    await domains.bd.rag.service.queue_index(book_id, run_id)
-                except Exception as error:
-                    logger.exception("[bd-distill-task] unable to queue Agentic RAG for %s (%s)", run_id, type(error).__name__)
             return {
                 "book_id": book_id,
                 "run_id": run_id,

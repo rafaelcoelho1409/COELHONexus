@@ -3,7 +3,6 @@
 import { ArrowDownToLine } from "lucide-react";
 import { apiErrorMessage } from "@/shared/lib/api-error";
 import type { StreamStatus } from "@/shared/sse";
-import { useRagIndex } from "../../rag/hooks/use-index-data";
 import { learningGuideHtmlUrl, learningGuidePdfUrl } from "../api";
 import { learningGuideMarkdown, learningGuideMarkdownFilename } from "../domain/learning-guide-markdown";
 import type { DistillRunViewState } from "../domain/run-state";
@@ -23,7 +22,6 @@ export function DistillRunPanel({
   streamStatus: StreamStatus;
 }) {
   const report = useLearningGuide(bookId, run.run_id, state.status === "done");
-  const ragIndex = useRagIndex(bookId, run.run_id, state.status === "done");
 
   function downloadMarkdown() {
     if (!report.data) return;
@@ -79,51 +77,6 @@ export function DistillRunPanel({
           Reconnecting to live run updates. The saved status remains visible.
         </p>
       ) : null}
-
-      <section aria-label="Agentic RAG index status" className="mt-4 border border-border bg-card px-4 py-3">
-        <p className="mono-label">Post-publication process</p>
-        <h4 className="mt-1 text-sm font-semibold">Book retrieval index</h4>
-        {ragIndex.isError ? (
-          <div role="alert" className="mt-2 text-sm">
-            <p className="text-warning-text">
-              Index status could not be loaded — {apiErrorMessage(ragIndex.error)}
-            </p>
-          </div>
-        ) : ragIndex.isPending ? (
-          <p role="status" className="mt-2 text-sm text-muted-foreground">
-            Waiting for the separate index job. It includes every Ingestion page, selected or excluded, plus
-            the Learning Guide records.
-          </p>
-        ) : ragIndex.data?.status === "not_started" ? (
-          <div className="mt-2 text-sm">
-            <p className="text-muted-foreground">
-              The report is published; indexing has not started. Manage this process in the Agents tab.
-            </p>
-          </div>
-        ) : ragIndex.data?.status === "queued" || ragIndex.data?.status === "running" ? (
-          <p role="status" className="mt-2 text-sm text-muted-foreground">
-            {ragIndex.data.status === "queued" ? "Queued" : "Indexing"} ·{" "}
-            {ragIndex.data.point_count.toLocaleString()} passages indexed so far
-          </p>
-        ) : ragIndex.data?.status === "done" ? (
-          <p role="status" className="mt-2 text-sm text-success-text">
-            Ready for later retrieval · {ragIndex.data.source_page_count.toLocaleString()} source pages ·{" "}
-            {ragIndex.data.point_count.toLocaleString()} passages ·{" "}
-            {ragIndex.data.graph_node_count.toLocaleString()} knowledge nodes
-          </p>
-        ) : (
-          <div role={ragIndex.data?.status === "failed" ? "alert" : "status"} className="mt-2 text-sm">
-            <p className="text-warning-text">
-              {ragIndex.data?.status === "cancelled" ? "Indexing stopped" : "Indexing failed"}
-              {ragIndex.data?.error ? ` — ${ragIndex.data.error}` : "."} Manage or resume this process in the
-              Agents tab.
-            </p>
-          </div>
-        )}
-        <p className="mt-1 text-xs text-muted-foreground">
-          Distill-linked chat and cross-book retrieval are future capabilities.
-        </p>
-      </section>
 
       {report.isPending ? (
         <p role="status" className="mt-4 text-sm text-muted-foreground">

@@ -1,4 +1,4 @@
-"""Offline check of how the Ingestion explorer's page titles are made (`domains.dd.ingestion`).
+"""Offline check of how the Ingestion explorer's page titles are made (`domains.dd.pages`).
 
     cd apps/server && .venv/bin/python ../../scripts/server/test_ingestion_titles.py
 
@@ -16,9 +16,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "server"))
 
 import domains
 
-display_title = domains.dd.ingestion.post.domain.display_title
-with_display_titles = domains.dd.ingestion.storage.service.with_display_titles
-service = domains.dd.ingestion.storage.service
+display_title = domains.dd.pages.post.domain.display_title
+with_display_titles = domains.dd.pages.storage.service.with_display_titles
+service = domains.dd.pages.storage.service
 
 
 def check(label: str, got, want) -> None:
@@ -101,7 +101,7 @@ async def main() -> None:
 
     for n in range(40):
         await with_display_titles(minio, f"fw{n}", manifest([entry(0, "one")], run_id=f"r{n}"))
-    check("the cache stays bounded", len(service._TITLE_CACHE) <= domains.dd.ingestion.storage.params.TITLE_CACHE_MAX, True)
+    check("the cache stays bounded", len(service._TITLE_CACHE) <= domains.dd.pages.storage.params.TITLE_CACHE_MAX, True)
     print("\nall checks passed")
 
 

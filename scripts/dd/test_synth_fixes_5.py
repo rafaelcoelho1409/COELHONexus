@@ -52,7 +52,7 @@ print("2 failed digest sources kept as stubs ok")
 # 5) the writer prompt asks for what the validator requires -----------------------------------------------------------------------------------------
 assert [SWD.writer_subtopic_range(n)[0] for n in (0, 9, 10, 19, 20, 46)] == ["3-8", "3-8", "4-7", "4-7", "6-9", "6-9"]
 assert SWD.code_density_floor(26) == 6 and SWD.code_density_floor(12) == 4 and SWD.code_density_floor(7) == 3 and SWD.code_density_floor(1) == SWP.SUBTOPICS_MIN
-VE = domains.dd.ingestion.vault.schemas.VaultEntry
+VE = domains.dd.pages.vault.schemas.VaultEntry
 vr = {f"{i:016x}": VE(hash=f"{i:016x}", fence_text=f"```python\nvalue_{i} = compute_{i}()\n```", info_string="python", lang="python", line_count=1, char_count=30, sentinel_kind="fence_backtick") for i in range(26)}
 ask = dict(framework="f", chapter_id="ch", chapter_title="T", section_id="s1", section_heading="H", section_description="d", section_prerequisites=[],
            contributions=[], valid_source_keys=["k"], memory=[], n_primary_contribs=1, vault_rich=vr)

@@ -101,7 +101,7 @@ async def start_planner(
             detail=f"invalid mode {mode!r}; expected one of {sorted(params.VALID_MODES)}",
         )
 
-    _manifest = await domains.dd.ingestion.storage.service.read_framework_manifest(infra.minio.service.get_storage(), slug)
+    _manifest = await domains.dd.pages.storage.service.read_framework_manifest(infra.minio.service.get_storage(), slug)
     if not _manifest:
         raise HTTPException(
             status_code=404,

@@ -24,7 +24,7 @@ beforeEach(() => {
   window.localStorage.clear();
   client.setConfig({ baseUrl: ORIGIN });
   server.use(
-    http.get(`${ORIGIN}/api/v1/dd/ingestion/demo/pages/:idx`, ({ params }) =>
+    http.get(`${ORIGIN}/api/v1/dd/pages/demo/pages/:idx`, ({ params }) =>
       HttpResponse.json({ body: BODIES[String(params.idx)] ?? "" }),
     ),
   );
@@ -183,7 +183,7 @@ describe("Materials reader", () => {
 
   it("says when a page is empty of text it could load", async () => {
     server.use(
-      http.get(`${ORIGIN}/api/v1/dd/ingestion/demo/pages/:idx`, () => HttpResponse.json({}, { status: 500 })),
+      http.get(`${ORIGIN}/api/v1/dd/pages/demo/pages/:idx`, () => HttpResponse.json({}, { status: 500 })),
     );
     renderMaterials();
     expect(await screen.findByRole("alert")).toHaveTextContent("Page unavailable.");

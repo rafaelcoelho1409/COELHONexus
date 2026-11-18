@@ -31,7 +31,7 @@ async def page_cards_run(state: graphs.pipeline.planner.states.PlannerState, run
 
     started = time.monotonic()
     graphs.service.emit(params.STEP, "start", n_pages = len(source_keys))
-    manifest_obj = await domains.dd.ingestion.storage.service.read_framework_manifest(blobs, slug) or {}
+    manifest_obj = await domains.dd.pages.storage.service.read_framework_manifest(blobs, slug) or {}
     entries = _manifest_entry_map(manifest_obj.get("entries") or [])
     selection_is_authoritative = bool(entries) and all(
         isinstance(entry.get("page_selection"), dict)

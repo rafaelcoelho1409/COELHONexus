@@ -24,6 +24,8 @@ const NODE_WIDTH = 216;
 const NODE_HEIGHT = 136;
 const NODE_GAP = 30;
 const PADDING = 16;
+export type AgenticFlowConnection = { source: string; target: string };
+export type AgenticFlowPosition = { x: number; y: number };
 type AgenticFlowData = {
   nodeId: string;
   label: string;
@@ -33,6 +35,7 @@ type AgenticFlowData = {
   progress: AgenticNodeView["progress"];
   onOpen: () => void;
   onPlay?: () => void;
+  playDisabled: boolean;
   playPending: boolean;
   replayPending: boolean;
 };
@@ -72,7 +75,7 @@ function AgenticNodeCard({ data }: NodeProps<AgenticFlowNode>) {
               label={data.label}
               onPlay={data.onPlay}
               pending={data.playPending}
-              disabled={data.replayPending}
+              disabled={data.playDisabled || data.replayPending}
             />
           </div>
         ) : null}
@@ -125,21 +128,34 @@ export function AgenticFlow({
   views,
   onOpenNode,
   onPlayNode,
+  replayDisabled = false,
   replayPending = false,
   replayPendingNodeId = null,
   ariaLabel = "Book Distiller agentic ingestion graph",
+  connections,
+  positions,
+  className,
+  fitView = false,
 }: {
   views: readonly AgenticNodeView[];
   onOpenNode: (nodeId: string) => void;
   onPlayNode?: (nodeId: string) => void;
+  replayDisabled?: boolean;
   replayPending?: boolean;
   replayPendingNodeId?: string | null;
   ariaLabel?: string;
+  /** Supply the LangGraph topology for DAGs; when omitted, nodes remain connected in list order. */
+  connections?: readonly AgenticFlowConnection[];
+  /** Supply node coordinates for DAG layouts; omitted nodes use the standard vertical layout. */
+  positions?: Readonly<Record<string, AgenticFlowPosition>>;
+  className?: string;
+  fitView?: boolean;
 }) {
   const nodes: AgenticFlowNode[] = views.map((view, index) => ({
     id: view.id,
     type: "agentic",
-    position: { x: PADDING, y: PADDING + index * (NODE_HEIGHT + NODE_GAP) },
+    position:
+      positions?.[view.id] ?? { x: PADDING, y: PADDING + index * (NODE_HEIGHT + NODE_GAP) },
     width: NODE_WIDTH,
     height: NODE_HEIGHT,
     data: {
@@ -151,19 +167,24 @@ export function AgenticFlow({
       progress: view.progress,
       onOpen: () => onOpenNode(view.id),
       ...(onPlayNode ? { onPlay: () => onPlayNode(view.id) } : {}),
+      playDisabled: replayDisabled,
       playPending: replayPending && replayPendingNodeId === view.id,
       replayPending,
     },
   }));
-  const edges: Edge[] = views.slice(0, -1).flatMap((view, index) => {
+  const flowConnections = connections ?? views.slice(0, -1).flatMap((view, index) => {
     const next = views[index + 1];
-    if (!next) return [];
-    const active = view.status === "done" && next.status === "running";
+    return next ? [{ source: view.id, target: next.id }] : [];
+  });
+  const statusById = new Map(views.map((view) => [view.id, view.status]));
+  const edges: Edge[] = flowConnections.flatMap(({ source, target }) => {
+    if (!statusById.has(source) || !statusById.has(target)) return [];
+    const active = statusById.get(source) === "done" && statusById.get(target) === "running";
     return [
       {
-        id: `${view.id}->${next.id}`,
-        source: view.id,
-        target: next.id,
+        id: `${source}->${target}`,
+        source,
+        target,
         markerEnd: ARROW,
         focusable: false,
         className: active ? "agentic-edge-active" : "",
@@ -172,12 +193,16 @@ export function AgenticFlow({
   });
 
   return (
-    <figure className="bd-agentic-flow mx-auto h-[min(76vh,880px)] min-h-[440px] w-full min-w-0" aria-label={ariaLabel}>
+    <figure
+      className={`bd-agentic-flow mx-auto w-full min-w-0 ${className ?? "h-[min(76vh,880px)] min-h-[440px]"}`}
+      aria-label={ariaLabel}
+    >
       <ReactFlow
         nodes={nodes}
         edges={edges}
         nodeTypes={NODE_TYPES}
         defaultViewport={{ x: 0, y: 0, zoom: 0.82 }}
+        fitView={fitView}
         minZoom={0.18}
         maxZoom={2.25}
         nodesDraggable={false}

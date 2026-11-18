@@ -17,7 +17,10 @@ def after_start(state: graphs.distill.states.DistillRunState) -> str:
     if state.get("resume_from_node") in {
         "prepare_chapters",
         "synthesize_chapter",
+        "build_chapter_visuals",
         "synthesize_book",
+        "write_decision_brief",
+        "research_context",
         "publish_report",
     }:
         return "prepare_chapters"
@@ -59,4 +62,5 @@ async def prepare_units(
         dependencies.progress_callback,
         "prepare_units",
         execute,
+        controls = dependencies.controls,
     )

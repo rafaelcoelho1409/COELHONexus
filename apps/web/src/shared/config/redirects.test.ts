@@ -5,6 +5,8 @@ import { buildRedirects } from "./redirects";
 describe("buildRedirects", () => {
   it("sends the old Docs Distiller URLs to the new pages, the root and every stage below it", () => {
     expect(buildRedirects()).toEqual([
+      { source: "/docs-distiller/ingestion", destination: "/dd/pages", permanent: false },
+      { source: "/docs-distiller/ingestion/:path*", destination: "/dd/pages/:path*", permanent: false },
       { source: "/docs-distiller", destination: "/dd", permanent: false },
       { source: "/docs-distiller/:path*", destination: "/dd/:path*", permanent: false },
     ]);

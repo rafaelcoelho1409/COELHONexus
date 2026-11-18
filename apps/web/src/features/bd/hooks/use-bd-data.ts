@@ -22,9 +22,14 @@ import {
 import {
   cancelAgenticRun,
   fetchProcessedBook,
+  replayRetrievalIndexNode,
   replayAgenticRunNode,
+  cancelRetrievalIndex,
+  resumeRetrievalIndex,
   resumeAgenticRun,
+  startRetrievalIndex,
   startAgenticRun,
+  wipeRetrievalIndex,
   uploadBook,
   wipeAgenticRun,
   wipeExtraction,
@@ -38,8 +43,11 @@ import {
   contentSelectionSchema,
   type ExtractionWipeResponse,
   type ProcessedBook,
+  type RetrievalIndexStatus,
+  type RetrievalIndexWipeResponse,
   pageBodySchema,
   pageQualitySchema,
+  retrievalIndexStatusSchema,
   type StartResponse,
   startResponseSchema,
 } from "../entities";
@@ -64,15 +72,19 @@ export function useSnapshot(bookId: string) {
     select: (data): BookSnapshot => ({
       ...data,
       agentic: zAgenticStatus(data),
+      retrievalIndex: zRetrievalIndexStatus(data),
     }),
     refetchInterval: (query) => {
       const data = query.state.data;
       const agentic = data ? zAgenticStatus(data) : null;
+      const retrievalIndex = data ? zRetrievalIndexStatus(data) : null;
       const live = data
         ? isLive(toBookStatus(data.manifest.status)) ||
           isLive(toBookStatus(data.progress?.status)) ||
           agentic?.status === "queued" ||
-          agentic?.status === "running"
+          agentic?.status === "running" ||
+          retrievalIndex?.status === "queued" ||
+          retrievalIndex?.status === "running"
         : false;
       return live ? SNAPSHOT_REFRESH_MS : false;
     },
@@ -160,6 +172,7 @@ export function useRefreshBook() {
     );
     void queryClient.invalidateQueries({ queryKey: getBdIngestionActiveQueryKey() }, keepGoing);
     void queryClient.invalidateQueries({ queryKey: ["bd-agentic-usage", bookId] }, keepGoing);
+    void queryClient.invalidateQueries({ queryKey: ["bd-retrieval-index-usage", bookId] }, keepGoing);
   };
 }
 
@@ -182,6 +195,14 @@ function zAgenticStatus(data: unknown) {
     .nullable()
     .optional()
     .safeParse(data && typeof data === "object" && "agentic" in data ? data.agentic : null);
+  return extension.success ? (extension.data ?? null) : null;
+}
+
+function zRetrievalIndexStatus(data: unknown): RetrievalIndexStatus | null {
+  const extension = retrievalIndexStatusSchema
+    .nullable()
+    .optional()
+    .safeParse(data && typeof data === "object" && "retrieval_index" in data ? data.retrieval_index : null);
   return extension.success ? (extension.data ?? null) : null;
 }
 
@@ -270,6 +291,54 @@ export function useWipeExtraction() {
     mutationFn: wipeExtraction,
     onSuccess: (_result, bookId) => refresh(bookId),
     onError: (_error, bookId) => refresh(bookId),
+  });
+}
+
+export function useStartRetrievalIndex() {
+  const refresh = useRefreshBook();
+  return useMutation({
+    mutationFn: ({ bookId, agenticRunId }: { bookId: string; agenticRunId: string }) =>
+      startRetrievalIndex(bookId, agenticRunId),
+    onSuccess: (_result, { bookId }) => refresh(bookId),
+    onError: (_error, { bookId }) => refresh(bookId),
+  });
+}
+
+export function useResumeRetrievalIndex() {
+  const refresh = useRefreshBook();
+  return useMutation({
+    mutationFn: ({ bookId, agenticRunId }: { bookId: string; agenticRunId: string }) =>
+      resumeRetrievalIndex(bookId, agenticRunId),
+    onSuccess: (_result, { bookId }) => refresh(bookId),
+    onError: (_error, { bookId }) => refresh(bookId),
+  });
+}
+
+export function useReplayRetrievalIndexNode() {
+  const refresh = useRefreshBook();
+  return useMutation({
+    mutationFn: ({ bookId, agenticRunId, nodeId }: { bookId: string; agenticRunId: string; nodeId: string }) =>
+      replayRetrievalIndexNode(bookId, agenticRunId, nodeId),
+    onSuccess: (_result, { bookId }) => refresh(bookId),
+    onError: (_error, { bookId }) => refresh(bookId),
+  });
+}
+
+export function useCancelRetrievalIndex() {
+  const refresh = useRefreshBook();
+  return useMutation<RetrievalIndexStatus, unknown, { bookId: string; agenticRunId: string }>({
+    mutationFn: ({ bookId, agenticRunId }) => cancelRetrievalIndex(bookId, agenticRunId),
+    onSuccess: (_result, { bookId }) => refresh(bookId),
+    onError: (_error, { bookId }) => refresh(bookId),
+  });
+}
+
+export function useWipeRetrievalIndex() {
+  const refresh = useRefreshBook();
+  return useMutation<RetrievalIndexWipeResponse, unknown, { bookId: string; agenticRunId: string }>({
+    mutationFn: ({ bookId, agenticRunId }) => wipeRetrievalIndex(bookId, agenticRunId),
+    onSuccess: (_result, { bookId }) => refresh(bookId),
+    onError: (_error, { bookId }) => refresh(bookId),
   });
 }
 

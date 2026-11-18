@@ -18,4 +18,5 @@ def index_pairs() -> tuple[tuple[str, dict], ...]:
     return (
         (keys.INDEX_METADATA, schemas.METADATA_MAPPING),
         (keys.INDEX_TRANSCRIPTIONS, schemas.TRANSCRIPTIONS_MAPPING),
+        (keys.INDEX_BD_INGESTION, schemas.BD_INGESTION_MAPPING),
     )

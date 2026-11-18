@@ -296,7 +296,7 @@ def bank() -> dict:
     """hash → VaultEntry of every code block of the seeded sources."""
     out: dict = {}
     for text in SOURCES.values():
-        _, entries = domains.dd.ingestion.vault.domain.sentinelize_doc(text)
+        _, entries = domains.dd.pages.vault.domain.sentinelize_doc(text)
         out.update(entries)
     return out
 
@@ -632,7 +632,7 @@ async def test_derive_and_render() -> None:
     blobs = FakeBlobs()
     seed(blobs)
     blobs.objects[thin_page] = "# Alpha Thin\n\nThe `fetch_items` call.\n\n" + fence("def fetch_items(url: str) -> list") + "\n"
-    BANK.update(domains.dd.ingestion.vault.domain.sentinelize_doc(blobs.objects[thin_page])[1])
+    BANK.update(domains.dd.pages.vault.domain.sentinelize_doc(blobs.objects[thin_page])[1])
     plan = json.loads(blobs.objects[keys.plan_latest_key(SLUG)])
     plan["chapters"][0]["sources"] = sorted(plan["chapters"][0]["sources"] + [thin_page])
     blobs.objects[keys.plan_latest_key(SLUG)] = json.dumps(plan)
@@ -674,7 +674,7 @@ async def test_derive_and_render() -> None:
     seed(blobs3)
     mangled = "from alpha import AlphaClient\n\nasync def main():\nclient = AlphaClient(url='http://alpha')\nawait client.fetch('items')\n"
     blobs3.objects[next(k for k in SOURCES if "client" in k)] = "# Alpha Client\n\nThe `AlphaClient` talks to the alpha service.\n\n" + fence(mangled.rstrip()) + "\n"
-    BANK.update(domains.dd.ingestion.vault.domain.sentinelize_doc(blobs3.objects[next(k for k in SOURCES if "client" in k)])[1])
+    BANK.update(domains.dd.pages.vault.domain.sentinelize_doc(blobs3.objects[next(k for k in SOURCES if "client" in k)])[1])
 
     def fixer(payload):
         return answers.NormalizedCodeAnswer(code = payload["code"].replace("\nclient = ", "\n    client = ").replace("\nawait ", "\n    await "))
@@ -902,7 +902,7 @@ async def test_resume_and_chunks() -> None:
     for i in range(5):
         sections.append(f"\n## Case {i}\n\nCase {i} with `AlphaClient`.\n\n" + fence(f"from alpha import AlphaClient\n\nclient = AlphaClient(url='http://alpha/{i}')\nclient.fetch('items{i}')\nprint({i})"))
     blobs2.objects[key] = "\n".join(sections) + "\n"
-    BANK.update(domains.dd.ingestion.vault.domain.sentinelize_doc(blobs2.objects[key])[1])
+    BANK.update(domains.dd.pages.vault.domain.sentinelize_doc(blobs2.objects[key])[1])
     router_fake = Fake(router)
     fakes2 = chapter_fakes()
     fakes2["source_router"] = router_fake

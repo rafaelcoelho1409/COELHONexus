@@ -18,7 +18,7 @@ export type CatalogEntry = z.infer<typeof catalogEntrySchema>;
 /** GET /api/v1/dd/catalog — the whole catalog (array). */
 export const resolverCatalogSchema = z.array(catalogEntrySchema);
 
-/** GET /api/v1/dd/ingestion — ingested library list. */
+/** GET /api/v1/dd/pages — ingested library list. */
 const libraryItemSchema = z.looseObject({
   slug: z.string(),
   framework_name: z.string().nullable().catch(null),
@@ -33,12 +33,12 @@ export type LibraryItem = z.infer<typeof libraryItemSchema>;
 export const libraryListSchema = z.array(libraryItemSchema);
 
 /** Manifest entry — one ingested page. `idx` is the array position used by
- * GET /api/v1/dd/ingestion/{slug}/pages/{idx}. */
+ * GET /api/v1/dd/pages/{slug}/pages/{idx}. */
 const manifestEntrySchema = z.looseObject({
   idx: z.number(),
   /** Storage key of the page; manifests written before it was stored have none. */
   key: z.string().nullable().catch(null),
-  /** Immutable page text supplied to Agentic AI. */
+  /** Immutable pre-post-processing source page, when this entry was split. */
   source_key: z.string().nullable().optional().catch(null),
   title: z.string().nullable().catch(null),
   slug: z.string().nullable().catch(null),
@@ -61,9 +61,9 @@ const manifestEntrySchema = z.looseObject({
 });
 export type ManifestEntry = z.infer<typeof manifestEntrySchema>;
 
-/** GET /api/v1/dd/ingestion/{slug}/manifest. */
+/** GET /api/v1/dd/pages/{slug}/manifest. */
 export const manifestSchema = z.looseObject({
-  /** Extraction run that last published this manifest; distinct from legacy Agentic AI's `agentic_run_id`. */
+  /** Extraction run that last published this manifest. */
   run_id: z.string().nullable().optional().catch(null),
   framework_name: z.string().nullable().catch(null),
   framework_slug: z.string().nullable().catch(null),
@@ -71,15 +71,14 @@ export const manifestSchema = z.looseObject({
   total_bytes: z.number().nullable().catch(null),
   tier_kind: z.string().nullable().catch(null),
   ingested_at: z.number().nullable().catch(null),
-  agentic_run_id: z.string().nullable().catch(null),
 });
 export type Manifest = z.infer<typeof manifestSchema>;
 export type PageVersion = "processed" | "original";
 
-/** GET /api/v1/dd/ingestion/{slug}/pages/{idx} — page body. */
+/** GET /api/v1/dd/pages/{slug}/pages/{idx} — page body. */
 export const pageBodySchema = z.looseObject({ body: z.string() });
 
-/** GET /api/v1/dd/ingestion/runs/{run_id} — live progress + manifest snapshot.
+/** GET /api/v1/dd/pages/runs/{run_id} — live progress + manifest snapshot.
  * `post` is record_post's summary (split/dedup result); either field may
  * be absent on early/tier-only payloads. */
 export const runStatusSchema = z.looseObject({
@@ -116,26 +115,6 @@ export const runStatusSchema = z.looseObject({
             })
             .nullish()
             .catch(null),
-          agentic: z
-            .looseObject({
-              status: z.string().nullable().catch(null),
-              current: z.number().nullable().catch(null),
-              total: z.number().nullable().catch(null),
-              current_node: z.string().nullable().catch(null),
-              node_status: z.record(z.string(), z.string()).catch({}),
-              node_progress: z
-                .record(
-                  z.string(),
-                  z.looseObject({
-                    current: z.number().nullable().catch(null),
-                    total: z.number().nullable().catch(null),
-                  }),
-                )
-                .catch({}),
-              error: z.string().nullable().catch(null),
-            })
-            .nullish()
-            .catch(null),
         })
         .nullish()
         .catch(null),
@@ -155,7 +134,7 @@ export const runStatusSchema = z.looseObject({
 });
 export type RunStatus = z.infer<typeof runStatusSchema>;
 
-/** GET /api/v1/dd/ingestion/runs/active — in-flight runs for page-reload recovery. */
+/** GET /api/v1/dd/pages/runs/active — in-flight runs for page-reload recovery. */
 export const activeRunsSchema = z.looseObject({
   active: z.array(
     z.looseObject({
@@ -166,22 +145,13 @@ export const activeRunsSchema = z.looseObject({
   ),
 });
 
-/** POST /api/v1/dd/ingestion/runs — cached | queued | locked. */
+/** POST /api/v1/dd/pages/runs — cached | queued | locked. */
 export const startRunResponseSchema = z.looseObject({
   status: z.enum(["cached", "queued", "locked"]),
   run_id: z.string().optional(),
   message: z.string().optional(),
 });
 export type StartRunResponse = z.infer<typeof startRunResponseSchema>;
-
-/** DELETE /api/v1/dd/ingestion/{slug}/agentic/runs/{run_id}. */
-export const agenticWipeResponseSchema = z.looseObject({
-  slug: z.string(),
-  run_id: z.string(),
-  wiped: z.boolean(),
-  objects_deleted: z.number().catch(0),
-});
-export type AgenticWipeResponse = z.infer<typeof agenticWipeResponseSchema>;
 
 // ============================================================
 // Pipeline — cross-stage state + active runs
@@ -229,10 +199,6 @@ export const stageInfoSchema = z.looseObject({
   graph_mermaid: z.string().optional(),
 });
 export type StageInfo = z.infer<typeof stageInfoSchema>;
-
-/** GET /api/v1/dd/ingestion/agentic-graph — source from the compiled Ingestion graph. */
-export const graphTopologySchema = z.looseObject({ graph_mermaid: z.string() });
-export type GraphTopology = z.infer<typeof graphTopologySchema>;
 
 /** GET /api/v1/dd/{stage}/recent — latest checkpoint thread per slug. */
 export const stageRecentSchema = z.looseObject({

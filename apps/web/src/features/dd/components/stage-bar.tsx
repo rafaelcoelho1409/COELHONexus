@@ -4,7 +4,7 @@ import type { ReactNode } from "react";
 
 import { ContextBar } from "@/shared/layout/context-bar";
 
-import { frameworkInfo } from "../domain/ingestion";
+import { frameworkInfo } from "../domain/pages";
 import { useManifest } from "../hooks/use-dd-data";
 import type { DdStage } from "../params";
 import { FrameworkPicker } from "./framework-picker";

@@ -1,4 +1,4 @@
-"""infra/elasticsearch — index schemas for the two deprecated indexes.
+"""infra/elasticsearch — schemas for the application's Elasticsearch indexes.
 
 Module-level dict literals (pure data, no I/O) — `service.py:ensure_indexes`
 reads them at startup and creates the indexes if missing. They live here
@@ -104,6 +104,29 @@ TRANSCRIPTIONS_MAPPING: dict = {
             "parent_video_id": {"type": "keyword"},
             "part_index":      {"type": "integer"},
             "part_total":      {"type": "integer"},
+        },
+    },
+    "settings": {
+        "number_of_shards":   1,
+        "number_of_replicas": 0,
+    },
+}
+
+
+BD_INGESTION_MAPPING: dict = {
+    "mappings": {
+        "properties": {
+            "book_id":                 {"type": "keyword"},
+            "book_fingerprint":        {"type": "keyword"},
+            "extraction_run_id":       {"type": "keyword"},
+            "agentic_run_id":          {"type": "keyword"},
+            "processed_book_revision": {"type": "integer"},
+            "processed_page_number":   {"type": "integer"},
+            "source_page_number":      {"type": "integer"},
+            "section_path":            {"type": "keyword"},
+            "content_role":            {"type": "keyword"},
+            "content_sha256":          {"type": "keyword"},
+            "content":                 {"type": "text", "analyzer": "standard"},
         },
     },
     "settings": {

@@ -95,6 +95,7 @@ export function snapshot(
     manifest: manifest(manifestOver),
     progress: progressOver === null ? null : progress(progressOver),
     agentic,
+    retrievalIndex: null,
   };
 }
 

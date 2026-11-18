@@ -97,7 +97,7 @@ resource "kubernetes_secret_v1" "elastic_admin" {
 # -----------------------------------------------------------------------------
 # Elastic's ECK docs recommend avoiding the generated `elastic` superuser for
 # application traffic. For demo clusters we create a deterministic file-realm
-# user whose role is constrained to Nexus's YCS index namespace.
+# user whose role is constrained to Nexus's YCS and BD index namespaces.
 # -----------------------------------------------------------------------------
 resource "kubernetes_secret_v1" "app_user" {
   count = var.app_user_enabled ? 1 : 0
@@ -142,7 +142,7 @@ resource "kubernetes_secret_v1" "app_roles" {
         cluster = ["monitor"]
         indices = [
           {
-            names = ["coelhonexus-youtube-*"]
+            names = ["coelhonexus-ycs-*", "coelhonexus-bd-ingestion"]
             privileges = [
               "create_index",
               "delete",

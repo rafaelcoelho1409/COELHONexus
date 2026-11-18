@@ -38,7 +38,7 @@ def planner_latest_key(slug: str) -> str:
 
 def source_key_to_vault_key(source_key: str, framework_slug: str) -> str:
     """Translate any current or legacy ingestion page key to its matching vault key."""
-    vault_key, _sentinelized_key = domains.dd.ingestion.storage.keys.page_vault_keys(
+    vault_key, _sentinelized_key = domains.dd.pages.storage.keys.page_vault_keys(
         framework_slug,
         source_key,
     )

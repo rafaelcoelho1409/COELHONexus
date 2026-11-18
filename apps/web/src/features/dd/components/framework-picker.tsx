@@ -10,12 +10,12 @@ import { ChevronDown, RotateCw, Trash2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { getDdIngestionQueryKey } from "@/shared/api";
+import { getDdPagesQueryKey } from "@/shared/api";
 import { apiErrorMessage } from "@/shared/lib/api-error";
 
 import { tileLogos, tileName } from "../domain/catalog";
 import { fmtAge } from "../domain/format";
-import { isRunTerminal } from "../domain/ingestion";
+import { isRunTerminal } from "../domain/pages";
 import { deleteCascadeText, itemDisplayName, itemLogos } from "../domain/library";
 import type { LibraryItem } from "../entities";
 import { useActiveRun, useCatalog, useDeleteLibrary, useLibrary, useStartRun } from "../hooks/use-dd-data";
@@ -151,7 +151,7 @@ export function FrameworkPicker({ stage, currentSlug }: { stage: DdStage; curren
         onSuccess: (outcome) => {
           if (outcome.kind === "queued") {
             notice(`Refreshing pages for ${nameForSlug(items, slug)}…`);
-            void queryClient.invalidateQueries({ queryKey: getDdIngestionQueryKey() });
+            void queryClient.invalidateQueries({ queryKey: getDdPagesQueryKey() });
             router.push(pagesHref(slug, outcome.runId ?? null));
           } else if (outcome.kind === "locked") {
             toast(outcome.message ?? "A run is already active for this framework.");

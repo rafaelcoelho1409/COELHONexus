@@ -57,6 +57,118 @@ async def _write_manifest(storage: infra.minio.service.MinIOStorage, manifest: d
     return validated.model_dump(mode = "json")
 
 
+def _normalize_progress(manifest: dict[str, Any]) -> dict[str, Any]:
+    """Add current graph stages when reading or resuming manifests from an older workflow."""
+    progress_state = manifest.setdefault("progress", {})
+    node_status = progress_state.setdefault("node_status", {})
+    old_status = dict(node_status)
+    for node in params.GRAPH_NODES:
+        node_status.setdefault(node, "pending")
+    if "verify_unit" not in old_status and old_status.get("extract_unit") == "done":
+        node_status["verify_unit"] = "done"
+        progress_state["completed_extractions"] = max(
+            progress_state.get("completed_extractions", 0),
+            progress_state.get("completed_units", 0),
+        )
+    if "build_chapter_visuals" not in old_status and old_status.get("synthesize_chapter") == "done":
+        node_status["build_chapter_visuals"] = "done"
+        progress_state["completed_chapter_guides"] = max(
+            progress_state.get("completed_chapter_guides", 0),
+            progress_state.get("completed_chapters", 0),
+        )
+        progress_state["completed_chapter_visuals"] = max(
+            progress_state.get("completed_chapter_visuals", 0),
+            progress_state.get("completed_chapters", 0),
+        )
+    if "write_decision_brief" not in old_status and old_status.get("synthesize_book") == "done":
+        node_status["write_decision_brief"] = "done"
+    if "research_context" not in old_status and old_status.get("synthesize_book") == "done":
+        node_status["research_context"] = "done"
+    progress_state.setdefault("current_task", None)
+    for field in (
+        "completed_extractions",
+        "completed_units",
+        "total_units",
+        "completed_chapter_guides",
+        "completed_chapter_visuals",
+        "completed_chapters",
+        "total_chapters",
+    ):
+        progress_state.setdefault(field, 0)
+    return progress_state
+
+
+async def _persisted_artifact_ids(
+    storage: infra.minio.service.MinIOStorage,
+    prefix: str,
+) -> dict[str, set[str]]:
+    candidates = await storage.list(prefix + "extraction-candidates/")
+    units = await storage.list(prefix + "learning-units/")
+    chapter_keys = await storage.list(prefix + "chapters/")
+    guide_ids: set[str] = set()
+    visual_ids: set[str] = set()
+    for key in chapter_keys:
+        chapter_id = key.rsplit("/", 1)[-1].removesuffix(".json")
+        guide_ids.add(chapter_id)
+        try:
+            artifact = json.loads(await storage.read_text(key))
+        except json.JSONDecodeError:
+            # Let the owning graph stage report corrupt artifacts through normal run failure handling.
+            continue
+        if not isinstance(artifact, dict):
+            continue
+        # Missing status means an artifact from the previous combined synthesis-and-visuals stage.
+        if artifact.get("visuals_status") in (None, "complete", "unavailable"):
+            visual_ids.add(chapter_id)
+    return {
+        "extractions": {key.rsplit("/", 1)[-1].removesuffix(".json") for key in candidates},
+        "units": {key.rsplit("/", 1)[-1].removesuffix(".json") for key in units},
+        "chapter_guides": guide_ids,
+        "chapter_visuals": visual_ids,
+    }
+
+
+async def _reset_chapter_visuals(storage: infra.minio.service.MinIOStorage, prefix: str) -> None:
+    """Clear only visual fields so replaying that stage retains the synthesized chapter guides."""
+    for key in await storage.list(prefix + "chapters/"):
+        artifact = json.loads(await storage.read_text(key))
+        synthesis = artifact.get("synthesis")
+        if not isinstance(synthesis, dict):
+            raise ValueError("a persisted chapter guide has no synthesis object")
+        for field in ("diagrams", "equations", "charts", "timelines", "maps"):
+            synthesis[field] = []
+        artifact.update({
+            "synthesis": synthesis,
+            "visual_review_flags": [],
+            "visuals_status": "pending",
+        })
+        await storage.write(
+            key,
+            domains.bd.distill.domain.json_body(artifact),
+            content_type = params.JSON_TYPE,
+        )
+
+
+async def _checkpoint_before_replay_node(graph: Any, graph_config: dict[str, Any], node_id: str) -> dict[str, Any]:
+    """Replay new split stages from the closest old stage when older checkpoints lack their node ID."""
+    try:
+        return await infra.postgres.service.checkpoint_before_node(graph, graph_config, node_id)
+    except ValueError as error:
+        fallback_nodes = {
+            "verify_unit": "extract_unit",
+            "build_chapter_visuals": "synthesize_chapter",
+            "write_decision_brief": "synthesize_book",
+            "research_context": "synthesize_book",
+        }
+        fallback = fallback_nodes.get(node_id)
+        if fallback is None:
+            raise
+        try:
+            return await infra.postgres.service.checkpoint_before_node(graph, graph_config, fallback)
+        except ValueError:
+            raise error
+
+
 async def read_run(
     book_id: str,
     run_id: str,
@@ -73,7 +185,9 @@ async def read_run(
     manifest = schemas.DistillRunManifest.model_validate_json(await storage.read_text(manifest_key))
     if manifest.book_id != book_id or manifest.run_id != run_id:
         raise ValueError("the stored Distill manifest does not match the requested run")
-    return manifest.model_dump(mode = "json")
+    data = manifest.model_dump(mode = "json")
+    _normalize_progress(data)
+    return data
 
 
 async def read_current_run(
@@ -279,6 +393,7 @@ async def queue_resume(book_id: str, run_id: str) -> dict[str, Any]:
         if any(run["run_id"] != run_id for run in active):
             raise ValueError("another Distill run is already active for this book")
         await progress.service.clear_cancel(book_id, run_id)
+        _normalize_progress(manifest)
         if manifest.get("resume_from_node") not in params.GRAPH_NODES:
             failed_nodes = [
                 node
@@ -308,6 +423,7 @@ async def queue_resume(book_id: str, run_id: str) -> dict[str, Any]:
         manifest["error"] = None
         manifest["updated_at"] = time.time()
         manifest["progress"]["current_node"] = None
+        manifest["progress"]["current_task"] = None
         for node, status in manifest["progress"]["node_status"].items():
             if status in {"running", "failed"}:
                 manifest["progress"]["node_status"][node] = "pending"
@@ -335,12 +451,9 @@ async def queue_node_replay(book_id: str, run_id: str, node_id: str) -> dict[str
         active_runs = [run for run in await list_runs(book_id, storage = storage) if run["status"] in {"queued", "running"}]
         if active_runs:
             raise ValueError("stop the active Distill run before replaying a node")
-        rag_index = await domains.bd.rag.service.read_index(book_id, run_id, storage = storage)
-        if rag_index is not None and rag_index.get("status") in {"queued", "running"}:
-            raise ValueError("stop Agentic RAG before replaying Distill")
-
+        progress_state = _normalize_progress(manifest)
         node_index = params.GRAPH_NODES.index(node_id)
-        node_status = (manifest.get("progress") or {}).get("node_status", {})
+        node_status = progress_state["node_status"]
         incomplete_predecessors = [
             predecessor
             for predecessor in params.GRAPH_NODES[:node_index]
@@ -358,18 +471,37 @@ async def queue_node_replay(book_id: str, run_id: str, node_id: str) -> dict[str
         graph_config = {"configurable": {
             "thread_id": f"bd-distill:{book_id}:{manifest['extraction_run_id']}:{run_id}",
         }}
-        await infra.postgres.service.checkpoint_before_node(graph, graph_config, node_id)
-        if rag_index is not None:
-            await domains.bd.rag.service.wipe_index(book_id, run_id)
+        await _checkpoint_before_replay_node(graph, graph_config, node_id)
         await progress.service.clear_cancel(book_id, run_id)
 
         prefix = keys.run_prefix(book_id, run_id)
         if node_id in {"prepare_units", "extract_unit"}:
+            await storage.delete_prefix(prefix + "extraction-candidates/")
             await storage.delete_prefix(prefix + "learning-units/")
-        if node_id in {"prepare_units", "extract_unit", "prepare_chapters", "synthesize_chapter"}:
+        elif node_id == "verify_unit":
+            await storage.delete_prefix(prefix + "learning-units/")
+        if node_id in {
+            "prepare_units",
+            "extract_unit",
+            "verify_unit",
+            "prepare_chapters",
+            "synthesize_chapter",
+        }:
             await storage.delete_prefix(prefix + "chapters/")
-        if node_id in {"prepare_units", "extract_unit", "prepare_chapters", "synthesize_chapter", "synthesize_book"}:
+        elif node_id == "build_chapter_visuals":
+            await _reset_chapter_visuals(storage, prefix)
+        if node_id in {
+            "prepare_units",
+            "extract_unit",
+            "verify_unit",
+            "prepare_chapters",
+            "synthesize_chapter",
+            "build_chapter_visuals",
+            "synthesize_book",
+        }:
             await storage.delete_prefix(prefix + "synthesis/")
+        elif node_id in {"write_decision_brief", "research_context"}:
+            await storage.delete_prefix(prefix + "synthesis/research-context.json")
         await storage.delete_prefix(prefix + "report.json")
         await storage.delete_prefix(prefix + "report.html")
         await storage.delete_prefix(prefix + "report.pdf")
@@ -382,12 +514,16 @@ async def queue_node_replay(book_id: str, run_id: str, node_id: str) -> dict[str
         await domains.settings.llm_counter.service.retain_nodes("bd", run_id, retained_llm_nodes)
 
         downstream = set(params.REPLAY_DESCENDANTS[node_id])
-        progress_state = manifest["progress"]
         for downstream_node in downstream:
             progress_state["node_status"][downstream_node] = "pending"
         progress_state["current_node"] = None
-        progress_state["completed_units"] = len(await storage.list(prefix + "learning-units/"))
-        progress_state["completed_chapters"] = len(await storage.list(prefix + "chapters/"))
+        progress_state["current_task"] = None
+        artifact_ids = await _persisted_artifact_ids(storage, prefix)
+        progress_state["completed_extractions"] = len(artifact_ids["extractions"])
+        progress_state["completed_units"] = len(artifact_ids["units"])
+        progress_state["completed_chapter_guides"] = len(artifact_ids["chapter_guides"])
+        progress_state["completed_chapter_visuals"] = len(artifact_ids["chapter_visuals"])
+        progress_state["completed_chapters"] = len(artifact_ids["chapter_visuals"])
         manifest.update(
             status = "queued",
             schema_version = versions.MANIFEST_SCHEMA_VERSION,
@@ -474,16 +610,6 @@ async def wipe_run(book_id: str, run_id: str) -> dict[str, Any]:
                 timeout = 3600,
                 blocking_timeout = 30,
             ),
-            redis.lock(
-                domains.bd.rag.keys.enqueue_lock_key(book_id, run_id),
-                timeout = 120,
-                blocking_timeout = 30,
-            ),
-            redis.lock(
-                domains.bd.rag.keys.index_lock_key(book_id, run_id),
-                timeout = domains.bd.rag.params.INDEX_LOCK_TIMEOUT_S,
-                blocking_timeout = 1,
-            ),
         ):
             manifest = await read_run(book_id, run_id, storage = storage)
             if manifest is None:
@@ -493,10 +619,6 @@ async def wipe_run(book_id: str, run_id: str) -> dict[str, Any]:
             runs = await list_runs(book_id, storage = storage)
             if any(run["status"] in {"queued", "running"} for run in runs):
                 raise ValueError("stop the active Distill run before wiping another run")
-            index_manifest = await domains.bd.rag.service.read_index(book_id, run_id, storage = storage)
-            if index_manifest is not None:
-                await domains.bd.rag.service.delete_run_points(book_id, run_id)
-                await domains.bd.rag.service.delete_graph_run(book_id, run_id)
             replacement = next(
                 (run for run in runs
                  if run["run_id"] != run_id and run["extraction_run_id"] == manifest["extraction_run_id"]),
@@ -723,7 +845,7 @@ async def run_distill(
     qa_content = await storage.read_text(manifest["ingestion_ai_manifest_key"])
     if hashlib.sha256(qa_content.encode("utf-8")).hexdigest() != manifest["ingestion_ai_manifest_sha256"]:
         raise ValueError("the ingestion QA manifest changed after this Distill run was created")
-    if manifest.get("schema_version") in {"1.1", "1.2", "1.3"}:
+    if manifest.get("schema_version") in {"1.1", "1.2", "1.3", "1.4"}:
         selection_content = await storage.read_text(manifest["content_selection_key"])
         if hashlib.sha256(selection_content.encode("utf-8")).hexdigest() != manifest["content_selection_sha256"]:
             raise ValueError("the content-selection revision changed after this Distill run was created")
@@ -739,7 +861,7 @@ async def run_distill(
             )
         ):
             raise ValueError("the pinned content-selection revision does not match this Distill run")
-    if manifest.get("schema_version") in {"1.2", "1.3"}:
+    if manifest.get("schema_version") in {"1.2", "1.3", "1.4"}:
         processed_content = await storage.read_text(manifest["processed_book_key"])
         if hashlib.sha256(processed_content.encode("utf-8")).hexdigest() != manifest["processed_book_sha256"]:
             raise ValueError("the pinned processed-book manifest failed its integrity check")
@@ -779,10 +901,21 @@ async def run_distill(
             await progress.service.emit(book_id, run_id, "run_started", status = "running", progress = manifest["progress"])
     domains.settings.chat.service.refresh_endpoint(force = True)
 
-    existing_units = await storage.list(f"{keys.run_prefix(book_id, run_id)}learning-units/")
-    existing_chapters = await storage.list(f"{keys.run_prefix(book_id, run_id)}chapters/")
-    completed_unit_ids = {key.rsplit("/", 1)[-1].removesuffix(".json") for key in existing_units}
-    completed_chapter_ids = {key.rsplit("/", 1)[-1].removesuffix(".json") for key in existing_chapters}
+    artifact_ids = await _persisted_artifact_ids(storage, keys.run_prefix(book_id, run_id))
+    extracted_unit_ids = artifact_ids["extractions"]
+    completed_unit_ids = artifact_ids["units"]
+    completed_chapter_guide_ids = artifact_ids["chapter_guides"]
+    completed_chapter_visual_ids = artifact_ids["chapter_visuals"]
+    completed_chapter_ids = set(completed_chapter_visual_ids)
+    progress_state = _normalize_progress(manifest)
+    progress_state.update(
+        completed_extractions = len(extracted_unit_ids),
+        completed_units = len(completed_unit_ids),
+        completed_chapter_guides = len(completed_chapter_guide_ids),
+        completed_chapter_visuals = len(completed_chapter_visual_ids),
+        completed_chapters = len(completed_chapter_visual_ids),
+    )
+    manifest = await _write_manifest(storage, manifest)
     progress_lock = asyncio.Lock()
     cancellation_observed = False
     cancel_redis = infra.redis.service.new_redis()
@@ -791,7 +924,9 @@ async def run_distill(
         nonlocal cancellation_observed, manifest
         kind = event.get("kind")
         status = event.get("status")
-        should_check_cancel = (kind == "node" and status == "running") or kind in {"unit", "chapter"}
+        should_check_cancel = (kind == "node" and status == "running") or (
+            kind == "activity" and isinstance(event.get("current_task"), str)
+        ) or kind in {"unit", "chapter", "unit_extraction", "unit_verification", "chapter_guide", "chapter_visuals"}
         if should_check_cancel and await progress.service.cancel_requested(cancel_redis, book_id, run_id):
             cancellation_observed = True
             raise asyncio.CancelledError
@@ -805,11 +940,28 @@ async def run_distill(
                         manifest["resume_from_node"] = node
                     elif status == "done" and manifest.get("resume_from_node") == node:
                         manifest["resume_from_node"] = None
-                    current["current_node"] = node if status == "running" else (
-                        None if current.get("current_node") == node else current.get("current_node")
-                    )
+                    if status == "running":
+                        current["current_node"] = node
+                        current["current_task"] = None
+                    elif current.get("current_node") == node:
+                        current["current_node"] = None
+                        current["current_task"] = None
+            elif kind == "activity":
+                task = event.get("current_task")
+                if isinstance(task, str) and event.get("node") == current.get("current_node"):
+                    current["current_task"] = task[:240]
             elif kind == "unit_plan":
                 current["total_units"] = int(event.get("total_units", 0))
+            elif kind == "unit_extraction" and status == "done":
+                unit_id = event.get("unit_id")
+                if isinstance(unit_id, str):
+                    extracted_unit_ids.add(unit_id)
+                current["completed_extractions"] = len(extracted_unit_ids)
+            elif kind == "unit_verification" and status == "done":
+                unit_id = event.get("unit_id")
+                if isinstance(unit_id, str):
+                    completed_unit_ids.add(unit_id)
+                current["completed_units"] = len(completed_unit_ids)
             elif kind == "unit" and status == "done":
                 unit_id = event.get("unit_id")
                 if isinstance(unit_id, str):
@@ -817,6 +969,16 @@ async def run_distill(
                 current["completed_units"] = len(completed_unit_ids)
             elif kind == "chapter_plan":
                 current["total_chapters"] = int(event.get("total_chapters", 0))
+            elif kind == "chapter_guide" and status == "done":
+                chapter_id = event.get("chapter_id")
+                if isinstance(chapter_id, str):
+                    completed_chapter_guide_ids.add(chapter_id)
+                current["completed_chapter_guides"] = len(completed_chapter_guide_ids)
+            elif kind == "chapter_visuals" and status == "done":
+                chapter_id = event.get("chapter_id")
+                if isinstance(chapter_id, str):
+                    completed_chapter_visual_ids.add(chapter_id)
+                current["completed_chapter_visuals"] = len(completed_chapter_visual_ids)
             elif kind == "chapter" and status == "done":
                 chapter_id = event.get("chapter_id")
                 if isinstance(chapter_id, str):
@@ -873,7 +1035,9 @@ async def run_distill(
             "selected_page_count": manifest.get("selected_page_count", manifest["expected_page_count"]),
             "run_created_at": manifest["created_at"],
             "resume_from_node": manifest.get("resume_from_node"),
+            "extracted_units": [],
             "completed_units": [],
+            "synthesized_chapters": [],
             "completed_chapters": [],
         }
         graph_config = {
@@ -884,11 +1048,7 @@ async def run_distill(
         completed_checkpoint_state = None
         if checkpointer is not None:
             if replay_from_node in params.GRAPH_NODES:
-                replay_config = await infra.postgres.service.checkpoint_before_node(
-                    graph,
-                    graph_config,
-                    replay_from_node,
-                )
+                replay_config = await _checkpoint_before_replay_node(graph, graph_config, replay_from_node)
                 reset_patch: dict[str, Any] = {
                     "report_key": None,
                     "report_sha256": None,
@@ -899,24 +1059,54 @@ async def run_distill(
                     "review_required": True,
                     "structural_quality": None,
                 }
-                if replay_from_node != "publish_report":
+                if replay_from_node in {
+                    "prepare_units",
+                    "extract_unit",
+                    "verify_unit",
+                    "prepare_chapters",
+                    "synthesize_chapter",
+                    "build_chapter_visuals",
+                    "synthesize_book",
+                }:
                     reset_patch["book_synthesis_key"] = None
+                if replay_from_node != "publish_report":
+                    reset_patch["research_context_key"] = None
                 if replay_from_node == "prepare_units":
                     reset_patch.update(
                         unit_refs = [],
+                        extracted_units = Overwrite([]),
                         completed_units = Overwrite([]),
                         chapter_refs = [],
+                        synthesized_chapters = Overwrite([]),
                         completed_chapters = Overwrite([]),
                     )
                 elif replay_from_node == "extract_unit":
                     reset_patch.update(
+                        extracted_units = Overwrite([]),
                         completed_units = Overwrite([]),
                         chapter_refs = [],
+                        synthesized_chapters = Overwrite([]),
+                        completed_chapters = Overwrite([]),
+                    )
+                elif replay_from_node == "verify_unit":
+                    reset_patch.update(
+                        completed_units = Overwrite([]),
+                        chapter_refs = [],
+                        synthesized_chapters = Overwrite([]),
                         completed_chapters = Overwrite([]),
                     )
                 elif replay_from_node == "prepare_chapters":
-                    reset_patch.update(chapter_refs = [], completed_chapters = Overwrite([]))
+                    reset_patch.update(
+                        chapter_refs = [],
+                        synthesized_chapters = Overwrite([]),
+                        completed_chapters = Overwrite([]),
+                    )
                 elif replay_from_node == "synthesize_chapter":
+                    reset_patch.update(
+                        synthesized_chapters = Overwrite([]),
+                        completed_chapters = Overwrite([]),
+                    )
+                elif replay_from_node == "build_chapter_visuals":
                     reset_patch["completed_chapters"] = Overwrite([])
                 replay_config = await graph.aupdate_state(replay_config, reset_patch)
                 graph_config = {
@@ -964,7 +1154,15 @@ async def run_distill(
         else:
             graph_input = initial_state
         resume_from_node = manifest.get("resume_from_node")
-        chapter_stage_nodes = {"prepare_chapters", "synthesize_chapter", "synthesize_book", "publish_report"}
+        chapter_stage_nodes = {
+            "prepare_chapters",
+            "synthesize_chapter",
+            "build_chapter_visuals",
+            "synthesize_book",
+            "write_decision_brief",
+            "research_context",
+            "publish_report",
+        }
         if graph_input is not None and resume_from_node in chapter_stage_nodes:
             restored_state = await _restore_chapter_resume_state(storage, initial_state)
             if restored_state is None:
@@ -1036,6 +1234,7 @@ async def run_distill(
         manifest["finished_at"] = max(time.time(), manifest["created_at"])
         manifest["error"] = None
         manifest["progress"]["current_node"] = None
+        manifest["progress"]["current_task"] = None
         manifest = await _write_manifest(storage, manifest)
         await progress.service.emit(book_id, run_id, "run_cancelled", status = "cancelled", progress = manifest["progress"])
         return manifest
@@ -1044,6 +1243,7 @@ async def run_distill(
         manifest["finished_at"] = max(time.time(), manifest["created_at"])
         manifest["error"] = _failure_message(error)
         manifest["progress"]["current_node"] = None
+        manifest["progress"]["current_task"] = None
         manifest = await _write_manifest(storage, manifest)
         logger.exception("[bd-distill] run failed book=%s run=%s", book_id, run_id)
         await domains.settings.llm_counter.service.snapshot("bd", run_id)

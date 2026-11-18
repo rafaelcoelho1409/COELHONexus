@@ -29,7 +29,7 @@ def _page_excerpt(body: str, max_chars: int) -> str:
 
 def _stream_safe(entry) -> bool:
     """Only classify pages that tier post-processing cannot split or replace."""
-    return entry.bytes < domains.dd.ingestion.post.params.OVERSIZED_SPLIT_BYTES
+    return entry.bytes < domains.dd.pages.post.params.OVERSIZED_SPLIT_BYTES
 
 
 def _selection_counts(entries: list) -> tuple[int, int, int, int]:
@@ -142,7 +142,7 @@ async def select_pages(
         selection_by_identity: dict[tuple[str, str, str], dict[str, Any]] = {}
 
         def record(entry, selection: dict[str, Any]) -> None:
-            identity = domains.dd.ingestion.storage.domain.selection_identity(entry)
+            identity = domains.dd.pages.storage.domain.selection_identity(entry)
             selection_by_identity[identity] = selection
 
         for digest, canonical in prior_duplicates.items():

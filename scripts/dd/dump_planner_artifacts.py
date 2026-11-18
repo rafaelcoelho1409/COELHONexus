@@ -35,7 +35,7 @@ async def main() -> None:
             continue
         row = {
             "slug": slug,
-            "manifest": await domains.dd.ingestion.storage.service.read_framework_manifest(minio, slug),
+            "manifest": await domains.dd.pages.storage.service.read_framework_manifest(minio, slug),
             "distillates": ((await _read(minio, keys.distill_latest_key(slug))) or {}).get("distillates") or {},
             "proposals": ((await _read(minio, keys.proposals_latest_key(slug))) or {}).get("proposals") or [],
             "assignments": assign["assignments"],

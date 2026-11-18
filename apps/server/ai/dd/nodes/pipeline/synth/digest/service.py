@@ -60,7 +60,7 @@ async def prepare(state: graphs.pipeline.synth.digest.states.DigestState, runtim
     graphs.service.emit(params.STEP, "start", chapter_id = chapter_id, chapter_title = chapter_title, n_sections = len(outline_sections), n_sources = len(source_keys))
 
     # Sources without pre-built vaults have no sentinels; the router would route zero code refs. Sentinelize them here, in memory.
-    vault = domains.dd.ingestion.vault
+    vault = domains.dd.pages.vault
     bodies = list(await blobs.read_many(source_keys))
     pairs: list[tuple[str, str]] = []
     for key, raw in zip(source_keys, bodies):

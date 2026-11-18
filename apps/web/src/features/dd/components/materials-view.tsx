@@ -3,7 +3,7 @@
 /** The Pages view: ingested pages read the way a Study chapter is. The page list on the left (filter, tier
  * chips, sections in the order of the original documentation), the page itself in the middle with an outline beside it, search
  * across every page, and a reading window that gives the page the whole screen. Both side columns fold away (and stay folded,
- * per browser). While a run is on screen the pages are the run's own, so Agentic AI's output shows as it is published. */
+ * per browser). While extraction is running, the reader follows that run's selected page manifest. */
 
 import {
   ChevronLeft,
@@ -23,7 +23,7 @@ import { flushSync } from "react-dom";
 import { useScrollSpy } from "@/shared/lib/use-scroll-spy";
 import { Markdown, markdownToc } from "@/shared/markdown";
 
-import { explorerTierValues, filterEntries, groupEntries } from "../domain/ingestion";
+import { explorerTierValues, filterEntries, groupEntries } from "../domain/pages";
 import { dropLeadingTitle, pageNeighbours, pageTitle } from "../domain/materials";
 import type { PageSearchHit } from "../domain/materials-search";
 import type { Manifest, PageVersion } from "../entities";
@@ -128,7 +128,7 @@ export function MaterialsView({
       originalKey &&
       selectedEntry.key &&
       selectedEntry.key !== originalKey &&
-      (runId || manifest?.agentic_run_id),
+      (runId || manifest?.run_id),
   );
   const selectedVersion = hasVersions ? version : "processed";
   const canonicalPage = usePageBody(runId ? null : slug, selected, selectedVersion);

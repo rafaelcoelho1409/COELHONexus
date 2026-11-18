@@ -1020,9 +1020,9 @@ def writer_request(
                 continue
             if isinstance(entry, dict):
                 try:
-                    entry = domains.dd.ingestion.vault.schemas.VaultEntry(**entry)
+                    entry = domains.dd.pages.vault.schemas.VaultEntry(**entry)
                 except Exception:
-                    entry = domains.dd.ingestion.vault.schemas.VaultEntry(
+                    entry = domains.dd.pages.vault.schemas.VaultEntry(
                         hash = h,
                         fence_text = entry.get("fence_text") or "",
                         info_string = entry.get("info_string") or "",
@@ -1032,7 +1032,7 @@ def writer_request(
                         sentinel_kind = entry.get("sentinel_kind", "fence_backtick"),
                     )
             coerced[h] = entry
-        code_bank = domains.dd.ingestion.vault.domain.format_entries_for_prompt(
+        code_bank = domains.dd.pages.vault.domain.format_entries_for_prompt(
             coerced, hashes = allowed_hashes,
             max_chars_per_entry = params.MAX_VAULT_CHARS_PER_ENTRY,
             max_total_chars = vault_char_budget or params.MAX_VAULT_CHARS_TOTAL,

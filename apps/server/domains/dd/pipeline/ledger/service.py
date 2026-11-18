@@ -7,7 +7,7 @@ from . import domain, entities
 async def load_pages(blobs, slug: str, sources: list[str], bodies: list[str] | None = None) -> list[tuple[str, dict]]:
     """`(page key, vault entries in document order)` for each source that has a body. A page ingestion already vaulted has its entries read from the
     vault; a raw page is vaulted here the way the digest does it. `bodies` are the pages' texts when the caller has read them already."""
-    vault = domains.dd.ingestion.vault
+    vault = domains.dd.pages.vault
     if bodies is None:
         bodies = list(await blobs.read_many(sources))
     pages: list[tuple[str, dict]] = []

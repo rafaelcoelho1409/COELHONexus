@@ -1,4 +1,4 @@
-"""Persist bounded source chunks and extract cited learning units from them."""
+"""Extract and persist source-cited lesson candidates from bounded source chunks."""
 from __future__ import annotations
 import domains
 from .... import agents, graphs, skills
@@ -11,32 +11,109 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
+def _candidate_artifact_from_learning_unit(ref: dict[str, Any], artifact: dict[str, Any]) -> dict[str, Any]:
+    """Recover candidates from a completed artifact created before extraction was split from verification."""
+    candidates = []
+    for lesson in artifact.get("lessons", []):
+        if not isinstance(lesson, dict):
+            continue
+        candidates.append({
+            "learning_unit_id": lesson.get("learning_unit_id"),
+            "kind": lesson.get("kind"),
+            "title": lesson.get("title"),
+            "claim": lesson.get("claim"),
+            "explanation": lesson.get("explanation"),
+            "attribution": lesson.get("attribution"),
+            "evidence": lesson.get("evidence", []),
+            "confidence": lesson.get("confidence", 0.5),
+        })
+    return {
+        "unit_id": ref["unit_id"],
+        "page_number": artifact.get("page_number", ref["page_number"]),
+        "processed_page_number": artifact.get("processed_page_number"),
+        "source_key": artifact.get("source_key"),
+        "section_path": artifact.get("section_path", ref["section_path"]),
+        "source_sha256": artifact.get("source_sha256", ref["source_sha256"]),
+        "text_sha256": artifact["text_sha256"],
+        "source_char_range": artifact.get("source_char_range", [ref["char_start"], ref["char_end"]]),
+        "extraction_status": artifact.get("extraction_status", "complete"),
+        "candidates": candidates,
+        "omitted_material": artifact.get("omitted_material", []),
+        "review_flags": artifact.get("review_flags", []),
+    }
+
+
 async def extract_unit(
     dependencies: graphs.distill.entities.DistillDependencies,
     state: dict[str, Any],
 ) -> dict[str, Any]:
+    """Run only the learning extractor; evidence verification is a separate graph stage."""
     ref = state["unit_ref"]
     storage = dependencies.storage
     input_record = json.loads(await storage.read_text(ref["input_key"]))
     source_text = input_record.get("text")
     if not isinstance(source_text, str) or domains.bd.distill.domain.sha256_text(source_text) != ref["text_sha256"]:
         raise ValueError(f"Distill input {ref['unit_id']} failed its integrity check")
-    output_key = domains.bd.distill.keys.learning_unit_key(state["book_id"], state["run_id"], ref["unit_id"])
-    if await storage.exists(output_key):
-        artifact = json.loads(await storage.read_text(output_key))
-        if artifact.get("text_sha256") != ref["text_sha256"]:
-            raise ValueError("an immutable learning-unit artifact has conflicting source content")
-        ref["learning_unit_ids"] = [item["learning_unit_id"] for item in artifact.get("lessons", [])]
-        ref["existing_artifact"] = True
+
+    candidate_key = domains.bd.distill.keys.extraction_candidate_key(
+        state["book_id"], state["run_id"], ref["unit_id"],
+    )
+    if await storage.exists(candidate_key):
+        artifact = json.loads(await storage.read_text(candidate_key))
+        if (
+            artifact.get("unit_id") != ref["unit_id"]
+            or artifact.get("source_sha256") != ref["source_sha256"]
+            or artifact.get("text_sha256") != ref["text_sha256"]
+        ):
+            raise ValueError("an immutable extraction-candidate artifact has conflicting source content")
+        ref["learning_unit_ids"] = [
+            candidate["learning_unit_id"]
+            for candidate in artifact.get("candidates", [])
+            if isinstance(candidate, dict) and isinstance(candidate.get("learning_unit_id"), str)
+        ]
         await graphs.service.report(
             dependencies.progress_callback,
-            kind = "unit",
+            kind = "unit_extraction",
             status = "done",
             unit_id = ref["unit_id"],
-            lesson_count = len(ref["learning_unit_ids"]),
         )
-        return {"completed_units": [ref]}
+        return {"extracted_units": [ref]}
 
+    learning_unit_key = domains.bd.distill.keys.learning_unit_key(
+        state["book_id"], state["run_id"], ref["unit_id"],
+    )
+    if await storage.exists(learning_unit_key):
+        learning_unit = json.loads(await storage.read_text(learning_unit_key))
+        if (
+            learning_unit.get("unit_id") != ref["unit_id"]
+            or learning_unit.get("source_sha256") != ref["source_sha256"]
+            or learning_unit.get("text_sha256") != ref["text_sha256"]
+        ):
+            raise ValueError("an immutable learning-unit artifact has conflicting source content")
+        candidate_artifact = _candidate_artifact_from_learning_unit(ref, learning_unit)
+        await storage.write(
+            candidate_key,
+            domains.bd.distill.domain.json_body(candidate_artifact),
+            content_type = domains.bd.distill.params.JSON_TYPE,
+        )
+        ref["learning_unit_ids"] = [
+            candidate["learning_unit_id"] for candidate in candidate_artifact["candidates"]
+            if isinstance(candidate.get("learning_unit_id"), str)
+        ]
+        await graphs.service.report(
+            dependencies.progress_callback,
+            kind = "unit_extraction",
+            status = "done",
+            unit_id = ref["unit_id"],
+        )
+        return {"extracted_units": [ref]}
+
+    await graphs.service.report(
+        dependencies.progress_callback,
+        kind = "activity",
+        node = "extract_unit",
+        current_task = f"Extracting lessons from page {ref['page_number']}",
+    )
     prompt_payload = {
         "task": "Extract the important learning units from this source chunk.",
         "physical_page": ref["page_number"],
@@ -44,8 +121,6 @@ async def extract_unit(
         "source_chunk_id": ref["unit_id"],
         "markdown": source_text,
     }
-    # Load role files before the recoverable model-response block. Missing packaged skills are
-    # deployment errors and must fail this graph node instead of being saved as empty extraction.
     extractor_files = skills.service.files_for("distill_learning_extractor")
     extraction = None
     extraction_needs_review = False
@@ -78,7 +153,7 @@ async def extract_unit(
         except Exception as error:  # noqa: BLE001 — unexpected invocation failures must fail this graph node.
             if domains.settings.chat.domain.is_transient_provider_error(error):
                 logger.warning(
-                    "[bd-distill] transient provider failure stage=agent unit=%s page=%s kind=%s error=%s",
+                    "[bd-distill] transient provider failure stage=learning_extractor unit=%s page=%s kind=%s error=%s",
                     ref.get("unit_id"),
                     ref.get("page_number"),
                     domains.settings.chat.domain.classify_error(error),
@@ -139,67 +214,12 @@ async def extract_unit(
             "evidence": evidence,
             "confidence": lesson.confidence,
         })
-
-    if candidates:
-        verifier_files = skills.service.files_for("distill_evidence_verifier")
-        try:
-            payload = {"page_number": ref["page_number"], "lessons": candidates}
-            with domains.settings.llm_counter.service.llm_context(
-                ns = "bd", run_id = state["run_id"], node_id = "evidence_verifier", stage = "distill",
-            ):
-                result = await domains.settings.chat.service.resilient_ainvoke(
-                    lambda: dependencies.evidence_verifier.ainvoke({
-                        "messages": [{
-                            "role": "user",
-                            "content": json.dumps(payload, ensure_ascii = False),
-                        }],
-                        "files": verifier_files,
-                    }, config = {
-                        "callbacks": [domains.settings.llm_counter.service.LLMCounterCallback()],
-                    }),
-                    attempts = domains.bd.distill.params.AGENT_CALL_ATTEMPTS,
-                    wait_base_s = domains.bd.distill.params.AGENT_CALL_RETRY_WAIT_BASE_S,
-                )
-            review = domains.bd.distill.domain.structured_model_from_agent_result(
-                result,
-                domains.bd.distill.schemas.EvidenceReview,
-            )
-            if not isinstance(review, domains.bd.distill.schemas.EvidenceReview):
-                raise ValueError("the evidence verifier returned no valid EvidenceReview")
-            verdicts = {item.lesson_index: item for item in review.verdicts}
-        except Exception as error:  # noqa: BLE001 — unavailable semantic review retains a review-marked citation.
-            verdicts = {}
-            if domains.settings.chat.domain.is_transient_provider_error(error):
-                logger.warning(
-                    "[bd-distill] transient provider failure stage=evidence_verifier unit=%s page=%s kind=%s error=%s",
-                    ref.get("unit_id"),
-                    ref.get("page_number"),
-                    domains.settings.chat.domain.classify_error(error),
-                    type(error).__name__,
-                )
-            review_flags.append(
-                f"Evidence review was unavailable ({type(error).__name__}); supported quotes require human review."
-            )
-    else:
-        verdicts = {}
-
-    persisted_lessons = []
     for index, candidate in enumerate(candidates):
-        verdict = verdicts.get(index)
-        if verdict is not None and not verdict.supported:
-            review_flags.append("An evidence reviewer rejected a proposed lesson as unsupported; it was excluded.")
-            continue
-        lesson_id = domains.bd.distill.domain.stable_id(ref["unit_id"], str(index), candidate["claim"])
-        persisted_lessons.append({
-            "learning_unit_id": lesson_id,
-            **candidate,
-            "verification_status": "verified" if verdict is not None else "unverified",
-            "verification_note": verdict.reason if verdict is not None else None,
-        })
-        if verdict is None:
-            review_flags.append("A lesson has a source quote but no independent semantic evidence verdict.")
+        candidate["learning_unit_id"] = domains.bd.distill.domain.stable_id(
+            ref["unit_id"], str(index), candidate["claim"],
+        )
 
-    artifact = {
+    candidate_artifact = {
         "unit_id": ref["unit_id"],
         "page_number": ref["page_number"],
         "processed_page_number": input_record.get("processed_page_number"),
@@ -209,21 +229,20 @@ async def extract_unit(
         "text_sha256": ref["text_sha256"],
         "source_char_range": [ref["char_start"], ref["char_end"]],
         "extraction_status": "needs_review" if extraction_needs_review else "complete",
-        "lessons": persisted_lessons,
+        "candidates": candidates,
         "omitted_material": extraction.omitted_material,
         "review_flags": sorted(set(review_flags)),
     }
     await storage.write(
-        output_key,
-        domains.bd.distill.domain.json_body(artifact),
+        candidate_key,
+        domains.bd.distill.domain.json_body(candidate_artifact),
         content_type = domains.bd.distill.params.JSON_TYPE,
     )
-    ref["learning_unit_ids"] = [item["learning_unit_id"] for item in persisted_lessons]
+    ref["learning_unit_ids"] = [candidate["learning_unit_id"] for candidate in candidates]
     await graphs.service.report(
         dependencies.progress_callback,
-        kind = "unit",
+        kind = "unit_extraction",
         status = "done",
         unit_id = ref["unit_id"],
-        lesson_count = len(persisted_lessons),
     )
-    return {"completed_units": [ref]}
+    return {"extracted_units": [ref]}

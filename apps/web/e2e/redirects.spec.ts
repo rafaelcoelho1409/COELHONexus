@@ -5,7 +5,7 @@ import { expect, test } from "@playwright/test";
 test.describe("legacy Docs Distiller URLs", () => {
   const cases = [
     ["/docs-distiller", "/dd"],
-    ["/docs-distiller/ingestion?slug=fasthtml&run=r1", "/dd/ingestion?slug=fasthtml&run=r1"],
+    ["/docs-distiller/ingestion?slug=fasthtml&run=r1", "/dd/pages?slug=fasthtml&run=r1"],
     ["/docs-distiller/planner?slug=fasthtml", "/dd/planner?slug=fasthtml"],
     ["/docs-distiller/synth?slug=fasthtml", "/dd/synth?slug=fasthtml"],
     ["/docs-distiller/pipeline?slug=fasthtml", "/dd/pipeline?slug=fasthtml"],

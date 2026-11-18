@@ -132,9 +132,13 @@ export function initialDistillRunState(run: DistillRun | DistillRunStart): Disti
         ? run.progress
         : {
             current_node: null,
+            current_task: null,
             node_status: {},
+            completed_extractions: 0,
             completed_units: 0,
             total_units: 0,
+            completed_chapter_guides: 0,
+            completed_chapter_visuals: 0,
             completed_chapters: 0,
             total_chapters: 0,
           },

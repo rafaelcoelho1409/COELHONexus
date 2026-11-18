@@ -247,6 +247,22 @@ def _coordinate_values(value: Any) -> list[float]:
     return []
 
 
+def merge_visual_artifacts(
+    synthesis: domains.bd.distill.schemas.ChapterSynthesis,
+    visuals: domains.bd.distill.schemas.VisualArtifactOutput,
+) -> domains.bd.distill.schemas.ChapterSynthesis:
+    """Merge visual output and revalidate nested models before evidence checks.
+
+    Pydantic's ``model_copy(update=...)`` skips validation. Passing dumped visual
+    data to it leaves nested diagrams, charts, and other structures as dictionaries,
+    while downstream checks expect their typed schema objects.
+    """
+    return domains.bd.distill.schemas.ChapterSynthesis.model_validate({
+        **synthesis.model_dump(mode = "python"),
+        **visuals.model_dump(mode = "python"),
+    })
+
+
 def visual_evidence_issues(
     synthesis: domains.bd.distill.schemas.ChapterSynthesis,
     units: list[dict[str, Any]],

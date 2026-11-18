@@ -36,8 +36,8 @@ import domains
 import infra
 
 R = infra.redis.service
-progress = domains.dd.ingestion.runtime.progress
-dispatch = domains.dd.ingestion.runtime.dispatch
+progress = domains.dd.pages.runtime.progress
+dispatch = domains.dd.pages.runtime.dispatch
 
 
 def ok(label, cond, extra=""):
@@ -91,7 +91,7 @@ async def main() -> None:
         plain = asyncio.create_task(dispatch.service._cancel_watcher(r, "run-1", sleeper, 0.05))
         await asyncio.sleep(0.5)
         ok("without a slug the watcher renews nothing", 0 < await r.ttl(KEY) <= 2)
-        await domains.dd.ingestion.runtime.cancel.service.request_cancel(r, "run-1")
+        await domains.dd.pages.runtime.cancel.service.request_cancel(r, "run-1")
         await asyncio.wait_for(asyncio.gather(plain, return_exceptions = True), timeout = 3)
         await asyncio.sleep(0)
         ok("…and the cancel flag still cancels the run's task", sleeper.cancelled() or sleeper.done())

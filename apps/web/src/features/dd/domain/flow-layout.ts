@@ -4,8 +4,8 @@
 
 import type { RunStage } from "../params";
 
-/** The graphs drawn in this style: the two stage graphs and the Agentic AI ingestion graph (one column, no loop). */
-export type FlowStage = RunStage | "ingestion";
+/** The Planner and Synth stage graphs share this layout. */
+export type FlowStage = RunStage;
 
 export const NODE_WIDTH = 216;
 /** A node can show three lines — its label (a 20px line), a KPI and a live line (18px each), 2px apart — which is 60px of
@@ -35,7 +35,6 @@ export type FlowLayout = {
 const LOOPS: Record<FlowStage, { from: string; to: string } | null> = {
   planner: null,
   synth: { from: "mgsr_replan", to: "sawc_write" },
-  ingestion: null,
 };
 
 /** One vertical column in node order, with room on the right for the loop arc when the stage has one. */

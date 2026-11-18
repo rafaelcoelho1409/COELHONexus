@@ -779,110 +779,6 @@
         }
       }
     },
-    "/api/v1/bd/distill/{book_id}/runs/{run_id}/rag-index": {
-      "get": {
-        "tags": [
-          "Book Distiller"
-        ],
-        "summary": "Get Rag Index Status",
-        "operationId": "get_bd_distill_book_id_runs_run_id_rag_index",
-        "parameters": [
-          {
-            "name": "book_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "pattern": "^[A-Za-z0-9_-]+$",
-              "title": "Book Id"
-            }
-          },
-          {
-            "name": "run_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "pattern": "^[A-Za-z0-9_-]+$",
-              "title": "Run Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/RagIndexStatus"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      },
-      "post": {
-        "tags": [
-          "Book Distiller"
-        ],
-        "summary": "Retry Rag Index",
-        "operationId": "post_bd_distill_book_id_runs_run_id_rag_index",
-        "parameters": [
-          {
-            "name": "book_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "pattern": "^[A-Za-z0-9_-]+$",
-              "title": "Book Id"
-            }
-          },
-          {
-            "name": "run_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "pattern": "^[A-Za-z0-9_-]+$",
-              "title": "Run Id"
-            }
-          }
-        ],
-        "responses": {
-          "202": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/RagIndexStatus"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/api/v1/bd/distill/{book_id}/runs/{run_id}/replay/{node_id}": {
       "post": {
         "tags": [
@@ -1740,7 +1636,7 @@
           "Book Distiller"
         ],
         "summary": "Get Agentic Run Page",
-        "description": "Read the normalized page from one exact immutable ingestion QA run.",
+        "description": "Read the final processed page from one exact immutable ingestion run.",
         "operationId": "get_bd_ingestion_book_id_agentic_runs_agentic_run_id_pages_page_no",
         "parameters": [
           {
@@ -1943,6 +1839,370 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/AgenticRunStart"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/bd/ingestion/{book_id}/agentic/runs/{agentic_run_id}/retrieval-index": {
+      "get": {
+        "tags": [
+          "Book Distiller"
+        ],
+        "summary": "Get Retrieval Index",
+        "operationId": "get_bd_ingestion_book_id_agentic_runs_agentic_run_id_retrieval_index",
+        "parameters": [
+          {
+            "name": "book_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Book Id"
+            }
+          },
+          {
+            "name": "agentic_run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Agentic Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RetrievalIndexStatus"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Book Distiller"
+        ],
+        "summary": "Start Retrieval Index",
+        "operationId": "post_bd_ingestion_book_id_agentic_runs_agentic_run_id_retrieval_index",
+        "parameters": [
+          {
+            "name": "book_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Book Id"
+            }
+          },
+          {
+            "name": "agentic_run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Agentic Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RetrievalIndexStatus"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Book Distiller"
+        ],
+        "summary": "Wipe Retrieval Index",
+        "operationId": "delete_bd_ingestion_book_id_agentic_runs_agentic_run_id_retrieval_index",
+        "parameters": [
+          {
+            "name": "book_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Book Id"
+            }
+          },
+          {
+            "name": "agentic_run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Agentic Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RetrievalIndexWipeResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/bd/ingestion/{book_id}/agentic/runs/{agentic_run_id}/retrieval-index/cancel": {
+      "post": {
+        "tags": [
+          "Book Distiller"
+        ],
+        "summary": "Cancel Retrieval Index",
+        "operationId": "post_bd_ingestion_book_id_agentic_runs_agentic_run_id_retrieval_index_cancel",
+        "parameters": [
+          {
+            "name": "book_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Book Id"
+            }
+          },
+          {
+            "name": "agentic_run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Agentic Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RetrievalIndexStatus"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/bd/ingestion/{book_id}/agentic/runs/{agentic_run_id}/retrieval-index/llm-counters": {
+      "get": {
+        "tags": [
+          "Book Distiller"
+        ],
+        "summary": "Get Retrieval Index Llm Counters",
+        "operationId": "get_bd_ingestion_book_id_agentic_runs_agentic_run_id_retrieval_index_llm_counters",
+        "parameters": [
+          {
+            "name": "book_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Book Id"
+            }
+          },
+          {
+            "name": "agentic_run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Agentic Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Bd Ingestion Book Id Agentic Runs Agentic Run Id Retrieval Index Llm Counters"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/bd/ingestion/{book_id}/agentic/runs/{agentic_run_id}/retrieval-index/replay/{node_id}": {
+      "post": {
+        "tags": [
+          "Book Distiller"
+        ],
+        "summary": "Replay Retrieval Index Node",
+        "operationId": "post_bd_ingestion_book_id_agentic_runs_agentic_run_id_retrieval_index_replay_node_id",
+        "parameters": [
+          {
+            "name": "book_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Book Id"
+            }
+          },
+          {
+            "name": "agentic_run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Agentic Run Id"
+            }
+          },
+          {
+            "name": "node_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Node Id"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RetrievalIndexStatus"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/bd/ingestion/{book_id}/agentic/runs/{agentic_run_id}/retrieval-index/resume": {
+      "post": {
+        "tags": [
+          "Book Distiller"
+        ],
+        "summary": "Resume Retrieval Index",
+        "operationId": "post_bd_ingestion_book_id_agentic_runs_agentic_run_id_retrieval_index_resume",
+        "parameters": [
+          {
+            "name": "book_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Book Id"
+            }
+          },
+          {
+            "name": "agentic_run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Agentic Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RetrievalIndexStatus"
                 }
               }
             }
@@ -2241,7 +2501,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/entrypoints__api__v1__bd__ingestion__schemas__PageQuality"
+                  "$ref": "#/components/schemas/PageQuality"
                 }
               }
             }
@@ -2305,297 +2565,6 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/StartResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/bd/rag/capabilities": {
-      "get": {
-        "tags": [
-          "Book Distiller"
-        ],
-        "summary": "Get Capabilities",
-        "operationId": "get_bd_rag_capabilities",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/RagCapabilities"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/bd/rag/{book_id}/runs/{run_id}/index": {
-      "get": {
-        "tags": [
-          "Book Distiller"
-        ],
-        "summary": "Get Index",
-        "operationId": "get_bd_rag_book_id_runs_run_id_index",
-        "parameters": [
-          {
-            "name": "book_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "pattern": "^[A-Za-z0-9_-]+$",
-              "title": "Book Id"
-            }
-          },
-          {
-            "name": "run_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "pattern": "^[A-Za-z0-9_-]+$",
-              "title": "Run Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/RagIndexStatus"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      },
-      "post": {
-        "tags": [
-          "Book Distiller"
-        ],
-        "summary": "Start Index",
-        "operationId": "post_bd_rag_book_id_runs_run_id_index",
-        "parameters": [
-          {
-            "name": "book_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "pattern": "^[A-Za-z0-9_-]+$",
-              "title": "Book Id"
-            }
-          },
-          {
-            "name": "run_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "pattern": "^[A-Za-z0-9_-]+$",
-              "title": "Run Id"
-            }
-          }
-        ],
-        "responses": {
-          "202": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/RagIndexStatus"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      },
-      "delete": {
-        "tags": [
-          "Book Distiller"
-        ],
-        "summary": "Wipe Index",
-        "operationId": "delete_bd_rag_book_id_runs_run_id_index",
-        "parameters": [
-          {
-            "name": "book_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "pattern": "^[A-Za-z0-9_-]+$",
-              "title": "Book Id"
-            }
-          },
-          {
-            "name": "run_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "pattern": "^[A-Za-z0-9_-]+$",
-              "title": "Run Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/RagWipeResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/bd/rag/{book_id}/runs/{run_id}/index/cancel": {
-      "post": {
-        "tags": [
-          "Book Distiller"
-        ],
-        "summary": "Cancel Index",
-        "operationId": "post_bd_rag_book_id_runs_run_id_index_cancel",
-        "parameters": [
-          {
-            "name": "book_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "pattern": "^[A-Za-z0-9_-]+$",
-              "title": "Book Id"
-            }
-          },
-          {
-            "name": "run_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "pattern": "^[A-Za-z0-9_-]+$",
-              "title": "Run Id"
-            }
-          }
-        ],
-        "responses": {
-          "202": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/RagIndexStatus"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/bd/rag/{book_id}/runs/{run_id}/index/replay/{node_id}": {
-      "post": {
-        "tags": [
-          "Book Distiller"
-        ],
-        "summary": "Replay Index Node",
-        "operationId": "post_bd_rag_book_id_runs_run_id_index_replay_node_id",
-        "parameters": [
-          {
-            "name": "book_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "pattern": "^[A-Za-z0-9_-]+$",
-              "title": "Book Id"
-            }
-          },
-          {
-            "name": "run_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "pattern": "^[A-Za-z0-9_-]+$",
-              "title": "Run Id"
-            }
-          },
-          {
-            "name": "node_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Node Id"
-            }
-          }
-        ],
-        "responses": {
-          "202": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/RagIndexStatus"
                 }
               }
             }
@@ -2998,269 +2967,6 @@
         }
       }
     },
-    "/api/v1/dd/debug/provenance": {
-      "get": {
-        "tags": [
-          "Docs Distiller"
-        ],
-        "summary": "Get Agentic Provenance",
-        "description": "Identify the DD Ingestion normalizer, prompts, agent settings and code in this server build.",
-        "operationId": "get_dd_debug_provenance",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "type": "object",
-                  "title": "Response Get Dd Debug Provenance"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/dd/debug/replays/{evaluation_round_id}": {
-      "get": {
-        "tags": [
-          "Docs Distiller"
-        ],
-        "summary": "List Ingestion Replays",
-        "operationId": "get_dd_debug_replays_evaluation_round_id",
-        "parameters": [
-          {
-            "name": "evaluation_round_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Evaluation Round Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Get Dd Debug Replays Evaluation Round Id"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/dd/debug/replays/{evaluation_round_id}/{replay_id}": {
-      "get": {
-        "tags": [
-          "Docs Distiller"
-        ],
-        "summary": "Get Ingestion Replay",
-        "operationId": "get_dd_debug_replays_evaluation_round_id_replay_id",
-        "parameters": [
-          {
-            "name": "evaluation_round_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Evaluation Round Id"
-            }
-          },
-          {
-            "name": "replay_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Replay Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Get Dd Debug Replays Evaluation Round Id Replay Id"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/dd/debug/replays/{evaluation_round_id}/{replay_id}/pages/{page_idx}": {
-      "get": {
-        "tags": [
-          "Docs Distiller"
-        ],
-        "summary": "Get Ingestion Replay Page",
-        "description": "Read a pinned source page or its isolated replay input/output for human review.",
-        "operationId": "get_dd_debug_replays_evaluation_round_id_replay_id_pages_page_idx",
-        "parameters": [
-          {
-            "name": "evaluation_round_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Evaluation Round Id"
-            }
-          },
-          {
-            "name": "replay_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Replay Id"
-            }
-          },
-          {
-            "name": "page_idx",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "title": "Page Idx"
-            }
-          },
-          {
-            "name": "version",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "enum": [
-                "source",
-                "input",
-                "output"
-              ],
-              "type": "string",
-              "default": "output",
-              "title": "Version"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Get Dd Debug Replays Evaluation Round Id Replay Id Pages Page Idx"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/dd/debug/replays/{source_round_id}/{source_run_id}": {
-      "post": {
-        "tags": [
-          "Docs Distiller"
-        ],
-        "summary": "Start Ingestion Replay",
-        "description": "Queue a fixed-input audit/repair replay for curated pages; it never extracts or publishes.",
-        "operationId": "post_dd_debug_replays_source_round_id_source_run_id",
-        "parameters": [
-          {
-            "name": "source_round_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Source Round Id"
-            }
-          },
-          {
-            "name": "source_run_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Source Run Id"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/IngestionReplayBody"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Post Dd Debug Replays Source Round Id Source Run Id"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/api/v1/dd/debug/resolve/{slug}": {
       "post": {
         "tags": [
@@ -3513,14 +3219,14 @@
         }
       }
     },
-    "/api/v1/dd/ingestion": {
+    "/api/v1/dd/pages": {
       "get": {
         "tags": [
           "Docs Distiller"
         ],
         "summary": "List Library",
         "description": "Sidebar data source; joins MinIO manifests with the framework catalog\nso each row carries logo URL + framework metadata.",
-        "operationId": "get_dd_ingestion",
+        "operationId": "get_dd_pages",
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -3532,7 +3238,7 @@
                     "type": "object"
                   },
                   "type": "array",
-                  "title": "Response Get Dd Ingestion"
+                  "title": "Response Get Dd Pages"
                 }
               }
             }
@@ -3540,38 +3246,14 @@
         }
       }
     },
-    "/api/v1/dd/ingestion/agentic-graph": {
-      "get": {
-        "tags": [
-          "Docs Distiller"
-        ],
-        "summary": "Agentic Graph",
-        "description": "The compiled Ingestion Agentic AI topology, with no page processing or model calls.",
-        "operationId": "get_dd_ingestion_agentic_graph",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "type": "object",
-                  "title": "Response Get Dd Ingestion Agentic Graph"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/dd/ingestion/runs": {
+    "/api/v1/dd/pages/runs": {
       "post": {
         "tags": [
           "Docs Distiller"
         ],
         "summary": "Start Run",
         "description": "Status: cached (manifest present, no refresh) / queued (lock\nacquired, Celery dispatched) / locked (another in flight).",
-        "operationId": "post_dd_ingestion_runs",
+        "operationId": "post_dd_pages_runs",
         "requestBody": {
           "content": {
             "application/json": {
@@ -3590,7 +3272,7 @@
                 "schema": {
                   "additionalProperties": true,
                   "type": "object",
-                  "title": "Response Post Dd Ingestion Runs"
+                  "title": "Response Post Dd Pages Runs"
                 }
               }
             }
@@ -3608,14 +3290,14 @@
         }
       }
     },
-    "/api/v1/dd/ingestion/runs/active": {
+    "/api/v1/dd/pages/runs/active": {
       "get": {
         "tags": [
           "Docs Distiller"
         ],
         "summary": "List Active Runs",
         "description": "Lock-held runs with progress; cross-checked so locks without a\nwritten progress record (rare race) aren't surfaced.",
-        "operationId": "get_dd_ingestion_runs_active",
+        "operationId": "get_dd_pages_runs_active",
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -3624,7 +3306,7 @@
                 "schema": {
                   "additionalProperties": true,
                   "type": "object",
-                  "title": "Response Get Dd Ingestion Runs Active"
+                  "title": "Response Get Dd Pages Runs Active"
                 }
               }
             }
@@ -3632,14 +3314,14 @@
         }
       }
     },
-    "/api/v1/dd/ingestion/runs/{run_id}": {
+    "/api/v1/dd/pages/runs/{run_id}": {
       "get": {
         "tags": [
           "Docs Distiller"
         ],
         "summary": "Get Run",
         "description": "In-flight snapshot from Redis (canonical post-finalize manifest\nlives in MinIO under /ingestion/{slug}).",
-        "operationId": "get_dd_ingestion_runs_run_id",
+        "operationId": "get_dd_pages_runs_run_id",
         "parameters": [
           {
             "name": "run_id",
@@ -3659,7 +3341,7 @@
                 "schema": {
                   "type": "object",
                   "additionalProperties": true,
-                  "title": "Response Get Dd Ingestion Runs Run Id"
+                  "title": "Response Get Dd Pages Runs Run Id"
                 }
               }
             }
@@ -3677,13 +3359,13 @@
         }
       }
     },
-    "/api/v1/dd/ingestion/runs/{run_id}/cancel": {
+    "/api/v1/dd/pages/runs/{run_id}/cancel": {
       "post": {
         "tags": [
           "Docs Distiller"
         ],
         "summary": "Cancel Run",
-        "operationId": "post_dd_ingestion_runs_run_id_cancel",
+        "operationId": "post_dd_pages_runs_run_id_cancel",
         "parameters": [
           {
             "name": "run_id",
@@ -3703,7 +3385,7 @@
                 "schema": {
                   "type": "object",
                   "additionalProperties": true,
-                  "title": "Response Post Dd Ingestion Runs Run Id Cancel"
+                  "title": "Response Post Dd Pages Runs Run Id Cancel"
                 }
               }
             }
@@ -3721,14 +3403,14 @@
         }
       }
     },
-    "/api/v1/dd/ingestion/runs/{run_id}/llm-counters": {
+    "/api/v1/dd/pages/runs/{run_id}/llm-counters": {
       "get": {
         "tags": [
           "Docs Distiller"
         ],
         "summary": "Get Llm Counters",
         "description": "Live ingestion usage, with the persisted snapshot as a fallback after Redis expires.",
-        "operationId": "get_dd_ingestion_runs_run_id_llm_counters",
+        "operationId": "get_dd_pages_runs_run_id_llm_counters",
         "parameters": [
           {
             "name": "run_id",
@@ -3748,7 +3430,7 @@
                 "schema": {
                   "type": "object",
                   "additionalProperties": true,
-                  "title": "Response Get Dd Ingestion Runs Run Id Llm Counters"
+                  "title": "Response Get Dd Pages Runs Run Id Llm Counters"
                 }
               }
             }
@@ -3766,13 +3448,13 @@
         }
       }
     },
-    "/api/v1/dd/ingestion/runs/{run_id}/pages/{idx}": {
+    "/api/v1/dd/pages/runs/{run_id}/pages/{idx}": {
       "get": {
         "tags": [
           "Docs Distiller"
         ],
         "summary": "Get Page",
-        "operationId": "get_dd_ingestion_runs_run_id_pages_idx",
+        "operationId": "get_dd_pages_runs_run_id_pages_idx",
         "parameters": [
           {
             "name": "run_id",
@@ -3815,7 +3497,7 @@
                 "schema": {
                   "type": "object",
                   "additionalProperties": true,
-                  "title": "Response Get Dd Ingestion Runs Run Id Pages Idx"
+                  "title": "Response Get Dd Pages Runs Run Id Pages Idx"
                 }
               }
             }
@@ -3833,13 +3515,13 @@
         }
       }
     },
-    "/api/v1/dd/ingestion/runs/{run_id}/url-records": {
+    "/api/v1/dd/pages/runs/{run_id}/url-records": {
       "get": {
         "tags": [
           "Docs Distiller"
         ],
         "summary": "Get Url Records",
-        "operationId": "get_dd_ingestion_runs_run_id_url_records",
+        "operationId": "get_dd_pages_runs_run_id_url_records",
         "parameters": [
           {
             "name": "run_id",
@@ -3862,7 +3544,7 @@
                     "type": "object",
                     "additionalProperties": true
                   },
-                  "title": "Response Get Dd Ingestion Runs Run Id Url Records"
+                  "title": "Response Get Dd Pages Runs Run Id Url Records"
                 }
               }
             }
@@ -3880,14 +3562,14 @@
         }
       }
     },
-    "/api/v1/dd/ingestion/{slug}": {
+    "/api/v1/dd/pages/{slug}": {
       "delete": {
         "tags": [
           "Docs Distiller"
         ],
         "summary": "Delete Framework",
         "description": "Full-wipe every MinIO prefix keyed by this slug + the Redis\nsingle-flight lock if leaked by a crashed ingestion.",
-        "operationId": "delete_dd_ingestion_slug",
+        "operationId": "delete_dd_pages_slug",
         "parameters": [
           {
             "name": "slug",
@@ -3907,7 +3589,7 @@
                 "schema": {
                   "type": "object",
                   "additionalProperties": true,
-                  "title": "Response Delete Dd Ingestion Slug"
+                  "title": "Response Delete Dd Pages Slug"
                 }
               }
             }
@@ -3925,230 +3607,14 @@
         }
       }
     },
-    "/api/v1/dd/ingestion/{slug}/agentic/runs": {
-      "post": {
-        "tags": [
-          "Docs Distiller"
-        ],
-        "summary": "Start Agentic Run",
-        "description": "Queue a fresh Agentic AI candidate using saved pages; extraction is not repeated.",
-        "operationId": "post_dd_ingestion_slug_agentic_runs",
-        "parameters": [
-          {
-            "name": "slug",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Slug"
-            }
-          }
-        ],
-        "responses": {
-          "202": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Post Dd Ingestion Slug Agentic Runs"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/dd/ingestion/{slug}/agentic/runs/{run_id}": {
-      "delete": {
-        "tags": [
-          "Docs Distiller"
-        ],
-        "summary": "Wipe Agentic Run",
-        "description": "Wipe one terminal AI candidate and restore its immutable pre-AI pages.",
-        "operationId": "delete_dd_ingestion_slug_agentic_runs_run_id",
-        "parameters": [
-          {
-            "name": "slug",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Slug"
-            }
-          },
-          {
-            "name": "run_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Run Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Delete Dd Ingestion Slug Agentic Runs Run Id"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/dd/ingestion/{slug}/agentic/runs/{run_id}/replay/{node_id}": {
-      "post": {
-        "tags": [
-          "Docs Distiller"
-        ],
-        "summary": "Replay Agentic Run From Node",
-        "description": "Replay one node and downstream stages while preserving the saved upstream checkpoint.",
-        "operationId": "post_dd_ingestion_slug_agentic_runs_run_id_replay_node_id",
-        "parameters": [
-          {
-            "name": "slug",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Slug"
-            }
-          },
-          {
-            "name": "run_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Run Id"
-            }
-          },
-          {
-            "name": "node_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Node Id"
-            }
-          }
-        ],
-        "responses": {
-          "202": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Post Dd Ingestion Slug Agentic Runs Run Id Replay Node Id"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/dd/ingestion/{slug}/agentic/runs/{run_id}/resume": {
-      "post": {
-        "tags": [
-          "Docs Distiller"
-        ],
-        "summary": "Resume Agentic Run",
-        "description": "Resume a failed or stopped Agentic AI candidate from its saved page inputs and graph checkpoint.",
-        "operationId": "post_dd_ingestion_slug_agentic_runs_run_id_resume",
-        "parameters": [
-          {
-            "name": "slug",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Slug"
-            }
-          },
-          {
-            "name": "run_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Run Id"
-            }
-          }
-        ],
-        "responses": {
-          "202": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Post Dd Ingestion Slug Agentic Runs Run Id Resume"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/dd/ingestion/{slug}/artifacts/{name}": {
+    "/api/v1/dd/pages/{slug}/artifacts/{name}": {
       "get": {
         "tags": [
           "Docs Distiller"
         ],
         "summary": "Get Artifact",
         "description": "SHA-256-addressed media; bytes are immutable for the life of the\nslug → 1y immutable cache. 404 on miss (no upstream fallback) so the\nbroken-image icon makes the absence visible.",
-        "operationId": "get_dd_ingestion_slug_artifacts_name",
+        "operationId": "get_dd_pages_slug_artifacts_name",
         "parameters": [
           {
             "name": "slug",
@@ -4191,13 +3657,13 @@
         }
       }
     },
-    "/api/v1/dd/ingestion/{slug}/manifest": {
+    "/api/v1/dd/pages/{slug}/manifest": {
       "get": {
         "tags": [
           "Docs Distiller"
         ],
         "summary": "Get Manifest",
-        "operationId": "get_dd_ingestion_slug_manifest",
+        "operationId": "get_dd_pages_slug_manifest",
         "parameters": [
           {
             "name": "slug",
@@ -4217,7 +3683,7 @@
                 "schema": {
                   "type": "object",
                   "additionalProperties": true,
-                  "title": "Response Get Dd Ingestion Slug Manifest"
+                  "title": "Response Get Dd Pages Slug Manifest"
                 }
               }
             }
@@ -4235,13 +3701,13 @@
         }
       }
     },
-    "/api/v1/dd/ingestion/{slug}/pages/{idx}": {
+    "/api/v1/dd/pages/{slug}/pages/{idx}": {
       "get": {
         "tags": [
           "Docs Distiller"
         ],
         "summary": "Get Page",
-        "operationId": "get_dd_ingestion_slug_pages_idx",
+        "operationId": "get_dd_pages_slug_pages_idx",
         "parameters": [
           {
             "name": "slug",
@@ -4284,59 +3750,7 @@
                 "schema": {
                   "type": "object",
                   "additionalProperties": true,
-                  "title": "Response Get Dd Ingestion Slug Pages Idx"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/dd/ingestion/{slug}/pages/{idx}/quality": {
-      "get": {
-        "tags": [
-          "Docs Distiller"
-        ],
-        "summary": "Get Page Quality",
-        "description": "The current Agentic AI assessment and repair outcome for one finalized page.",
-        "operationId": "get_dd_ingestion_slug_pages_idx_quality",
-        "parameters": [
-          {
-            "name": "slug",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Slug"
-            }
-          },
-          {
-            "name": "idx",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "title": "Idx"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/entrypoints__api__v1__dd__ingestion__schemas__PageQuality"
+                  "title": "Response Get Dd Pages Slug Pages Idx"
                 }
               }
             }
@@ -8548,6 +7962,11 @@
             "title": "Visual Converted Count",
             "default": 0
           },
+          "visual_failed_count": {
+            "type": "integer",
+            "title": "Visual Failed Count",
+            "default": 0
+          },
           "selected_page_count": {
             "type": "integer",
             "title": "Selected Page Count",
@@ -9521,6 +8940,57 @@
         ],
         "title": "DatasetRow"
       },
+      "DecisionBrief": {
+        "properties": {
+          "decision_question": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Decision Question"
+          },
+          "recommendation": {
+            "$ref": "#/components/schemas/ReportLesson"
+          },
+          "options": {
+            "items": {
+              "$ref": "#/components/schemas/ReportDecisionOption"
+            },
+            "type": "array",
+            "maxItems": 3,
+            "title": "Options"
+          },
+          "assumptions": {
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "type": "array",
+            "title": "Assumptions"
+          },
+          "risks": {
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "type": "array",
+            "title": "Risks"
+          },
+          "action_plan": {
+            "items": {
+              "$ref": "#/components/schemas/ReportActionStep"
+            },
+            "type": "array",
+            "maxItems": 8,
+            "title": "Action Plan"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "decision_question",
+          "recommendation"
+        ],
+        "title": "DecisionBrief"
+      },
       "DeleteResponse": {
         "properties": {
           "book_id": {
@@ -9968,6 +9438,417 @@
         ],
         "title": "ExtractionWipeResponse"
       },
+      "GeoJSONFeature": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "Feature",
+            "title": "Type",
+            "default": "Feature"
+          },
+          "id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "title": "Id"
+          },
+          "properties": {
+            "$ref": "#/components/schemas/GeoJSONFeatureProperties"
+          },
+          "geometry": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GeoJSONPoint"
+              },
+              {
+                "$ref": "#/components/schemas/GeoJSONMultiPoint"
+              },
+              {
+                "$ref": "#/components/schemas/GeoJSONLineString"
+              },
+              {
+                "$ref": "#/components/schemas/GeoJSONMultiLineString"
+              },
+              {
+                "$ref": "#/components/schemas/GeoJSONPolygon"
+              },
+              {
+                "$ref": "#/components/schemas/GeoJSONMultiPolygon"
+              }
+            ],
+            "title": "Geometry",
+            "discriminator": {
+              "propertyName": "type",
+              "mapping": {
+                "LineString": "#/components/schemas/GeoJSONLineString",
+                "MultiLineString": "#/components/schemas/GeoJSONMultiLineString",
+                "MultiPoint": "#/components/schemas/GeoJSONMultiPoint",
+                "MultiPolygon": "#/components/schemas/GeoJSONMultiPolygon",
+                "Point": "#/components/schemas/GeoJSONPoint",
+                "Polygon": "#/components/schemas/GeoJSONPolygon"
+              }
+            }
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "properties",
+          "geometry"
+        ],
+        "title": "GeoJSONFeature"
+      },
+      "GeoJSONFeatureCollection": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "FeatureCollection",
+            "title": "Type",
+            "default": "FeatureCollection"
+          },
+          "features": {
+            "items": {
+              "$ref": "#/components/schemas/GeoJSONFeature"
+            },
+            "type": "array",
+            "maxItems": 100,
+            "minItems": 1,
+            "title": "Features"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "features"
+        ],
+        "title": "GeoJSONFeatureCollection"
+      },
+      "GeoJSONFeatureProperties": {
+        "properties": {
+          "label": {
+            "type": "string",
+            "maxLength": 180,
+            "minLength": 1,
+            "title": "Label"
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 800,
+            "title": "Description",
+            "default": ""
+          },
+          "attribution": {
+            "type": "string",
+            "enum": [
+              "book",
+              "agent_inference"
+            ],
+            "title": "Attribution",
+            "default": "book"
+          },
+          "learning_unit_ids": {
+            "items": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]+$"
+            },
+            "type": "array",
+            "maxItems": 8,
+            "minItems": 1,
+            "title": "Learning Unit Ids"
+          },
+          "evidence": {
+            "items": {
+              "$ref": "#/components/schemas/EvidenceQuote"
+            },
+            "type": "array",
+            "maxItems": 8,
+            "minItems": 1,
+            "title": "Evidence"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "label",
+          "learning_unit_ids",
+          "evidence"
+        ],
+        "title": "GeoJSONFeatureProperties"
+      },
+      "GeoJSONLineString": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "LineString",
+            "title": "Type"
+          },
+          "coordinates": {
+            "items": {
+              "prefixItems": [
+                {
+                  "type": "number",
+                  "maximum": 180.0,
+                  "minimum": -180.0
+                },
+                {
+                  "type": "number",
+                  "maximum": 90.0,
+                  "minimum": -90.0
+                }
+              ],
+              "type": "array",
+              "maxItems": 2,
+              "minItems": 2
+            },
+            "type": "array",
+            "maxItems": 2000,
+            "minItems": 2,
+            "title": "Coordinates"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "type",
+          "coordinates"
+        ],
+        "title": "GeoJSONLineString"
+      },
+      "GeoJSONMultiLineString": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "MultiLineString",
+            "title": "Type"
+          },
+          "coordinates": {
+            "items": {
+              "items": {
+                "prefixItems": [
+                  {
+                    "type": "number",
+                    "maximum": 180.0,
+                    "minimum": -180.0
+                  },
+                  {
+                    "type": "number",
+                    "maximum": 90.0,
+                    "minimum": -90.0
+                  }
+                ],
+                "type": "array",
+                "maxItems": 2,
+                "minItems": 2
+              },
+              "type": "array",
+              "maxItems": 2000,
+              "minItems": 2
+            },
+            "type": "array",
+            "maxItems": 100,
+            "minItems": 1,
+            "title": "Coordinates"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "type",
+          "coordinates"
+        ],
+        "title": "GeoJSONMultiLineString"
+      },
+      "GeoJSONMultiPoint": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "MultiPoint",
+            "title": "Type"
+          },
+          "coordinates": {
+            "items": {
+              "prefixItems": [
+                {
+                  "type": "number",
+                  "maximum": 180.0,
+                  "minimum": -180.0
+                },
+                {
+                  "type": "number",
+                  "maximum": 90.0,
+                  "minimum": -90.0
+                }
+              ],
+              "type": "array",
+              "maxItems": 2,
+              "minItems": 2
+            },
+            "type": "array",
+            "maxItems": 500,
+            "minItems": 1,
+            "title": "Coordinates"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "type",
+          "coordinates"
+        ],
+        "title": "GeoJSONMultiPoint"
+      },
+      "GeoJSONMultiPolygon": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "MultiPolygon",
+            "title": "Type"
+          },
+          "coordinates": {
+            "items": {
+              "items": {
+                "items": {
+                  "prefixItems": [
+                    {
+                      "type": "number",
+                      "maximum": 180.0,
+                      "minimum": -180.0
+                    },
+                    {
+                      "type": "number",
+                      "maximum": 90.0,
+                      "minimum": -90.0
+                    }
+                  ],
+                  "type": "array",
+                  "maxItems": 2,
+                  "minItems": 2
+                },
+                "type": "array",
+                "maxItems": 2000,
+                "minItems": 4
+              },
+              "type": "array"
+            },
+            "type": "array",
+            "maxItems": 100,
+            "minItems": 1,
+            "title": "Coordinates"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "type",
+          "coordinates"
+        ],
+        "title": "GeoJSONMultiPolygon"
+      },
+      "GeoJSONPoint": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "Point",
+            "title": "Type"
+          },
+          "coordinates": {
+            "prefixItems": [
+              {
+                "type": "number",
+                "maximum": 180.0,
+                "minimum": -180.0
+              },
+              {
+                "type": "number",
+                "maximum": 90.0,
+                "minimum": -90.0
+              }
+            ],
+            "type": "array",
+            "maxItems": 2,
+            "minItems": 2,
+            "title": "Coordinates"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "type",
+          "coordinates"
+        ],
+        "title": "GeoJSONPoint"
+      },
+      "GeoJSONPolygon": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "Polygon",
+            "title": "Type"
+          },
+          "coordinates": {
+            "items": {
+              "items": {
+                "prefixItems": [
+                  {
+                    "type": "number",
+                    "maximum": 180.0,
+                    "minimum": -180.0
+                  },
+                  {
+                    "type": "number",
+                    "maximum": 90.0,
+                    "minimum": -90.0
+                  }
+                ],
+                "type": "array",
+                "maxItems": 2,
+                "minItems": 2
+              },
+              "type": "array",
+              "maxItems": 2000,
+              "minItems": 4
+            },
+            "type": "array",
+            "maxItems": 50,
+            "minItems": 1,
+            "title": "Coordinates"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "type",
+          "coordinates"
+        ],
+        "title": "GeoJSONPolygon"
+      },
+      "GeoMapSpec": {
+        "properties": {
+          "title": {
+            "type": "string",
+            "maxLength": 180,
+            "minLength": 1,
+            "title": "Title"
+          },
+          "accessible_description": {
+            "type": "string",
+            "maxLength": 600,
+            "minLength": 1,
+            "title": "Accessible Description"
+          },
+          "geojson": {
+            "$ref": "#/components/schemas/GeoJSONFeatureCollection"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "title",
+          "accessible_description",
+          "geojson"
+        ],
+        "title": "GeoMapSpec"
+      },
       "GlossaryEntry": {
         "properties": {
           "term": {
@@ -10087,38 +9968,6 @@
         "type": "object",
         "title": "IngestRequest",
         "description": "Request to ingest transcripts from ES into Qdrant.\nIf `video_ids` is None, ingests ALL transcripts in ES."
-      },
-      "IngestionReplayBody": {
-        "properties": {
-          "evaluation_round_id": {
-            "type": "string",
-            "maxLength": 48,
-            "minLength": 1,
-            "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]{0,47}$",
-            "title": "Evaluation Round Id"
-          },
-          "page_indices": {
-            "anyOf": [
-              {
-                "items": {
-                  "type": "integer"
-                },
-                "type": "array",
-                "maxItems": 20,
-                "minItems": 1
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Page Indices"
-          }
-        },
-        "type": "object",
-        "required": [
-          "evaluation_round_id"
-        ],
-        "title": "IngestionReplayBody"
       },
       "Manifest": {
         "properties": {
@@ -10435,94 +10284,85 @@
         ],
         "title": "PageIssueView"
       },
-      "PageQualityIssue": {
+      "PageQuality": {
         "properties": {
-          "issue_id": {
+          "book_id": {
             "type": "string",
-            "title": "Issue Id"
+            "title": "Book Id"
           },
-          "code": {
+          "agentic_run_id": {
             "type": "string",
-            "title": "Code"
+            "title": "Agentic Run Id"
           },
-          "severity": {
+          "page": {
+            "type": "integer",
+            "title": "Page"
+          },
+          "page_kind": {
             "type": "string",
-            "title": "Severity"
+            "title": "Page Kind"
           },
-          "description": {
+          "status": {
             "type": "string",
-            "title": "Description"
+            "enum": [
+              "done",
+              "review_required"
+            ],
+            "title": "Status"
           },
-          "evidence": {
+          "delivery_disposition": {
+            "type": "string",
+            "enum": [
+              "include",
+              "discarded_blank",
+              "image_only"
+            ],
+            "title": "Delivery Disposition"
+          },
+          "issues": {
+            "items": {
+              "$ref": "#/components/schemas/PageIssueView"
+            },
+            "type": "array",
+            "title": "Issues"
+          },
+          "mechanical_fixes": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Mechanical Fixes"
+          },
+          "audit_warnings": {
             "items": {
               "type": "string"
             },
             "type": "array",
-            "title": "Evidence"
+            "title": "Audit Warnings"
           },
-          "resolution": {
-            "type": "string",
-            "enum": [
-              "auto_applied",
-              "review",
-              "none"
-            ],
-            "title": "Resolution"
-          },
-          "proposal": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/PageQualityProposal"
-              },
-              {
-                "type": "null"
-              }
-            ]
+          "errors": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Errors"
           }
         },
         "type": "object",
         "required": [
-          "issue_id",
-          "code",
-          "severity",
-          "description",
-          "evidence",
-          "resolution"
+          "book_id",
+          "agentic_run_id",
+          "page",
+          "page_kind",
+          "status",
+          "delivery_disposition",
+          "issues",
+          "mechanical_fixes",
+          "audit_warnings",
+          "errors"
         ],
-        "title": "PageQualityIssue"
-      },
-      "PageQualityProposal": {
-        "properties": {
-          "target_text": {
-            "type": "string",
-            "title": "Target Text"
-          },
-          "replacement": {
-            "type": "string",
-            "title": "Replacement"
-          },
-          "rationale": {
-            "type": "string",
-            "title": "Rationale"
-          },
-          "confidence": {
-            "type": "number",
-            "title": "Confidence"
-          },
-          "risk": {
-            "type": "string",
-            "title": "Risk"
-          }
-        },
-        "type": "object",
-        "required": [
-          "target_text",
-          "replacement",
-          "rationale",
-          "confidence",
-          "risk"
-        ],
-        "title": "PageQualityProposal"
+        "title": "PageQuality",
+        "description": "What the current Agentic AI run found on one page and what it did about it."
       },
       "PatchSuggestion": {
         "properties": {
@@ -11148,251 +10988,6 @@
         "title": "RAGSearchRequest",
         "description": "Adaptive RAG question. `force_mode` overrides auto-classification (fast/standard/deep)."
       },
-      "RagCapabilities": {
-        "properties": {
-          "execution_enabled": {
-            "type": "boolean",
-            "title": "Execution Enabled"
-          }
-        },
-        "type": "object",
-        "required": [
-          "execution_enabled"
-        ],
-        "title": "RagCapabilities"
-      },
-      "RagIndexStatus": {
-        "properties": {
-          "book_id": {
-            "type": "string",
-            "title": "Book Id"
-          },
-          "distill_run_id": {
-            "type": "string",
-            "title": "Distill Run Id"
-          },
-          "extraction_run_id": {
-            "type": "string",
-            "title": "Extraction Run Id"
-          },
-          "status": {
-            "type": "string",
-            "enum": [
-              "not_started",
-              "queued",
-              "running",
-              "done",
-              "failed",
-              "cancelled"
-            ],
-            "title": "Status"
-          },
-          "workflow_version": {
-            "type": "string",
-            "title": "Workflow Version",
-            "default": "1.0"
-          },
-          "graph_extraction_prompt_version": {
-            "type": "string",
-            "title": "Graph Extraction Prompt Version",
-            "default": "2"
-          },
-          "vector_status": {
-            "type": "string",
-            "enum": [
-              "pending",
-              "running",
-              "done",
-              "failed",
-              "cancelled"
-            ],
-            "title": "Vector Status",
-            "default": "pending"
-          },
-          "graph_status": {
-            "type": "string",
-            "enum": [
-              "pending",
-              "running",
-              "done",
-              "failed",
-              "cancelled"
-            ],
-            "title": "Graph Status",
-            "default": "pending"
-          },
-          "current_stage": {
-            "anyOf": [
-              {
-                "type": "string",
-                "enum": [
-                  "preparing",
-                  "vector_index",
-                  "graph_materialization",
-                  "complete"
-                ]
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Current Stage"
-          },
-          "cancel_requested": {
-            "type": "boolean",
-            "title": "Cancel Requested",
-            "default": false
-          },
-          "attempt": {
-            "type": "integer",
-            "title": "Attempt",
-            "default": 0
-          },
-          "collection_name": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Collection Name"
-          },
-          "embedding_model": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Embedding Model"
-          },
-          "embedding_dimensions": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Embedding Dimensions"
-          },
-          "source_page_count": {
-            "type": "integer",
-            "title": "Source Page Count",
-            "default": 0
-          },
-          "learning_unit_count": {
-            "type": "integer",
-            "title": "Learning Unit Count",
-            "default": 0
-          },
-          "guide_record_count": {
-            "type": "integer",
-            "title": "Guide Record Count",
-            "default": 0
-          },
-          "point_count": {
-            "type": "integer",
-            "title": "Point Count",
-            "default": 0
-          },
-          "graph_node_count": {
-            "type": "integer",
-            "title": "Graph Node Count",
-            "default": 0
-          },
-          "graph_relationship_count": {
-            "type": "integer",
-            "title": "Graph Relationship Count",
-            "default": 0
-          },
-          "created_at": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Created At"
-          },
-          "updated_at": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Updated At"
-          },
-          "finished_at": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Finished At"
-          },
-          "error": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Error"
-          }
-        },
-        "type": "object",
-        "required": [
-          "book_id",
-          "distill_run_id",
-          "extraction_run_id",
-          "status"
-        ],
-        "title": "RagIndexStatus"
-      },
-      "RagWipeResponse": {
-        "properties": {
-          "book_id": {
-            "type": "string",
-            "title": "Book Id"
-          },
-          "distill_run_id": {
-            "type": "string",
-            "title": "Distill Run Id"
-          },
-          "wiped": {
-            "type": "boolean",
-            "title": "Wiped"
-          },
-          "objects_deleted": {
-            "type": "integer",
-            "title": "Objects Deleted"
-          }
-        },
-        "type": "object",
-        "required": [
-          "book_id",
-          "distill_run_id",
-          "wiped",
-          "objects_deleted"
-        ],
-        "title": "RagWipeResponse"
-      },
       "RawQueryHit": {
         "properties": {
           "summary": {
@@ -11505,6 +11100,121 @@
         ],
         "title": "RawQueryResponse",
         "description": "`ok=False` short-circuits the UI to the error band; `notes` is a\nlist of user-visible advisories (e.g. \"default size=20 synthesized\nbecause the request body omitted it\")."
+      },
+      "ReportActionStep": {
+        "properties": {
+          "sequence": {
+            "type": "integer",
+            "maximum": 12.0,
+            "minimum": 1.0,
+            "title": "Sequence"
+          },
+          "action": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Action"
+          },
+          "rationale": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Rationale"
+          },
+          "attribution": {
+            "type": "string",
+            "enum": [
+              "book",
+              "agent_inference"
+            ],
+            "title": "Attribution",
+            "default": "agent_inference"
+          },
+          "prerequisites": {
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "type": "array",
+            "title": "Prerequisites"
+          },
+          "success_measure": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Success Measure"
+          },
+          "source_refs": {
+            "items": {
+              "$ref": "#/components/schemas/SourceRef"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Source Refs"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "sequence",
+          "action",
+          "rationale",
+          "success_measure",
+          "source_refs"
+        ],
+        "title": "ReportActionStep"
+      },
+      "ReportDecisionOption": {
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Title"
+          },
+          "expected_outcome": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Expected Outcome"
+          },
+          "tradeoffs": {
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "type": "array",
+            "title": "Tradeoffs"
+          },
+          "risks": {
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "type": "array",
+            "title": "Risks"
+          },
+          "attribution": {
+            "type": "string",
+            "enum": [
+              "book",
+              "agent_inference"
+            ],
+            "title": "Attribution",
+            "default": "agent_inference"
+          },
+          "source_refs": {
+            "items": {
+              "$ref": "#/components/schemas/SourceRef"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Source Refs"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "title",
+          "expected_outcome",
+          "source_refs"
+        ],
+        "title": "ReportDecisionOption"
       },
       "ReportLesson": {
         "properties": {
@@ -11624,6 +11334,21 @@
             },
             "type": "array",
             "title": "Charts"
+          },
+          "timelines": {
+            "items": {
+              "$ref": "#/components/schemas/ReportTimeline"
+            },
+            "type": "array",
+            "title": "Timelines"
+          },
+          "maps": {
+            "items": {
+              "$ref": "#/components/schemas/GeoMapSpec"
+            },
+            "type": "array",
+            "maxItems": 4,
+            "title": "Maps"
           }
         },
         "additionalProperties": false,
@@ -11635,6 +11360,483 @@
           "lessons"
         ],
         "title": "ReportSection"
+      },
+      "ReportTimeline": {
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Title"
+          },
+          "accessible_description": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Accessible Description"
+          },
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/ReportTimelineEvent"
+            },
+            "type": "array",
+            "minItems": 2,
+            "title": "Events"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "title",
+          "accessible_description",
+          "events"
+        ],
+        "title": "ReportTimeline"
+      },
+      "ReportTimelineEvent": {
+        "properties": {
+          "label": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Label"
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Description"
+          },
+          "date_or_order": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Date Or Order"
+          },
+          "attribution": {
+            "type": "string",
+            "enum": [
+              "book",
+              "agent_inference"
+            ],
+            "title": "Attribution",
+            "default": "book"
+          },
+          "source_refs": {
+            "items": {
+              "$ref": "#/components/schemas/SourceRef"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Source Refs"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "label",
+          "description",
+          "date_or_order",
+          "source_refs"
+        ],
+        "title": "ReportTimelineEvent"
+      },
+      "ResearchContext": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "disabled",
+              "unavailable",
+              "unsupported_provider",
+              "no_results",
+              "complete"
+            ],
+            "title": "Status"
+          },
+          "provider_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider Id"
+          },
+          "queries": {
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "type": "array",
+            "maxItems": 3,
+            "title": "Queries"
+          },
+          "sources": {
+            "items": {
+              "$ref": "#/components/schemas/ResearchSource"
+            },
+            "type": "array",
+            "maxItems": 12,
+            "title": "Sources"
+          },
+          "findings": {
+            "items": {
+              "$ref": "#/components/schemas/ResearchFinding"
+            },
+            "type": "array",
+            "maxItems": 8,
+            "title": "Findings"
+          },
+          "error_type": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 80
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Type"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "title": "ResearchContext"
+      },
+      "ResearchFinding": {
+        "properties": {
+          "title": {
+            "type": "string",
+            "maxLength": 180,
+            "minLength": 1,
+            "title": "Title"
+          },
+          "summary": {
+            "type": "string",
+            "maxLength": 900,
+            "minLength": 1,
+            "title": "Summary"
+          },
+          "relevance_to_book": {
+            "type": "string",
+            "maxLength": 600,
+            "minLength": 1,
+            "title": "Relevance To Book"
+          },
+          "source_ids": {
+            "items": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]+$"
+            },
+            "type": "array",
+            "maxItems": 6,
+            "minItems": 1,
+            "title": "Source Ids"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "title",
+          "summary",
+          "relevance_to_book",
+          "source_ids"
+        ],
+        "title": "ResearchFinding",
+        "description": "A concise external-context finding linked only to retrieved MCP sources."
+      },
+      "ResearchSource": {
+        "properties": {
+          "source_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "title": "Source Id"
+          },
+          "provider_id": {
+            "type": "string",
+            "enum": [
+              "coelho_search",
+              "parallel"
+            ],
+            "title": "Provider Id"
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 240,
+            "minLength": 1,
+            "title": "Title"
+          },
+          "url": {
+            "type": "string",
+            "maxLength": 2048,
+            "minLength": 1,
+            "title": "Url"
+          },
+          "snippet": {
+            "type": "string",
+            "maxLength": 1200,
+            "minLength": 1,
+            "title": "Snippet"
+          },
+          "query": {
+            "type": "string",
+            "maxLength": 400,
+            "minLength": 1,
+            "title": "Query"
+          },
+          "publisher": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 160
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Publisher"
+          },
+          "published_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 80
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Published At"
+          },
+          "accessed_at": {
+            "type": "number",
+            "exclusiveMinimum": 0.0,
+            "title": "Accessed At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "source_id",
+          "provider_id",
+          "title",
+          "url",
+          "snippet",
+          "query",
+          "accessed_at"
+        ],
+        "title": "ResearchSource"
+      },
+      "RetrievalIndexStatus": {
+        "properties": {
+          "workflow_version": {
+            "type": "string",
+            "title": "Workflow Version"
+          },
+          "book_id": {
+            "type": "string",
+            "title": "Book Id"
+          },
+          "extraction_run_id": {
+            "type": "string",
+            "title": "Extraction Run Id"
+          },
+          "agentic_run_id": {
+            "type": "string",
+            "title": "Agentic Run Id"
+          },
+          "processed_book_revision": {
+            "type": "integer",
+            "title": "Processed Book Revision"
+          },
+          "processed_page_count": {
+            "type": "integer",
+            "title": "Processed Page Count"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "running",
+              "done",
+              "failed",
+              "cancelled"
+            ],
+            "title": "Status"
+          },
+          "current_node": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Node"
+          },
+          "node_status": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Node Status"
+          },
+          "attempt": {
+            "type": "integer",
+            "title": "Attempt"
+          },
+          "elasticsearch_index": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Elasticsearch Index"
+          },
+          "elasticsearch_document_count": {
+            "type": "integer",
+            "title": "Elasticsearch Document Count",
+            "default": 0
+          },
+          "qdrant_collection": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Qdrant Collection"
+          },
+          "embedding_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Embedding Model"
+          },
+          "embedding_dimensions": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Embedding Dimensions"
+          },
+          "qdrant_point_count": {
+            "type": "integer",
+            "title": "Qdrant Point Count",
+            "default": 0
+          },
+          "neo4j_node_count": {
+            "type": "integer",
+            "title": "Neo4J Node Count",
+            "default": 0
+          },
+          "neo4j_relationship_count": {
+            "type": "integer",
+            "title": "Neo4J Relationship Count",
+            "default": 0
+          },
+          "graph_batches_completed": {
+            "type": "integer",
+            "title": "Graph Batches Completed",
+            "default": 0
+          },
+          "graph_batches_total": {
+            "type": "integer",
+            "title": "Graph Batches Total",
+            "default": 0
+          },
+          "created_at": {
+            "type": "number",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "number",
+            "title": "Updated At"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          }
+        },
+        "type": "object",
+        "required": [
+          "workflow_version",
+          "book_id",
+          "extraction_run_id",
+          "agentic_run_id",
+          "processed_book_revision",
+          "processed_page_count",
+          "status",
+          "current_node",
+          "node_status",
+          "attempt",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "RetrievalIndexStatus"
+      },
+      "RetrievalIndexWipeResponse": {
+        "properties": {
+          "book_id": {
+            "type": "string",
+            "title": "Book Id"
+          },
+          "agentic_run_id": {
+            "type": "string",
+            "title": "Agentic Run Id"
+          },
+          "wiped": {
+            "type": "boolean",
+            "title": "Wiped"
+          },
+          "objects_deleted": {
+            "type": "integer",
+            "title": "Objects Deleted"
+          }
+        },
+        "type": "object",
+        "required": [
+          "book_id",
+          "agentic_run_id",
+          "wiped",
+          "objects_deleted"
+        ],
+        "title": "RetrievalIndexWipeResponse"
       },
       "RunStart": {
         "properties": {
@@ -12274,6 +12476,16 @@
                 "type": "null"
               }
             ]
+          },
+          "retrieval_index": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RetrievalIndexStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "type": "object",
@@ -12452,10 +12664,13 @@
             "enum": [
               "1.0",
               "1.1",
-              "1.2"
+              "1.2",
+              "1.3",
+              "1.4",
+              "1.5"
             ],
             "title": "Schema Version",
-            "default": "1.2"
+            "default": "1.5"
           },
           "title": {
             "type": "string",
@@ -12613,6 +12828,27 @@
             },
             "type": "array",
             "title": "Charts"
+          },
+          "maps": {
+            "items": {
+              "$ref": "#/components/schemas/GeoMapSpec"
+            },
+            "type": "array",
+            "maxItems": 4,
+            "title": "Maps"
+          },
+          "decision_brief": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DecisionBrief"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "research_context": {
+            "$ref": "#/components/schemas/ResearchContext"
           },
           "covered_pages": {
             "items": {
@@ -13030,159 +13266,6 @@
           "status"
         ],
         "title": "CancelResponse"
-      },
-      "entrypoints__api__v1__bd__ingestion__schemas__PageQuality": {
-        "properties": {
-          "book_id": {
-            "type": "string",
-            "title": "Book Id"
-          },
-          "agentic_run_id": {
-            "type": "string",
-            "title": "Agentic Run Id"
-          },
-          "page": {
-            "type": "integer",
-            "title": "Page"
-          },
-          "page_kind": {
-            "type": "string",
-            "title": "Page Kind"
-          },
-          "status": {
-            "type": "string",
-            "enum": [
-              "done",
-              "review_required"
-            ],
-            "title": "Status"
-          },
-          "delivery_disposition": {
-            "type": "string",
-            "enum": [
-              "include",
-              "discarded_blank",
-              "image_only"
-            ],
-            "title": "Delivery Disposition"
-          },
-          "issues": {
-            "items": {
-              "$ref": "#/components/schemas/PageIssueView"
-            },
-            "type": "array",
-            "title": "Issues"
-          },
-          "mechanical_fixes": {
-            "additionalProperties": {
-              "type": "integer"
-            },
-            "type": "object",
-            "title": "Mechanical Fixes"
-          },
-          "audit_warnings": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array",
-            "title": "Audit Warnings"
-          },
-          "errors": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array",
-            "title": "Errors"
-          }
-        },
-        "type": "object",
-        "required": [
-          "book_id",
-          "agentic_run_id",
-          "page",
-          "page_kind",
-          "status",
-          "delivery_disposition",
-          "issues",
-          "mechanical_fixes",
-          "audit_warnings",
-          "errors"
-        ],
-        "title": "PageQuality",
-        "description": "What the current Agentic AI run found on one page and what it did about it."
-      },
-      "entrypoints__api__v1__dd__ingestion__schemas__PageQuality": {
-        "properties": {
-          "framework_slug": {
-            "type": "string",
-            "title": "Framework Slug"
-          },
-          "agentic_run_id": {
-            "type": "string",
-            "title": "Agentic Run Id"
-          },
-          "page": {
-            "type": "integer",
-            "title": "Page"
-          },
-          "page_kind": {
-            "type": "string",
-            "title": "Page Kind"
-          },
-          "status": {
-            "type": "string",
-            "enum": [
-              "done",
-              "review_required"
-            ],
-            "title": "Status"
-          },
-          "delivery_disposition": {
-            "type": "string",
-            "const": "include",
-            "title": "Delivery Disposition",
-            "default": "include"
-          },
-          "issues": {
-            "items": {
-              "$ref": "#/components/schemas/PageQualityIssue"
-            },
-            "type": "array",
-            "title": "Issues"
-          },
-          "mechanical_fixes": {
-            "additionalProperties": {
-              "type": "integer"
-            },
-            "type": "object",
-            "title": "Mechanical Fixes"
-          },
-          "audit_warnings": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array",
-            "title": "Audit Warnings"
-          },
-          "errors": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array",
-            "title": "Errors"
-          }
-        },
-        "type": "object",
-        "required": [
-          "framework_slug",
-          "agentic_run_id",
-          "page",
-          "page_kind",
-          "status",
-          "issues"
-        ],
-        "title": "PageQuality",
-        "description": "What Agentic AI found on a documentation page and how it was handled."
       }
     }
   }

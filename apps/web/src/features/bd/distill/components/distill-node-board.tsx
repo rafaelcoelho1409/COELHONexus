@@ -3,7 +3,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { ChartNoAxesColumn, X } from "lucide-react";
 import dynamic from "next/dynamic";
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { apiErrorMessage } from "@/shared/lib/api-error";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/shared/ui/tabs";
 import { ActionButton } from "../../components/action-button";
@@ -52,6 +52,7 @@ export function DistillNodeBoard({
   progress,
   statusText,
   runId,
+  progressDetails,
   progressOpen,
   onProgressOpenChange,
   onPlayNode,
@@ -61,6 +62,7 @@ export function DistillNodeBoard({
   progress: DistillRun["progress"] | null;
   statusText: string;
   runId: string | null;
+  progressDetails: ReactNode;
   progressOpen: boolean;
   onProgressOpenChange: (open: boolean) => void;
   onPlayNode?: (nodeId: string) => void;
@@ -92,25 +94,7 @@ export function DistillNodeBoard({
           </div>
         </header>
 
-        <div className="mt-3 flex min-w-0 flex-col gap-3">
-          <div className="flex min-w-0 flex-col gap-2">
-            <ActionButton
-              className="w-full justify-center whitespace-nowrap px-2"
-              onClick={() => setUsageOpen(true)}
-              aria-haspopup="dialog"
-            >
-              <ChartNoAxesColumn aria-hidden />
-              LLM usage
-            </ActionButton>
-            <ToggleGroup
-              legend="Distill pipeline shown as"
-              options={MODES}
-              value={mode}
-              onChange={setMode}
-              fullWidth
-            />
-          </div>
-
+        <div className="mt-3 grid min-w-0 grid-cols-1 items-start gap-3 xl:grid-cols-[minmax(0,7fr)_minmax(0,3fr)]">
           <div className="min-w-0 overflow-hidden rounded-sm border border-border bg-background">
             {mode === "graph" ? (
               <AgenticFlow
@@ -129,6 +113,26 @@ export function DistillNodeBoard({
                 />
               </div>
             ) : null}
+          </div>
+          <div className="flex min-w-0 flex-col gap-3">
+            <div className="flex min-w-0 flex-col gap-2">
+              <ActionButton
+                className="w-full justify-center whitespace-nowrap px-2"
+                onClick={() => setUsageOpen(true)}
+                aria-haspopup="dialog"
+              >
+                <ChartNoAxesColumn aria-hidden />
+                LLM usage
+              </ActionButton>
+              <ToggleGroup
+                legend="Distill pipeline shown as"
+                options={MODES}
+                value={mode}
+                onChange={setMode}
+                fullWidth
+              />
+            </div>
+            {progressDetails}
           </div>
         </div>
       </section>
@@ -190,8 +194,6 @@ function LearningProgressSheet({
 }) {
   const dialog = useModalDialog();
   const totalUnits = progress?.total_units ?? 0;
-  const completedUnits = progress ? Math.max(0, Math.min(progress.completed_units, totalUnits)) : 0;
-  const completedPercent = totalUnits > 0 ? Math.round((completedUnits / totalUnits) * 100) : 0;
 
   return (
     <dialog
@@ -222,34 +224,38 @@ function LearningProgressSheet({
         ) : progress ? (
           <>
             <section className="rounded-sm border border-border bg-card p-4">
-              <header className="flex flex-wrap items-baseline justify-between gap-2">
-                <h3 className="text-sm font-medium">Learning units</h3>
-                <span className="text-sm font-semibold tabular-nums">
-                  {totalUnits > 0
-                    ? `${completedUnits.toLocaleString()} / ${totalUnits.toLocaleString()}`
-                    : "Not reported"}
-                </span>
-              </header>
-              {totalUnits > 0 ? (
-                <div
-                  role="progressbar"
-                  aria-label="Learning units completed"
-                  aria-valuemin={0}
-                  aria-valuemax={totalUnits}
-                  aria-valuenow={completedUnits}
-                  aria-valuetext={`${completedUnits} of ${totalUnits} learning units · ${completedPercent}%`}
-                  className="mt-3 h-2 overflow-hidden rounded-sm bg-muted"
-                >
-                  <div className="h-full bg-primary" style={{ width: `${completedPercent}%` }} />
-                </div>
-              ) : null}
+              <h3 className="text-sm font-medium">Learning unit stages</h3>
+              <div className="mt-3 flex flex-col gap-3">
+                <ProgressMetric
+                  label="Units extracted"
+                  current={progress.completed_extractions}
+                  total={totalUnits}
+                />
+                <ProgressMetric
+                  label="Evidence checks complete"
+                  current={progress.completed_units}
+                  total={totalUnits}
+                />
+              </div>
             </section>
-            <section aria-label="Chapter progress" className="rounded-sm border border-border bg-card p-4">
-              <ProgressMetric
-                label="Chapters"
-                current={progress.completed_chapters}
-                total={progress.total_chapters}
-              />
+            <section aria-label="Chapter stage progress" className="rounded-sm border border-border bg-card p-4">
+              <div className="flex flex-col gap-3">
+                <ProgressMetric
+                  label="Chapter guides written"
+                  current={progress.completed_chapter_guides}
+                  total={progress.total_chapters}
+                />
+                <ProgressMetric
+                  label="Visual stages complete"
+                  current={progress.completed_chapter_visuals}
+                  total={progress.total_chapters}
+                />
+                <ProgressMetric
+                  label="Chapters ready"
+                  current={progress.completed_chapters}
+                  total={progress.total_chapters}
+                />
+              </div>
             </section>
           </>
         ) : (

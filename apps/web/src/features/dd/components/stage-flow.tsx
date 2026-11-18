@@ -1,6 +1,6 @@
 "use client";
 
-/** One agent graph (planner, synth or Agentic AI ingestion), drawn with React Flow: fixed positions (nothing moves
+/** One stage graph (planner or synth), drawn with React Flow: fixed positions (nothing moves
  * when a status changes), a full-card node action, a separate replay target, and — for synth — the refine loop as
  * an amber arc that lights up when it fires. Loaded lazily (`next/dynamic`), so the graph library stays out of every
  * other page's JavaScript. */
@@ -114,10 +114,10 @@ function StageNodeCard({ data }: NodeProps<StageFlowNode>) {
                 </span>
                 <span className="sr-only">— {NODE_STATUS_LABEL[data.status]}</span>
               </span>
-              {data.stage !== "ingestion" && data.kpi ? (
+              {data.kpi ? (
                 <span className="px-3 pt-1 text-xs tabular-nums text-muted-foreground">{data.kpi}</span>
               ) : null}
-              {data.stage !== "ingestion" && data.liveLine ? (
+              {data.liveLine ? (
                 <span className="px-3 pt-1 font-mono text-xs break-all text-muted-foreground">
                   {data.liveLine}
                 </span>
@@ -281,8 +281,8 @@ export function StageFlow({
 }) {
   const ids = views.map((view) => view.node.id);
   const hasNodeDetails = views.some((view) => nodeDetails[view.node.id]);
-  const nodeWidth = stage === "ingestion" || hasNodeDetails ? 248 : NODE_WIDTH;
-  const nodeHeight = stage === "ingestion" || hasNodeDetails ? 112 : NODE_HEIGHT;
+  const nodeWidth = hasNodeDetails ? 248 : NODE_WIDTH;
+  const nodeHeight = hasNodeDetails ? 112 : NODE_HEIGHT;
   const layout = flowLayout(stage, ids, { nodeWidth, nodeHeight });
   const statusOf = new Map(views.map((view) => [view.node.id, view.status]));
   const iteration = loopIteration(values);

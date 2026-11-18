@@ -4,7 +4,10 @@ type Redirect = { source: string; destination: string; permanent: boolean };
  * Pages whose address changed, as `from → to` path prefixes (the old UI's URLs). The query string
  * (`?slug=…&run=…&chapter=…`) is carried over by Next, and the new pages read the same names.
  */
-const MOVED_PAGES = [{ from: "/docs-distiller", to: "/dd" }] as const;
+const MOVED_PAGES = [
+  { from: "/docs-distiller/ingestion", to: "/dd/pages" },
+  { from: "/docs-distiller", to: "/dd" },
+] as const;
 
 /**
  * Old URLs → new URLs, so bookmarks and shared study links keep working.

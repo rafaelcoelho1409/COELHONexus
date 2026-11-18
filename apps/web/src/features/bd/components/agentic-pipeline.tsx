@@ -1,6 +1,6 @@
 "use client";
 
-import { ChartNoAxesColumn, Check, X } from "lucide-react";
+import { ChartNoAxesColumn, Check, Info, X } from "lucide-react";
 import dynamic from "next/dynamic";
 import { useState } from "react";
 import type { StreamStatus } from "@/shared/sse";
@@ -24,6 +24,7 @@ import type { BookUnits } from "../domain/books";
 import type { AgenticProgress, AgenticRunStatus, AgenticUsage, ChapterRange } from "../entities";
 import { useAgenticUsage } from "../hooks/use-agentic-run";
 import { useModalDialog } from "../hooks/use-modal-dialog";
+import { SideSheet } from "../rag/components/side-sheet";
 import { ActionButton } from "./action-button";
 import { AgenticNodeDetailsList, AgenticNodeList, AgenticPills, AgenticStatusBadge } from "./agentic-parts";
 import { ToggleGroup } from "./toggle-group";
@@ -100,9 +101,9 @@ export function AgenticProgressBar({
 
   return (
     <div className="min-w-0">
-      <div className="flex min-h-9 flex-wrap items-center justify-between gap-2">
+      <div className="flex min-h-9 flex-wrap items-center gap-2">
         <h3 className="flex items-center gap-1.5 text-sm font-medium">
-          Agentic AI
+          Ingestion Agentic AI
           {successful ? (
             <span
               role="img"
@@ -114,10 +115,10 @@ export function AgenticProgressBar({
             </span>
           ) : null}
         </h3>
-        <div className="flex flex-wrap items-center justify-end gap-2">
-          <span aria-live="polite" className="text-xs text-muted-foreground">
-            {statusText}
-          </span>
+        <span aria-live="polite" className="text-xs text-muted-foreground">
+          {statusText}
+        </span>
+        <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
           <ActionButton
             onClick={resumable ? onResume : onStart}
             disabled={startDisabled}
@@ -236,6 +237,7 @@ export function AgenticPipelineOverview({
   const chapterSummary = chapterProgressSummary(chapters, progress?.processed_pages ?? []);
   const [mode, setMode] = useState<(typeof MODES)[number]["id"]>("graph");
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [chapterDetailsOpen, setChapterDetailsOpen] = useState(false);
   const selectedNode = AGENTIC_NODES.find((node) => node.id === selectedNodeId);
   const runStatus = status ?? run?.status ?? "pending";
   const total = run?.expected_page_count ?? 0;
@@ -277,18 +279,27 @@ export function AgenticPipelineOverview({
   );
 
   return (
-    <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,4fr)_minmax(0,1fr)]">
+    <div className="min-w-0">
       <section
         aria-label="Agentic pipeline stages"
         className="min-w-0 rounded-md border border-border bg-card p-3"
       >
-        <header className="flex flex-wrap items-start justify-between gap-3">
-          <div>
+        <header className="flex min-w-0 items-start justify-between gap-3">
+          <div className="min-w-0">
             <h3 className="text-sm font-medium">Agentic pipeline</h3>
             <p aria-live="polite" className="mt-1 text-xs text-muted-foreground">
               {caption}
             </p>
           </div>
+          <ActionButton
+            iconOnly
+            onClick={() => setChapterDetailsOpen(true)}
+            aria-label="Open chapter progress"
+            title="Chapter progress"
+            aria-haspopup="dialog"
+          >
+            <Info aria-hidden />
+          </ActionButton>
         </header>
         {error ? (
           <p role="alert" className="mt-3 break-words text-sm text-destructive-text">
@@ -300,17 +311,34 @@ export function AgenticPipelineOverview({
             {replayError}
           </p>
         ) : null}
-        <div className="mt-3 grid min-w-0 grid-cols-1 gap-3 xl:grid-cols-[minmax(0,3fr)_minmax(16rem,1fr)]">
-          <div className="min-w-0">
-            {mode === "graph" ? (
-              <AgenticFlow
-                views={views}
-                onOpenNode={setSelectedNodeId}
-                onPlayNode={onPlayNode}
-                replayPending={replayPending}
-                replayPendingNodeId={replayPendingNodeId}
-              />
-            ) : mode === "list" ? (
+        <div className="mt-3 grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-[minmax(8rem,1fr)_minmax(0,2fr)]">
+          <ActionButton
+            className="w-full justify-center whitespace-nowrap px-2"
+            onClick={onOpenUsage}
+            aria-haspopup="dialog"
+          >
+            <ChartNoAxesColumn aria-hidden />
+            LLM usage
+          </ActionButton>
+          <ToggleGroup
+            legend="Pipeline shown as"
+            options={MODES}
+            value={mode}
+            onChange={setMode}
+            fullWidth
+          />
+        </div>
+        <div className="mt-3 min-w-0 overflow-hidden rounded-sm border border-border bg-background">
+          {mode === "graph" ? (
+            <AgenticFlow
+              views={views}
+              onOpenNode={setSelectedNodeId}
+              onPlayNode={onPlayNode}
+              replayPending={replayPending}
+              replayPendingNodeId={replayPendingNodeId}
+            />
+          ) : mode === "list" ? (
+            <div className="p-3">
               <AgenticNodeList
                 rows={views}
                 onOpen={setSelectedNodeId}
@@ -318,81 +346,8 @@ export function AgenticPipelineOverview({
                 replayPending={replayPending}
                 replayPendingNodeId={replayPendingNodeId}
               />
-            ) : null}
-          </div>
-          <div className="flex min-w-0 flex-col">
-            {/* Always available: with no run, or after its data was wiped, the sheet explains that there are no counters. */}
-            <div className="mb-3 flex min-w-0 flex-col items-stretch gap-2">
-              <ActionButton
-                className="w-full justify-center whitespace-nowrap px-2"
-                onClick={onOpenUsage}
-                aria-haspopup="dialog"
-              >
-                <ChartNoAxesColumn aria-hidden />
-                LLM usage
-              </ActionButton>
-              <ToggleGroup
-                legend="Pipeline shown as"
-                options={MODES}
-                value={mode}
-                onChange={setMode}
-                fullWidth
-              />
             </div>
-            {/* From xl the box is as tall as the graph beside it and nothing more: its content is taken out of flow
-             * (`absolute inset-0`), so a long list scrolls inside it instead of stretching the row. */}
-            <section
-              aria-label="Chapter progress"
-              className="relative min-w-0 rounded-sm border border-border bg-background xl:min-h-72 xl:flex-1"
-            >
-              <div className="flex min-h-0 flex-col p-3 xl:absolute xl:inset-0">
-                <header className="flex flex-wrap items-baseline justify-between gap-2">
-                  <h4 className="text-sm font-medium">Chapter progress</h4>
-                  {chapterSummary ? (
-                    <span className="text-xs tabular-nums text-muted-foreground">
-                      {chapterSummary.completed} of {chapterSummary.total} complete
-                    </span>
-                  ) : null}
-                </header>
-                {chapterRows.length > 0 ? (
-                  <ol
-                    aria-label="Chapter progress entries"
-                    // biome-ignore lint/a11y/noNoninteractiveTabindex: a long chapter list scrolls, so keyboard users must be able to focus it to scroll it (WCAG 2.1.1)
-                    tabIndex={0}
-                    className="mt-3 flex max-h-[34rem] min-h-0 flex-col gap-3 overflow-y-auto xl:max-h-none xl:flex-1"
-                  >
-                    {chapterRows.map((chapter) => {
-                      const percent = agenticPercent(chapter.processed, chapter.total);
-                      return (
-                        <li key={`${chapter.first_page}:${chapter.last_page}`} className="min-w-0">
-                          <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
-                            <span className="min-w-0 break-words">{chapter.title}</span>
-                            <span className="shrink-0 tabular-nums text-muted-foreground">
-                              {chapter.processed}/{chapter.total} {units.plural}
-                            </span>
-                          </div>
-                          <div
-                            role="progressbar"
-                            aria-label={`${chapter.title} progress`}
-                            aria-valuemin={0}
-                            aria-valuemax={chapter.total}
-                            aria-valuenow={chapter.processed}
-                            className="mt-1 h-1 w-full overflow-hidden rounded-sm bg-muted"
-                          >
-                            <div className="h-full bg-primary" style={{ width: `${percent ?? 0}%` }} />
-                          </div>
-                        </li>
-                      );
-                    })}
-                  </ol>
-                ) : (
-                  <p className="mt-3 text-xs text-muted-foreground">
-                    Chapter ranges are not available for this book.
-                  </p>
-                )}
-              </div>
-            </section>
-          </div>
+          ) : null}
         </div>
         {progress && progress.audit_warning_pages.length > 0 ? (
           <p className="mt-3 text-xs text-warning-text">
@@ -402,12 +357,54 @@ export function AgenticPipelineOverview({
           </p>
         ) : null}
       </section>
-      <PipelineUsageTotal
-        usage={usage.data}
-        hasRun={run !== null}
-        loading={run !== null && usage.isPending}
-        failed={run !== null && usage.isError}
-      />
+      {chapterDetailsOpen ? (
+        <SideSheet
+          title="Chapter progress"
+          subtitle={
+            chapterSummary
+              ? `${chapterSummary.completed} of ${chapterSummary.total} chapters complete`
+              : "Progress by chapter"
+          }
+          closeLabel="Close chapter progress"
+          onClose={() => setChapterDetailsOpen(false)}
+        >
+          <section aria-label="Chapter progress entries" className="rounded-sm border border-border bg-card p-4">
+            {chapterRows.length > 0 ? (
+              <ol
+                // biome-ignore lint/a11y/noNoninteractiveTabindex: a long chapter list scrolls, so keyboard users must be able to focus it to scroll it (WCAG 2.1.1)
+                tabIndex={0}
+                className="flex max-h-[calc(100dvh-12rem)] min-h-0 flex-col gap-4 overflow-y-auto"
+              >
+                {chapterRows.map((chapter) => {
+                  const percent = agenticPercent(chapter.processed, chapter.total);
+                  return (
+                    <li key={`${chapter.first_page}:${chapter.last_page}`} className="min-w-0 list-none">
+                      <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                        <span className="min-w-0 break-words">{chapter.title}</span>
+                        <span className="shrink-0 tabular-nums text-muted-foreground">
+                          {chapter.processed}/{chapter.total} {units.plural}
+                        </span>
+                      </div>
+                      <div
+                        role="progressbar"
+                        aria-label={`${chapter.title} progress`}
+                        aria-valuemin={0}
+                        aria-valuemax={chapter.total}
+                        aria-valuenow={chapter.processed}
+                        className="mt-1 h-1 w-full overflow-hidden rounded-sm bg-muted"
+                      >
+                        <div className="h-full bg-primary" style={{ width: `${percent ?? 0}%` }} />
+                      </div>
+                    </li>
+                  );
+                })}
+              </ol>
+            ) : (
+              <p className="text-sm text-muted-foreground">Chapter ranges are not available for this book.</p>
+            )}
+          </section>
+        </SideSheet>
+      ) : null}
       {selectedNode ? (
         <AgenticNodeSheet
           key={selectedNode.id}
@@ -432,11 +429,34 @@ export function AgenticPipelineOverview({
   );
 }
 
+export function AgenticPipelineUsage({
+  bookId,
+  run,
+  status,
+}: {
+  bookId: string;
+  run: AgenticRunStatus | null;
+  status: AgenticRunStatus["status"] | null;
+}) {
+  const live = status === "queued" || status === "running";
+  const usage = useAgenticUsage(bookId, run?.agentic_run_id ?? null, live, run !== null);
+
+  return (
+    <PipelineUsageTotal
+      usage={usage.data}
+      hasRun={run !== null}
+      loading={run !== null && usage.isPending}
+      failed={run !== null && usage.isError}
+    />
+  );
+}
+
 const PENDING_NOTE: Record<AgenticNodeStatus, string | null> = {
   done: null,
   failed: "This node failed before it finished. The run's error is shown above the graph.",
   running: "Running — its results appear here the moment the node commits.",
   pending: "This node has not run yet.",
+  cancelled: "The run stopped before this node finished.",
 };
 
 /** A side sheet for one graph node, as the Docs Distiller's: what it does and what it reads and writes (Overview), then
@@ -581,18 +601,28 @@ export function AgenticUsageSheet({
   open,
   bookId,
   run,
+  usageRunId,
   live,
+  source = "ingestion",
   onClose,
 }: {
   open: boolean;
   bookId: string;
   /** Null before the first run, and again after its data was wiped: the sheet still opens and says so. */
   run: AgenticRunStatus | null;
+  usageRunId?: string | null;
   live: boolean;
+  source?: "ingestion" | "retrieval-index";
   onClose: () => void;
 }) {
   return open ? (
-    <UsageSheet bookId={bookId} runId={run?.agentic_run_id ?? null} live={live} onClose={onClose} />
+    <UsageSheet
+      bookId={bookId}
+      runId={usageRunId === undefined ? (run?.agentic_run_id ?? null) : usageRunId}
+      live={live}
+      source={source}
+      onClose={onClose}
+    />
   ) : null;
 }
 
@@ -600,20 +630,24 @@ function UsageSheet({
   bookId,
   runId,
   live,
+  source,
   onClose,
 }: {
   bookId: string;
   runId: string | null;
   live: boolean;
+  source: "ingestion" | "retrieval-index";
   onClose: () => void;
 }) {
   const dialog = useModalDialog();
-  const usage = useAgenticUsage(bookId, runId, live, runId !== null);
+  const usage = useAgenticUsage(bookId, runId, live, runId !== null, source);
+  const title = source === "ingestion" ? "Ingestion LLM usage" : "Agentic RAG LLM usage";
+  const titleId = source === "ingestion" ? "bd-ingestion-usage-title" : "bd-retrieval-index-usage-title";
 
   return (
     <dialog
       ref={dialog}
-      aria-labelledby="bd-agentic-usage-title"
+      aria-labelledby={titleId}
       onCancel={(event) => {
         event.preventDefault();
         onClose();
@@ -622,8 +656,8 @@ function UsageSheet({
     >
       <header className="sticky top-0 z-10 flex items-start gap-3 border-b border-border bg-background px-5 py-4">
         <div className="min-w-0 flex-1">
-          <h2 id="bd-agentic-usage-title" className="text-lg font-semibold tracking-tight">
-            Ingestion LLM usage
+          <h2 id={titleId} className="text-lg font-semibold tracking-tight">
+            {title}
           </h2>
           <p className="mt-1 text-sm text-muted-foreground">
             Calls and token counts, grouped by processing node.

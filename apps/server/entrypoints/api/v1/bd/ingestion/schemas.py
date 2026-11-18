@@ -110,6 +110,40 @@ class AgenticRunStatus(BaseModel):
     error: str | None
 
 
+class RetrievalIndexStatus(BaseModel):
+    workflow_version: str
+    book_id: str
+    extraction_run_id: str
+    agentic_run_id: str
+    processed_book_revision: int
+    processed_page_count: int
+    status: Literal["queued", "running", "done", "failed", "cancelled"]
+    current_node: str | None
+    node_status: dict[str, str]
+    attempt: int
+    elasticsearch_index: str | None = None
+    elasticsearch_document_count: int = 0
+    qdrant_collection: str | None = None
+    embedding_model: str | None = None
+    embedding_dimensions: int | None = None
+    qdrant_point_count: int = 0
+    neo4j_node_count: int = 0
+    neo4j_relationship_count: int = 0
+    graph_batches_completed: int = 0
+    graph_batches_total: int = 0
+    created_at: float
+    updated_at: float
+    finished_at: float | None = None
+    error: str | None = None
+
+
+class RetrievalIndexWipeResponse(BaseModel):
+    book_id: str
+    agentic_run_id: str
+    wiped: bool
+    objects_deleted: int
+
+
 class AgenticProgress(BaseModel):
     current_node: str | None
     node_status: dict[str, str]
@@ -202,6 +236,7 @@ class Snapshot(BaseModel):
     manifest: Manifest
     progress: Progress | None
     agentic: AgenticRunStatus | None = None
+    retrieval_index: RetrievalIndexStatus | None = None
 
 
 class ActiveRun(BaseModel):

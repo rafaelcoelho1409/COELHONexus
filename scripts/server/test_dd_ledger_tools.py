@@ -41,7 +41,7 @@ def truthy(label: str, value) -> None:
 
 
 async def main() -> None:
-    built = domain.build([("a.md", domains.dd.ingestion.vault.domain.sentinelize_doc(PAGE)[1])])
+    built = domain.build([("a.md", domains.dd.pages.vault.domain.sentinelize_doc(PAGE)[1])])
     tools = {tool.name: tool for tool in ledger_tools(built)}
     check("four tools", sorted(tools), ["compare_variants", "get_block", "list_variants", "search_code"])
     full = next(block for block in built.blocks.values() if block.body == FULL)

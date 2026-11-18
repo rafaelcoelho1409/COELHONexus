@@ -95,11 +95,11 @@ def _stub(name):
     return delay
 
 
-import domains.dd.ingestion.task  # noqa: E402,F401
+import domains.dd.pages.task  # noqa: E402,F401
 import domains.dd.pipeline.ai.task  # noqa: E402,F401
 # (the synth tasks live in the pipeline task module imported above)
 
-domains.dd.ingestion.task.run_ingestion.delay = _stub("run_ingestion")
+domains.dd.pages.task.run_ingestion.delay = _stub("run_ingestion")
 domains.dd.pipeline.ai.task.run_planner.delay = _stub("run_planner")
 domains.dd.pipeline.ai.task.resume_planner.delay = _stub("resume_planner")
 domains.dd.pipeline.ai.task.run_study.delay = _stub("run_study")
@@ -185,7 +185,7 @@ def seed_plan(slug, chapter_ids=("ch-1", "ch-2")):
 
 
 def seed_manifest(slug):
-    MINIO.objects[domains.dd.ingestion.storage.keys.manifest_key(slug)] = json.dumps({"entries": [], "slug": slug})
+    MINIO.objects[domains.dd.pages.storage.keys.manifest_key(slug)] = json.dumps({"entries": [], "slug": slug})
 
 
 def val(key):
@@ -200,7 +200,7 @@ run_id = queued["run_id"]
 step("runs: start fw again (same slug locked)", "POST", "/ingestion/runs", json={"slug": "fw"})
 step("runs: start fw2 (other slug locked)", "POST", "/ingestion/runs", json={"slug": "fw2"})
 step("runs: active without a progress record", "GET", "/ingestion/runs/active")
-rs.set(domains.dd.ingestion.runtime.progress.keys.progress_key(run_id), json.dumps({"status": "running", "phase": "tier1"}))
+rs.set(domains.dd.pages.runtime.progress.keys.progress_key(run_id), json.dumps({"status": "running", "phase": "tier1"}))
 step("runs: active with progress", "GET", "/ingestion/runs/active")
 step("runs: get run", "GET", f"/ingestion/runs/{run_id}")
 step("runs: get unknown run", "GET", "/ingestion/runs/nope")
@@ -211,7 +211,7 @@ reset()
 seed_manifest("cachefw")
 step("runs: cached manifest", "POST", "/ingestion/runs", json={"slug": "cachefw"})
 MINIO.objects.update({
-    domains.dd.ingestion.storage.keys.manifest_key("rf"): "{}", "ingestion/raw/rf/a": "x", "synth-vault/rf/b": "y", "keep/rf/c": "z",
+    domains.dd.pages.storage.keys.manifest_key("rf"): "{}", "ingestion/raw/rf/a": "x", "synth-vault/rf/b": "y", "keep/rf/c": "z",
 })
 # A refresh no longer wipes the stored copy at the API call: the queued run sets it aside itself when it starts (and puts it back
 # if it fails), so what is stored is untouched here.

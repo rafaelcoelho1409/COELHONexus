@@ -84,6 +84,14 @@ async def get_book(book_id: str) -> dict:
         raise HTTPException(status_code = 404, detail = f"book {book_id!r} not found")
     agentic_run = await domains.bd.ingestion.ai.service.read_current_ingestion_ai_run(book_id)
     snapshot["agentic"] = await _agentic_status(agentic_run) if agentic_run is not None else None
+    retrieval_index = (
+        await domains.bd.ingestion.ai.retrieval_index.service.read_index(
+            book_id,
+            agentic_run["agentic_run_id"],
+        )
+        if agentic_run is not None else None
+    )
+    snapshot["retrieval_index"] = retrieval_index
     metadata = await domains.bd.ingestion.ai.service.read_current_ingestion_ai_metadata(book_id)
     if metadata is not None:
         snapshot["manifest"]["title"] = metadata["title"]
@@ -281,6 +289,98 @@ async def get_agentic_run(book_id: str, agentic_run_id: str) -> dict:
     if manifest is None:
         raise HTTPException(status_code = 404, detail = "Agentic ingestion run not found")
     return await _agentic_status(manifest)
+
+
+@router.get(
+    "/{book_id}/agentic/runs/{agentic_run_id}/retrieval-index",
+    response_model = schemas.RetrievalIndexStatus,
+)
+async def get_retrieval_index(book_id: str, agentic_run_id: str) -> dict:
+    manifest = await domains.bd.ingestion.ai.retrieval_index.service.read_index(book_id, agentic_run_id)
+    if manifest is None:
+        raise HTTPException(status_code = 404, detail = "Processed-book retrieval index not found")
+    return manifest
+
+
+@router.get(
+    "/{book_id}/agentic/runs/{agentic_run_id}/retrieval-index/llm-counters",
+)
+async def get_retrieval_index_llm_counters(book_id: str, agentic_run_id: str) -> dict:
+    manifest = await domains.bd.ingestion.ai.retrieval_index.service.read_index(book_id, agentic_run_id)
+    if manifest is None:
+        raise HTTPException(status_code = 404, detail = "Processed-book retrieval index not found")
+    usage_run_id = domains.bd.ingestion.ai.retrieval_index.keys.usage_run_id(book_id, agentic_run_id)
+    return await domains.settings.llm_counter.service.read_counters("bd", usage_run_id)
+
+
+@router.post(
+    "/{book_id}/agentic/runs/{agentic_run_id}/retrieval-index",
+    response_model = schemas.RetrievalIndexStatus,
+    status_code = 202,
+)
+async def start_retrieval_index(book_id: str, agentic_run_id: str) -> dict:
+    try:
+        return await domains.bd.ingestion.ai.retrieval_index.service.queue_index(book_id, agentic_run_id)
+    except FileNotFoundError as error:
+        raise HTTPException(status_code = 404, detail = str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code = 409, detail = str(error)) from error
+
+
+@router.post(
+    "/{book_id}/agentic/runs/{agentic_run_id}/retrieval-index/resume",
+    response_model = schemas.RetrievalIndexStatus,
+    status_code = 202,
+)
+async def resume_retrieval_index(book_id: str, agentic_run_id: str) -> dict:
+    try:
+        return await domains.bd.ingestion.ai.retrieval_index.service.resume_index(book_id, agentic_run_id)
+    except FileNotFoundError as error:
+        raise HTTPException(status_code = 404, detail = str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code = 409, detail = str(error)) from error
+
+
+@router.post(
+    "/{book_id}/agentic/runs/{agentic_run_id}/retrieval-index/replay/{node_id}",
+    response_model = schemas.RetrievalIndexStatus,
+    status_code = 202,
+)
+async def replay_retrieval_index_node(book_id: str, agentic_run_id: str, node_id: str) -> dict:
+    try:
+        return await domains.bd.ingestion.ai.retrieval_index.service.replay_index_node(
+            book_id,
+            agentic_run_id,
+            node_id,
+        )
+    except FileNotFoundError as error:
+        raise HTTPException(status_code = 404, detail = str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code = 409, detail = str(error)) from error
+
+
+@router.post(
+    "/{book_id}/agentic/runs/{agentic_run_id}/retrieval-index/cancel",
+    response_model = schemas.RetrievalIndexStatus,
+)
+async def cancel_retrieval_index(book_id: str, agentic_run_id: str) -> dict:
+    try:
+        return await domains.bd.ingestion.ai.retrieval_index.service.request_cancel(book_id, agentic_run_id)
+    except FileNotFoundError as error:
+        raise HTTPException(status_code = 404, detail = str(error)) from error
+
+
+@router.delete(
+    "/{book_id}/agentic/runs/{agentic_run_id}/retrieval-index",
+    response_model = schemas.RetrievalIndexWipeResponse,
+)
+async def wipe_retrieval_index(book_id: str, agentic_run_id: str) -> dict:
+    try:
+        return await domains.bd.ingestion.ai.retrieval_index.service.wipe_index(book_id, agentic_run_id)
+    except FileNotFoundError as error:
+        raise HTTPException(status_code = 404, detail = str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code = 409, detail = str(error)) from error
 
 
 @router.get(

@@ -54,11 +54,9 @@ beforeEach(() => {
   client.setConfig({ baseUrl: ORIGIN });
   server.use(
     http.get(`${ORIGIN}/api/v1/dd/catalog`, () => HttpResponse.json(TILES)),
-    http.get(`${ORIGIN}/api/v1/dd/ingestion`, () => HttpResponse.json(LIBRARY)),
-    http.get(`${ORIGIN}/api/v1/dd/ingestion/runs/active`, () => HttpResponse.json({ active: [] })),
-    http.post(`${ORIGIN}/api/v1/dd/ingestion/runs`, () =>
-      HttpResponse.json({ status: "queued", run_id: "r1" }),
-    ),
+    http.get(`${ORIGIN}/api/v1/dd/pages`, () => HttpResponse.json(LIBRARY)),
+    http.get(`${ORIGIN}/api/v1/dd/pages/runs/active`, () => HttpResponse.json({ active: [] })),
+    http.post(`${ORIGIN}/api/v1/dd/pages/runs`, () => HttpResponse.json({ status: "queued", run_id: "r1" })),
   );
 });
 afterEach(() => server.resetHandlers());

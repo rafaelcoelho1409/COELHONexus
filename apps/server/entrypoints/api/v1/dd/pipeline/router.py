@@ -48,7 +48,7 @@ async def pipeline_state(slug: str) -> dict:
             return False
         return bool(keys)
 
-    ingestion = await _exists(domains.dd.ingestion.storage.keys.manifest_key(slug))
+    ingestion = await _exists(domains.dd.pages.storage.keys.manifest_key(slug))
     planner   = await _exists(domains.dd.pipeline.storage.keys.plan_latest_key(slug))
     synth_prefix = domains.dd.pipeline.storage.keys.synth_prefix(slug)
     synth     = await _has_any(synth_prefix)

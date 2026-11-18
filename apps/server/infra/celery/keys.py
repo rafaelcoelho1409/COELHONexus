@@ -6,6 +6,7 @@ workers (`-Q` flags via `Values.celery.queues`), and the routers must
 agree on. Queue names stay env-scoped via `domain.scoped_queue` (see
 its docstring for the Helm-mirror contract).
 """
+
 from __future__ import annotations
 
 from . import domain, params
@@ -23,10 +24,9 @@ Q_BD = domain.scoped_queue("bd", params.ENVIRONMENT)
 TASK_INCLUDE = [
     "domains.bd.ingestion.task",
     "domains.bd.ingestion.ai.task",
+    "domains.bd.ingestion.ai.retrieval_index.task",
     "domains.bd.distill.task",
-    "domains.bd.rag.task",
-    "domains.dd.ingestion.task",
-    "domains.dd.ingestion.ai.task",
+    "domains.dd.pages.task",
     "domains.dd.pipeline.ai.task",
     "domains.ycs.ingestion.extract.task",
     "domains.ycs.ingestion.qdrant_task.task",
@@ -40,15 +40,15 @@ TASK_INCLUDE = [
 TASK_ROUTES = {
     "domains.bd.ingestion.task.*": {"queue": Q_BD},
     "domains.bd.ingestion.ai.task.*": {"queue": Q_BD},
+    "domains.bd.ingestion.ai.retrieval_index.task.*": {"queue": Q_BD},
     "domains.bd.distill.task.*": {"queue": Q_BD},
-    "domains.bd.rag.task.*": {"queue": Q_BD},
-    "domains.bd.distill.rag.task.*": {"queue": Q_BD},
+    "domains.dd.pages.task.*": {"queue": Q_CRAWLER},
+    # The moved task keeps its legacy broker id so runs queued before deploy still reach a registered handler.
     "domains.dd.ingestion.task.*": {"queue": Q_CRAWLER},
-    "domains.dd.ingestion.ai.task.*": {"queue": Q_CRAWLER},
-    # One task module serves both stages: the synth's three tasks are named first (the first matching route wins), the rest of the module is the planner's.
+    # One task module serves both pipeline stages: synth-specific tasks precede the planner fallback.
     "domains.dd.pipeline.ai.task.run_single_chapter": {"queue": Q_SYNTH},
-    "domains.dd.pipeline.ai.task.resume_synth":       {"queue": Q_SYNTH},
-    "domains.dd.pipeline.ai.task.run_study":          {"queue": Q_SYNTH},
-    "domains.dd.pipeline.ai.task.*":                  {"queue": Q_PLANNER},
-    "domains.ycs.*":               {"queue": Q_YCS},
+    "domains.dd.pipeline.ai.task.resume_synth": {"queue": Q_SYNTH},
+    "domains.dd.pipeline.ai.task.run_study": {"queue": Q_SYNTH},
+    "domains.dd.pipeline.ai.task.*": {"queue": Q_PLANNER},
+    "domains.ycs.*": {"queue": Q_YCS},
 }

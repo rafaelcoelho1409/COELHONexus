@@ -61,7 +61,7 @@ async def prepare(state: graphs.pipeline.planner.chapter_select.states.SelectSta
     # Manifest (best-effort): parent-page family, title and source order per doc. Without it the pipeline degrades to per-doc placement.
     entries: list[dict] = []
     try:
-        entries = ((await domains.dd.ingestion.storage.service.read_framework_manifest(blobs, slug)) or {}).get("entries") or []
+        entries = ((await domains.dd.pages.storage.service.read_framework_manifest(blobs, slug)) or {}).get("entries") or []
     except Exception as error:
         logger.warning(f"[chapter_select] {slug}: manifest unavailable for family consolidation ({type(error).__name__}: {error}) — per-doc fallback only")
     doc_family = {e["key"]: (e.get("url") or "").split("#", 1)[0] for e in entries if e.get("key")}

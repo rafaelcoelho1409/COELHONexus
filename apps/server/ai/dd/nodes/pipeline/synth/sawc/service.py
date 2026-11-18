@@ -25,7 +25,7 @@ Context = graphs.pipeline.synth.entities.SynthContext
 
 
 def _vault():
-    return domains.dd.ingestion.vault
+    return domains.dd.pages.vault
 
 
 async def prepare(state: graphs.pipeline.synth.sawc.states.SawcState, runtime: Runtime[Context]) -> dict:
@@ -155,7 +155,7 @@ async def prepare(state: graphs.pipeline.synth.sawc.states.SawcState, runtime: R
             logger.warning(f"[sawc_write] {slug}/{chapter_id}: cached blob {versioned_key!r} unreadable ({type(error).__name__}: {error}); recomputing")
 
     # Visible Vault (arXiv 2601.03640): the writer sees actual code bodies; render substitutes by hash, so the shipped code stays byte-exact.
-    vault_rich, n_loaded, n_skipped = await domains.dd.ingestion.vault.service.load_rich(blobs, slug, valid_source_keys)
+    vault_rich, n_loaded, n_skipped = await domains.dd.pages.vault.service.load_rich(blobs, slug, valid_source_keys)
     logger.info(f"[sawc_write] {slug}/{chapter_id}: visible vault loaded — {len(vault_rich)} entries across {n_loaded} sources (skipped {n_skipped})")
 
     # A RETHINK iteration rewrites only the sections the reviewer named; the others come back from the iteration before.

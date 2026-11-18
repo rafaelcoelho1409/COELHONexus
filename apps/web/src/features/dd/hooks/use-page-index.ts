@@ -2,7 +2,7 @@
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { getDdIngestionSlugPagesIdxOptions } from "@/shared/api";
+import { getDdPagesSlugPagesIdxOptions } from "@/shared/api";
 import { markdownToc } from "@/shared/markdown";
 
 import { fetchRunPageBody } from "../api";
@@ -46,7 +46,7 @@ export function usePageIndex(
                   })
                 : pageBodySchema.parse(
                     await queryClient.fetchQuery({
-                      ...getDdIngestionSlugPagesIdxOptions({ path: { slug, idx: entry.idx } }),
+                      ...getDdPagesSlugPagesIdxOptions({ path: { slug, idx: entry.idx } }),
                       retry: false,
                       staleTime: Infinity,
                     }),

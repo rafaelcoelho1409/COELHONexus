@@ -2,7 +2,13 @@
  * API spec. Upload uses `XMLHttpRequest` because `fetch` reports no upload progress. Generated operations use
  * `@/shared/api` directly (see `hooks/use-bd-data.ts`). */
 
-import { client } from "@/shared/api";
+import {
+  client,
+  postBdIngestionBookIdAgenticRunsAgenticRunIdRetrievalIndex,
+  postBdIngestionBookIdAgenticRunsAgenticRunIdRetrievalIndexCancel,
+  postBdIngestionBookIdAgenticRunsAgenticRunIdRetrievalIndexReplayNodeId,
+  postBdIngestionBookIdAgenticRunsAgenticRunIdRetrievalIndexResume,
+} from "@/shared/api";
 import { apiErrorMessage } from "@/shared/lib/api-error";
 
 import {
@@ -17,6 +23,10 @@ import {
   type ExtractionWipeResponse,
   extractionWipeResponseSchema,
   type ProcessedBook,
+  type RetrievalIndexStatus,
+  type RetrievalIndexWipeResponse,
+  retrievalIndexStatusSchema,
+  retrievalIndexWipeResponseSchema,
   processedBookSchema,
   type StartResponse,
   startResponseSchema,
@@ -45,6 +55,16 @@ export async function fetchAgenticUsage(bookId: string, agenticRunId: string): P
   return agenticUsageSchema.parse(result.data);
 }
 
+export async function fetchRetrievalIndexUsage(bookId: string, agenticRunId: string): Promise<AgenticUsage> {
+  const result = await client.request({
+    method: "GET",
+    url: "/api/v1/bd/ingestion/{book_id}/agentic/runs/{agentic_run_id}/retrieval-index/llm-counters",
+    path: { book_id: bookId, agentic_run_id: agenticRunId },
+    throwOnError: true,
+  });
+  return agenticUsageSchema.parse(result.data);
+}
+
 export async function fetchProcessedBook(bookId: string, agenticRunId: string): Promise<ProcessedBook> {
   const result = await client.request({
     method: "GET",
@@ -53,6 +73,52 @@ export async function fetchProcessedBook(bookId: string, agenticRunId: string): 
     throwOnError: true,
   });
   return processedBookSchema.parse(result.data);
+}
+
+export async function startRetrievalIndex(bookId: string, agenticRunId: string): Promise<RetrievalIndexStatus> {
+  const result = await postBdIngestionBookIdAgenticRunsAgenticRunIdRetrievalIndex({
+    path: { book_id: bookId, agentic_run_id: agenticRunId },
+    throwOnError: true,
+  });
+  return retrievalIndexStatusSchema.parse(result.data);
+}
+
+export async function resumeRetrievalIndex(bookId: string, agenticRunId: string): Promise<RetrievalIndexStatus> {
+  const result = await postBdIngestionBookIdAgenticRunsAgenticRunIdRetrievalIndexResume({
+    path: { book_id: bookId, agentic_run_id: agenticRunId },
+    throwOnError: true,
+  });
+  return retrievalIndexStatusSchema.parse(result.data);
+}
+
+export async function replayRetrievalIndexNode(
+  bookId: string,
+  agenticRunId: string,
+  nodeId: string,
+): Promise<RetrievalIndexStatus> {
+  const result = await postBdIngestionBookIdAgenticRunsAgenticRunIdRetrievalIndexReplayNodeId({
+    path: { book_id: bookId, agentic_run_id: agenticRunId, node_id: nodeId },
+    throwOnError: true,
+  });
+  return retrievalIndexStatusSchema.parse(result.data);
+}
+
+export async function cancelRetrievalIndex(bookId: string, agenticRunId: string): Promise<RetrievalIndexStatus> {
+  const result = await postBdIngestionBookIdAgenticRunsAgenticRunIdRetrievalIndexCancel({
+    path: { book_id: bookId, agentic_run_id: agenticRunId },
+    throwOnError: true,
+  });
+  return retrievalIndexStatusSchema.parse(result.data);
+}
+
+export async function wipeRetrievalIndex(bookId: string, agenticRunId: string): Promise<RetrievalIndexWipeResponse> {
+  const result = await client.request({
+    method: "DELETE",
+    url: "/api/v1/bd/ingestion/{book_id}/agentic/runs/{agentic_run_id}/retrieval-index",
+    path: { book_id: bookId, agentic_run_id: agenticRunId },
+    throwOnError: true,
+  });
+  return retrievalIndexWipeResponseSchema.parse(result.data);
 }
 
 export async function startAgenticRun(bookId: string): Promise<AgenticRunStart> {

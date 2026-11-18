@@ -1,6 +1,5 @@
 """Extract source-supported learning units from a bounded source batch."""
 from __future__ import annotations
-import domains
 from . import service
 from .... import graphs
 
@@ -14,13 +13,15 @@ async def extract_unit(
     dependencies = runtime.context
 
     async def execute() -> dict:
-        return await domains.bd.distill.extract_learning_units.service.extract_unit_batch(
-            graph_state,
-            lambda unit_state: service.extract_unit(dependencies, unit_state),
-        )
+        extracted = []
+        for ref in graph_state.get("unit_batch", []):
+            output = await service.extract_unit(dependencies, {**graph_state, "unit_ref": ref})
+            extracted.extend(output.get("extracted_units", []))
+        return {"extracted_units": extracted}
 
     return await graphs.service.run_node(
         dependencies.progress_callback,
         "extract_unit",
         execute,
+        controls = dependencies.controls,
     )

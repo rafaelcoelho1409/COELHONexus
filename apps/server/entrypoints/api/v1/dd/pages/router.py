@@ -1,0 +1,177 @@
+"""Read-only view of the per-framework MinIO content (canonical post-
+finalize corpus). Anything here survives Redis TTL."""
+
+import domains, infra
+from . import runs
+
+import logging
+from typing import Literal
+
+from fastapi import APIRouter, HTTPException, Query, Response
+
+
+logger = logging.getLogger(__name__)
+
+
+router = APIRouter()
+# The run lifecycle comes first, so its paths win over this router's own `/{slug}/...` ones.
+router.include_router(runs.router, prefix="/runs")
+
+
+@router.get("")
+async def list_library() -> list[dict]:
+    """Sidebar data source; joins MinIO manifests with the framework catalog
+    so each row carries logo URL + framework metadata."""
+    minio = infra.minio.service.get_storage()
+    catalog = domains.dd.catalog.service.index_by_slug()
+    slugs = domains.dd.pages.storage.domain.framework_slugs(
+        await minio.list_subfolders(domains.dd.pages.storage.keys.library_prefix())
+    )
+    if not slugs:
+        return []
+    out: list[dict] = []
+    for slug in slugs:
+        m = await domains.dd.pages.storage.service.read_framework_manifest(
+            minio, slug
+        )
+        if not m:
+            continue
+        out.append(
+            domains.dd.pages.storage.domain.library_row(
+                slug, m, catalog.get(slug, {})
+            )
+        )
+    return domains.dd.pages.storage.domain.newest_ingested_first(out)
+
+
+@router.get("/{slug}/manifest")
+async def get_manifest(slug: str) -> dict:
+    minio = infra.minio.service.get_storage()
+    m = await domains.dd.pages.storage.service.read_framework_manifest(minio, slug)
+    if not m:
+        raise HTTPException(
+            status_code=404,
+            detail=f"no finalized ingestion for {slug!r}",
+        )
+    # Pages ingested before titles were derived are named by slug; give them the heading from their body.
+    return await domains.dd.pages.storage.service.with_display_titles(
+        minio, slug, m
+    )
+
+
+@router.get("/{slug}/pages/{idx}")
+async def get_page(
+    slug: str,
+    idx: int,
+    version: Literal["processed", "original"] = Query(default="processed"),
+) -> dict:
+    minio = infra.minio.service.get_storage()
+    manifest = await domains.dd.pages.storage.service.read_framework_manifest(
+        minio, slug
+    )
+    entry = domains.dd.pages.storage.domain.entry_with_idx(
+        (manifest or {}).get("entries", []), idx
+    )
+    if entry is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"page idx={idx} not found for {slug!r}",
+        )
+    key = domains.dd.pages.storage.domain.entry_key(slug, entry, idx)
+    if version == "original":
+        key = entry.get("source_key") or entry.get("raw_key") or ""
+    if not key:
+        raise HTTPException(
+            status_code=404, detail=f"page idx={idx} has no {version} version"
+        )
+    try:
+        body = await minio.read_text(key)
+    except Exception as error:
+        logger.info(
+            f"[ingestion] page read failed (idx={idx}, version={version}): {error}"
+        )
+        raise HTTPException(
+            status_code=404,
+            detail=f"page idx={idx} {version} version is unavailable for {slug!r}",
+        ) from error
+    return {"slug": slug, "idx": idx, "version": version, "body": body}
+
+
+@router.get("/{slug}/artifacts/{name}")
+async def get_artifact(slug: str, name: str) -> Response:
+    """SHA-256-addressed media; bytes are immutable for the life of the
+    slug → 1y immutable cache. 404 on miss (no upstream fallback) so the
+    broken-image icon makes the absence visible."""
+    artifacts = domains.dd.pages.artifacts
+    safe_name = artifacts.domain.safe_name(name)
+    if not artifacts.domain.is_valid_name(safe_name):
+        raise HTTPException(status_code=400, detail="invalid artifact name")
+    key = domains.dd.pages.storage.keys.artifact_key(slug, safe_name)
+    minio = infra.minio.service.get_storage()
+    try:
+        data = await minio.read_bytes(key)
+    except infra.minio.service.ClientError as e:
+        code = (e.response or {}).get("Error", {}).get("Code", "")
+        if code in artifacts.params.MISSING_OBJECT_CODES:
+            raise HTTPException(
+                status_code=404,
+                detail=f"artifact {safe_name!r} not found for {slug!r}",
+            )
+        raise
+    return Response(
+        content=data,
+        media_type=artifacts.domain.media_type_of(safe_name),
+        headers={
+            "Cache-Control": artifacts.params.CACHE_CONTROL,
+            "Content-Length": str(len(data)),
+        },
+    )
+
+
+@router.delete("/{slug}")
+async def delete_framework(slug: str) -> dict:
+    """Full-wipe every MinIO prefix keyed by this slug + the Redis
+    single-flight lock if leaked by a crashed ingestion."""
+    minio = infra.minio.service.get_storage()
+    prefixes = (
+        *(
+            prefix
+            for _part, prefix in domains.dd.pages.storage.keys.framework_parts(slug)
+        ),
+        domains.dd.pipeline.storage.keys.planner_prefix(slug),
+        domains.dd.pipeline.storage.keys.synth_prefix(slug),
+    )
+    deleted = 0
+    failed: list[str] = []
+    for prefix in prefixes:
+        try:
+            deleted += await minio.delete_prefix(prefix)
+        except Exception as e:
+            logger.warning(
+                f"[delete] MinIO prefix wipe failed for {prefix!r}: "
+                f"{type(e).__name__}: {e}"
+            )
+            failed.append(prefix)
+    lock_released = False
+    async with infra.redis.service.client() as r:
+        try:
+            held_run_id = await domains.dd.pages.runtime.progress.service.read_lock(
+                r, slug
+            )
+            if held_run_id:
+                lock_released = (
+                    await domains.dd.pages.runtime.progress.service.release_lock(
+                        r, slug, held_run_id
+                    )
+                )
+        except Exception as e:
+            logger.warning(
+                f"[delete] Redis lock cleanup failed for {slug!r}: "
+                f"{type(e).__name__}: {e}"
+            )
+    return {
+        "slug": slug,
+        "deleted": deleted,
+        "lock_released": lock_released,
+        "failed_prefixes": failed,
+    }

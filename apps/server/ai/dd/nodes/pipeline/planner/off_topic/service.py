@@ -48,7 +48,7 @@ async def prepare(state: graphs.pipeline.planner.off_topic.states.OffTopicState,
     # Best-effort: without the manifest every page is judged.
     auto_keep: set[int] = set()
     try:
-        manifest = await domains.dd.ingestion.storage.service.read_framework_manifest(blobs, slug)
+        manifest = await domains.dd.pages.storage.service.read_framework_manifest(blobs, slug)
         reference_keys = domain.reference_page_keys((manifest or {}).get("entries") or [])
         auto_keep = {i for i, key in enumerate(raw_files) if key in reference_keys}
     except Exception as error:

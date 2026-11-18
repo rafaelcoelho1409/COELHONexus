@@ -18,7 +18,7 @@ import httpx
 
 import domains
 
-ingestion = domains.dd.ingestion
+ingestion = domains.dd.pages
 tier2 = ingestion.tiers.tier2.domain
 tier3 = ingestion.tiers.tier3.domain
 tier4 = ingestion.tiers.tier4.domain
@@ -149,9 +149,9 @@ check("a 404'd image is looked for in `_images/` under the versioned base, then 
       [artifacts.image_fallback_urls("https://x.dev/guide/a.png", "https://x.dev/en/stable/"), artifacts.image_fallback_urls("https://x.dev/_images/a.png", None), artifacts.image_fallback_urls("https://x.dev/a.html", None)],
       [["https://x.dev/en/stable/_images/a.png", "https://x.dev/_images/a.png"], [], []])
 check("a srcset is reduced to its largest candidate (density or width)", [artifacts.pick_largest_srcset("a.png 1x, b.png 2x", "https://x/p/"), artifacts.pick_largest_srcset("a.png 400w, b.png 800w", "https://x/p/")], ["https://x/p/b.png", "https://x/p/b.png"])
-MD = 'Text ![fig](img/a.png "t") and <img src="/b.png" srcset="c.png 1x, d.png 2x"> and ![own](/api/v1/dd/ingestion/s/artifacts/z.png)'
+MD = 'Text ![fig](img/a.png "t") and <img src="/b.png" srcset="c.png 1x, d.png 2x"> and ![own](/api/v1/dd/pages/s/artifacts/z.png)'
 payloads = artifacts.collect_md_payloads(MD, "https://x/docs/page")
-check("the references of a Markdown page, resolved", payloads, {"https://x/docs/img/a.png": "remote", "https://x/b.png": "remote", "https://x/docs/d.png": "remote", "https://x/api/v1/dd/ingestion/s/artifacts/z.png": "remote"})
+check("the references of a Markdown page, resolved", payloads, {"https://x/docs/img/a.png": "remote", "https://x/b.png": "remote", "https://x/docs/d.png": "remote", "https://x/api/v1/dd/pages/s/artifacts/z.png": "remote"})
 check("this app's own stored copies are never fetched again", sorted(artifacts.not_own_artifacts(payloads)), ["https://x/b.png", "https://x/docs/d.png", "https://x/docs/img/a.png"])
 rep = artifacts.build_md_replacement_map(MD, "https://x/docs/page", {"https://x/docs/img/a.png": "/pub/a.png", "https://x/docs/d.png": "/pub/d.png"})
 check("the replacement map is keyed on the text as written", rep, {"img/a.png": "/pub/a.png", "c.png 1x, d.png 2x": "/pub/d.png"})

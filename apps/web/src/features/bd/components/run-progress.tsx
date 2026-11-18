@@ -32,7 +32,7 @@ export function RunProgress({
   const done = percent(completed, total);
   return (
     <div className={className}>
-      <div className="flex min-h-9 flex-wrap items-center justify-between gap-2">
+      <div className="flex min-h-9 flex-wrap items-center gap-2">
         <h3 className="flex items-center gap-1.5 text-sm font-medium">
           Docling extraction
           {successful ? (
@@ -46,12 +46,10 @@ export function RunProgress({
             </span>
           ) : null}
         </h3>
-        <div className="flex flex-wrap items-center justify-end gap-2">
-          <span aria-live="polite" className="text-xs text-muted-foreground">
-            {statusText}
-          </span>
-          {action}
-        </div>
+        <span aria-live="polite" className="text-xs text-muted-foreground">
+          {statusText}
+        </span>
+        {action ? <div className="ml-auto">{action}</div> : null}
       </div>
       <div
         role="progressbar"

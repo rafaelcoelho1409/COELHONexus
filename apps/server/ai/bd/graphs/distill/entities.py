@@ -17,6 +17,9 @@ class DistillRunControls:
     chapter_synthesis_semaphore: asyncio.Semaphore
     chapter_settle_lock: asyncio.Lock = field(default_factory = asyncio.Lock)
     chapter_pool_settled: bool = False
+    node_execution_lock: asyncio.Lock = field(default_factory = asyncio.Lock)
+    active_node_executions: dict[str, int] = field(default_factory = dict)
+    failed_node_executions: set[str] = field(default_factory = set)
 
 
 @dataclass(frozen = True, slots = True)

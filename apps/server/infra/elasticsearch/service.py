@@ -1,16 +1,15 @@
 """Async Elasticsearch client factory + index bootstrap.
 
 Lives at the infra layer (mirror of `infra/qdrant/`) so multiple domains
-can share a single cluster client. YCS owns the only consumer today —
-metadata + transcriptions indexes.
+can share a single cluster client. YCS uses metadata and transcriptions
+indexes; BD Ingestion uses its processed-page index.
 
 The only module that imports the `elasticsearch` library or reads
 `ELASTICSEARCH_*` env vars: the FastAPI process uses the `get_es()`
 singleton, Celery tasks open their own client with `new_es()`, and the
 `AsyncElasticsearch` type is reached dotted through here.
 
-Deprecated provenance: `app.py:L105-113` (client init) +
-`helpers.py:L1862-2000` (`create_youtube_indexes`)."""
+Index names are defined in `keys.py`; their mappings are in `schemas.py`."""
 from __future__ import annotations
 import infra
 from . import domain, params
@@ -62,27 +61,15 @@ async def close_es() -> None:
 
 
 async def ensure_indexes() -> dict:
-    """Idempotently create the two deprecated YCS indexes.
+    """Idempotently create the configured YCS and BD indexes.
 
-    Returns a per-index status dict — same shape as deprecated
-    `create_youtube_indexes` so a future debug endpoint could surface
-    it. Failures don't raise; they're best-effort with structured
-    error reporting so the rest of the lifespan keeps going."""
+    Returns per-index status. Failures don't raise; they're best-effort
+    with structured error reporting so the rest of the lifespan keeps going."""
     es = get_es()
     results: dict[str, dict] = {}
     for index, mapping in domain.index_pairs():
         try:
-            exists = await es.indices.exists(index = index)
-            if not exists:
-                await es.indices.create(
-                    index = index,
-                    mappings = mapping["mappings"],
-                    settings = mapping["settings"],
-                )
-                results[index] = {"created": True}
-                logger.info(f"[elasticsearch] created index {index!r}")
-            else:
-                results[index] = {"created": False, "reason": "exists"}
+            results[index] = await ensure_index(es, index, mapping)
         except Exception as e:
             results[index] = {
                 "created": False,
@@ -92,6 +79,25 @@ async def ensure_indexes() -> dict:
                 f"[elasticsearch] ensure_index {index!r} failed: {e}"
             )
     return results
+
+
+async def ensure_index(es: AsyncElasticsearch, index: str, mapping: dict) -> dict:
+    """Create one configured index on the supplied client when it is missing."""
+    if await es.indices.exists(index = index):
+        return {"created": False, "reason": "exists"}
+    try:
+        await es.indices.create(
+            index = index,
+            mappings = mapping["mappings"],
+            settings = mapping["settings"],
+        )
+    except Exception:
+        # Concurrent book runs can race while creating the shared BD index.
+        if not await es.indices.exists(index = index):
+            raise
+        return {"created": False, "reason": "exists"}
+    logger.info(f"[elasticsearch] created index {index!r}")
+    return {"created": True}
 
 
 def span(operation: str, **attrs):

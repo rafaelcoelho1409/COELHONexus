@@ -23,7 +23,7 @@ Context = graphs.pipeline.synth.entities.SynthContext
 
 async def load_per_source_vaults(blobs, slug: str, source_keys: list[str]) -> tuple[dict[str, str], int, int]:
     """Load and merge the per-source vault manifests; a source without one is sentinelized in memory (otherwise nothing resolves and the chapter has no code blocks)."""
-    vault = domains.dd.ingestion.vault
+    vault = domains.dd.pages.vault
     manifests: list[dict] = []
     n_skipped = 0
     n_runtime = 0

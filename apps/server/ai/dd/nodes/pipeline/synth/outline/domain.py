@@ -335,7 +335,7 @@ def floor_repair_hint(bodies: list[str]) -> str:
 
 def count_code_blocks(bodies: list[str]) -> int:
     """Distinct code blocks across the chapter's source bodies: the vault the digest will build. Raw bodies are vaulted the way the digest does it; already-sentinelized bodies count their sentinels."""
-    vault = domains.dd.ingestion.vault
+    vault = domains.dd.pages.vault
     hashes: set[str] = set()
     for body in bodies:
         if not body:

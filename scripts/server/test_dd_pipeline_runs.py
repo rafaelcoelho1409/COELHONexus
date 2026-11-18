@@ -121,7 +121,7 @@ def install() -> None:
     for name in ("record_planner_run", "record_chapter_outcome", "record_audit_missing", "record_study_completion"):
         setattr(pipeline.observability.service, name, sync_recorder(name))
     domains.settings.llm_counter.service.snapshot = recorder("snapshot")
-    domains.dd.ingestion.backfill.service.ensure_framework_normalized = recorder("normalize")
+    domains.dd.pages.backfill.service.ensure_framework_normalized = recorder("normalize")
     domains.dd.catalog.service.index_by_slug = lambda: {SLUG: {"name": "Framework"}}
 
 

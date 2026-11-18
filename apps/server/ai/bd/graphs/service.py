@@ -36,15 +36,69 @@ async def run_node(
     progress_callback: ProgressReporter | None,
     node: str,
     operation: Callable[[], dict | Awaitable[dict]],
+    *,
+    controls: Any | None = None,
 ) -> dict:
     """Run one graph node's work and report it as running, then done, or failed if it raises."""
-    await report(progress_callback, kind = "node", node = node, status = "running")
+    first_execution = True
+    if controls is not None:
+        async with controls.node_execution_lock:
+            first_execution = controls.active_node_executions.get(node, 0) == 0
+            controls.active_node_executions[node] = controls.active_node_executions.get(node, 0) + 1
+            if first_execution:
+                controls.failed_node_executions.discard(node)
+    if first_execution:
+        try:
+            await report(progress_callback, kind = "node", node = node, status = "running")
+        except BaseException:
+            await _finish_node_execution(controls, node, failed = False, cancelled = True)
+            raise
+
+    async def finish(failed: bool, cancelled: bool = False) -> None:
+        if controls is None:
+            if first_execution and not cancelled:
+                await report(
+                    progress_callback,
+                    kind = "node",
+                    node = node,
+                    status = "failed" if failed else "done",
+                )
+            return
+        final_status = await _finish_node_execution(controls, node, failed, cancelled)
+        if final_status is not None:
+            await report(progress_callback, kind = "node", node = node, status = final_status)
+
     try:
         result = operation()
         if isawaitable(result):
             result = await result
-    except Exception:
-        await report(progress_callback, kind = "node", node = node, status = "failed")
+    except BaseException as error:
+        await finish(
+            failed = isinstance(error, Exception),
+            cancelled = not isinstance(error, Exception),
+        )
         raise
-    await report(progress_callback, kind = "node", node = node, status = "done")
+    await finish(failed = False)
     return result
+
+
+async def _finish_node_execution(
+    controls: Any | None,
+    node: str,
+    failed: bool,
+    cancelled: bool = False,
+) -> str | None:
+    if controls is None:
+        return "failed" if failed else None if cancelled else "done"
+    async with controls.node_execution_lock:
+        if failed:
+            controls.failed_node_executions.add(node)
+        remaining = controls.active_node_executions.get(node, 1) - 1
+        if remaining > 0:
+            controls.active_node_executions[node] = remaining
+            return None
+        controls.active_node_executions.pop(node, None)
+        if node in controls.failed_node_executions:
+            controls.failed_node_executions.discard(node)
+            return "failed"
+        return None if cancelled else "done"

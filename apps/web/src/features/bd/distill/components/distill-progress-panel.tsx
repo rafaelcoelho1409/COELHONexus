@@ -81,6 +81,9 @@ export function DistillProgressPanel({
                 : "Idle"
           }
         />
+        {status === "running" && progress?.current_task ? (
+          <ProgressMetric label="Current task" value={progress.current_task} />
+        ) : null}
         <ProgressMetric
           label="Page coverage"
           value={quality ? `${Math.round(quality.page_coverage_rate * 100)}%` : "—"}

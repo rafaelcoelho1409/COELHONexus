@@ -2,7 +2,7 @@
 
 import { useCallback, useState } from "react";
 
-import { findEntryByBasename } from "../domain/ingestion";
+import { findEntryByBasename } from "../domain/pages";
 import { useManifest } from "./use-dd-data";
 
 /**

@@ -79,7 +79,7 @@ async def prepare(state: graphs.pipeline.planner.chapter_propose.states.ProposeS
     entries: list[dict] = []
     source_structure = ""
     try:
-        entries = ((await domains.dd.ingestion.storage.service.read_framework_manifest(blobs, slug)) or {}).get("entries") or []
+        entries = ((await domains.dd.pages.storage.service.read_framework_manifest(blobs, slug)) or {}).get("entries") or []
         wanted = set(relevant_files)
         source_structure = domain.build_source_structure([e for e in entries if e.get("key") in wanted])
     except Exception as error:

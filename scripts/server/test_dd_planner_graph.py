@@ -81,7 +81,7 @@ def corpus(blobs: FakeBlobs, pages_per_topic: int = 5, dirs: tuple[str, ...] = (
             })
             page_keys.append(key)
             idx += 1
-    blobs.objects[domains.dd.ingestion.storage.keys.manifest_key(SLUG)] = json.dumps({"entries": entries, "tier_kind": "tier1"})
+    blobs.objects[domains.dd.pages.storage.keys.manifest_key(SLUG)] = json.dumps({"entries": entries, "tier_kind": "tier1"})
     return page_keys
 
 

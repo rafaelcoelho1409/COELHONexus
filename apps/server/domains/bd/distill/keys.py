@@ -34,6 +34,10 @@ def learning_unit_key(book_id: str, run_id: str, unit_id: str) -> str:
     return f"{run_prefix(book_id, run_id)}learning-units/{_safe_segment(unit_id, 'unit_id')}.json"
 
 
+def extraction_candidate_key(book_id: str, run_id: str, unit_id: str) -> str:
+    return f"{run_prefix(book_id, run_id)}extraction-candidates/{_safe_segment(unit_id, 'unit_id')}.json"
+
+
 def chapter_key(book_id: str, run_id: str, chapter_id: str) -> str:
     return f"{run_prefix(book_id, run_id)}chapters/{_safe_segment(chapter_id, 'chapter_id')}.json"
 

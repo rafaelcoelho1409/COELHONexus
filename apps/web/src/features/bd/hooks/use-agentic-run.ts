@@ -6,7 +6,7 @@ import { useCallback, useMemo, useState } from "react";
 import { getBdIngestionBookIdPagesPageNoQueryKey, getBdIngestionBookIdQueryKey } from "@/shared/api";
 import { useEventStream } from "@/shared/sse";
 
-import { agenticEventsUrl, fetchAgenticUsage } from "../api";
+import { agenticEventsUrl, fetchAgenticUsage, fetchRetrievalIndexUsage } from "../api";
 import type {
   AgenticEvent,
   AgenticProgress,
@@ -176,10 +176,24 @@ export function useAgenticRun(bookId: string, snapshot: BookSnapshot): AgenticRu
   };
 }
 
-export function useAgenticUsage(bookId: string, agenticRunId: string | null, live: boolean, enabled = true) {
+export type AgenticUsageSource = "ingestion" | "retrieval-index";
+
+export function useAgenticUsage(
+  bookId: string,
+  agenticRunId: string | null,
+  live: boolean,
+  enabled = true,
+  source: AgenticUsageSource = "ingestion",
+) {
   const query = useQuery<AgenticUsage>({
-    queryKey: ["bd-agentic-usage", bookId, agenticRunId],
-    queryFn: () => fetchAgenticUsage(bookId, agenticRunId ?? ""),
+    queryKey:
+      source === "ingestion"
+        ? ["bd-agentic-usage", bookId, agenticRunId]
+        : ["bd-retrieval-index-usage", bookId, agenticRunId],
+    queryFn: () =>
+      source === "ingestion"
+        ? fetchAgenticUsage(bookId, agenticRunId ?? "")
+        : fetchRetrievalIndexUsage(bookId, agenticRunId ?? ""),
     enabled: enabled && agenticRunId !== null,
     refetchInterval: live ? 3_000 : false,
     retry: false,

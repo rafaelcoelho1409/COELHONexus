@@ -23,7 +23,7 @@ import {
   tileName,
   tileStatus,
 } from "../domain/catalog";
-import { isRunTerminal } from "../domain/ingestion";
+import { isRunTerminal } from "../domain/pages";
 import { useActiveRun, useCatalog, useLibrary, useStartRun } from "../hooks/use-dd-data";
 import { useDdOverlays } from "../hooks/use-overlays";
 import { pagesHref, stageHref } from "../params";

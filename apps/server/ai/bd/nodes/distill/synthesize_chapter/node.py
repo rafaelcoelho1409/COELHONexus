@@ -1,4 +1,4 @@
-"""Synthesize a chapter learning guide and evidence-backed visual artifacts."""
+"""Synthesize a source-grounded chapter learning guide."""
 from __future__ import annotations
 import domains
 from . import service
@@ -31,4 +31,5 @@ async def synthesize_chapter(
             graph_state,
             synthesize_one,
         ),
+        controls = dependencies.controls,
     )

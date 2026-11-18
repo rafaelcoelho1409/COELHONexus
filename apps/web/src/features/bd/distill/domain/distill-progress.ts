@@ -14,13 +14,26 @@ export const DISTILL_NODES = [
   {
     id: "extract_unit",
     label: "Extract lessons",
-    detail: "Find the book’s central claims, methods, evidence, and useful examples in each learning unit.",
+    detail: "Find source-supported claims, methods, evidence, and examples in each learning unit.",
     reads: ["Learning units", "Source page references"],
-    writes: ["Candidate lessons", "Evidence quotes"],
-    llm: "Learning Extractor for each new unit; Evidence Verifier when supported lesson candidates exist.",
+    writes: ["Candidate lessons", "Exact evidence quotes"],
+    llm: "Learning Extractor for each new unit.",
     resources: {
-      agents: ["learning_extractor", "evidence_verifier"],
-      skills: ["learning-extractor", "evidence-verifier"],
+      agents: ["learning_extractor"],
+      skills: ["learning-extractor"],
+      tools: ["read_file"],
+    },
+  },
+  {
+    id: "verify_unit",
+    label: "Verify evidence",
+    detail: "Check whether each exact source passage supports its proposed lesson.",
+    reads: ["Candidate lessons", "Exact evidence quotes"],
+    writes: ["Verified lessons", "Evidence review flags"],
+    llm: "Evidence Verifier for each unit with supported lesson candidates.",
+    resources: {
+      agents: ["evidence_verifier"],
+      skills: ["evidence-verifier"],
       tools: ["read_file"],
     },
   },
@@ -28,7 +41,7 @@ export const DISTILL_NODES = [
     id: "prepare_chapters",
     label: "Map chapters",
     detail: "Group source-backed lessons by chapter and topic while preserving their source locations.",
-    reads: ["Candidate lessons", "Book chapter outline"],
+    reads: ["Verified lessons", "Book chapter outline"],
     writes: ["Chapter lesson groups"],
     llm: "No LLM calls. This stage deterministically groups persisted, source-backed lessons.",
     resources: { agents: [], skills: [], tools: [] },
@@ -38,11 +51,24 @@ export const DISTILL_NODES = [
     label: "Explain chapters",
     detail: "Turn each chapter’s supported lessons into a concise explanation and chapter-level guide.",
     reads: ["Chapter lesson groups", "Evidence quotes"],
-    writes: ["Chapter explanations", "Chapter-level learning models"],
-    llm: "Chapter Synthesizer; Visual Artifact Builder when a chapter needs a structured visual.",
+    writes: ["Chapter explanations", "Text-first chapter guides"],
+    llm: "Chapter Synthesizer for each chapter.",
     resources: {
-      agents: ["chapter_synthesizer", "visual_artifact_builder"],
-      skills: ["chapter-synthesizer", "visual-artifact-builder"],
+      agents: ["chapter_synthesizer"],
+      skills: ["chapter-synthesizer"],
+      tools: ["read_file"],
+    },
+  },
+  {
+    id: "build_chapter_visuals",
+    label: "Build chapter visuals",
+    detail: "Build and validate diagrams, equations, charts, timelines, and maps from saved chapter guides.",
+    reads: ["Saved chapter guides", "Source evidence"],
+    writes: ["Validated chapter visuals"],
+    llm: "Visual Artifact Builder for each chapter; unsupported visual items are omitted.",
+    resources: {
+      agents: ["visual_artifact_builder"],
+      skills: ["visual-artifact-builder"],
       tools: ["read_file"],
     },
   },
@@ -53,10 +79,36 @@ export const DISTILL_NODES = [
       "Connect chapter findings into the book’s thesis, key takeaways, and cross-chapter relationships.",
     reads: ["Chapter explanations", "Verified lessons"],
     writes: ["Central thesis", "Key takeaways", "Cross-chapter connections"],
-    llm: "Book Synthesizer and Decision Brief Writer; Research Analyst when research is enabled.",
+    llm: "Book Synthesizer; its hierarchical batches are reported as they run.",
     resources: {
-      agents: ["book_synthesizer", "decision_brief_writer", "research_analyst"],
-      skills: ["book-synthesizer", "decision-brief-writer", "research-analyst"],
+      agents: ["book_synthesizer"],
+      skills: ["book-synthesizer"],
+      tools: ["read_file"],
+    },
+  },
+  {
+    id: "write_decision_brief",
+    label: "Write decision brief",
+    detail: "Create a separate decision brief with recommendations grounded in the book’s verified lessons.",
+    reads: ["Whole-book synthesis", "Verified lessons"],
+    writes: ["Source-cited decision brief"],
+    llm: "Decision Brief Writer when cited evidence supports a brief.",
+    resources: {
+      agents: ["decision_brief_writer"],
+      skills: ["decision-brief-writer"],
+      tools: ["read_file"],
+    },
+  },
+  {
+    id: "research_context",
+    label: "Add current context",
+    detail: "Optionally gather dated external context, kept separate from claims about the book.",
+    reads: ["Whole-book synthesis", "Configured search connection"],
+    writes: ["Separately attributed research appendix"],
+    llm: "Research Analyst when research is enabled.",
+    resources: {
+      agents: ["research_analyst"],
+      skills: ["research-analyst"],
       tools: ["read_file", "Search MCP when configured"],
     },
   },
@@ -74,9 +126,13 @@ export const DISTILL_NODES = [
 export type DistillNode = (typeof DISTILL_NODES)[number];
 
 export const DISTILL_USAGE_COUNTERS: Partial<Record<DistillNode["id"], readonly string[]>> = {
-  extract_unit: ["learning_extractor", "evidence_verifier"],
-  synthesize_chapter: ["chapter_synthesizer", "visual_artifact_builder"],
-  synthesize_book: ["book_synthesizer", "decision_brief_writer", "research_analyst"],
+  extract_unit: ["learning_extractor"],
+  verify_unit: ["evidence_verifier"],
+  synthesize_chapter: ["chapter_synthesizer"],
+  build_chapter_visuals: ["visual_artifact_builder"],
+  synthesize_book: ["book_synthesizer"],
+  write_decision_brief: ["decision_brief_writer"],
+  research_context: ["research_analyst"],
   publish_report: ["report_reviewer"],
 };
 
@@ -106,17 +162,33 @@ function nodeProgress(
   if (progress === null || status === "pending") return null;
   if (nodeId === "extract_unit" && progress.total_units > 0) {
     return {
-      current: Math.min(progress.completed_units, progress.total_units),
+      current: Math.min(progress.completed_extractions, progress.total_units),
       total: progress.total_units,
       label: "units extracted",
       active: 0,
     };
   }
+  if (nodeId === "verify_unit" && progress.total_units > 0) {
+    return {
+      current: Math.min(progress.completed_units, progress.total_units),
+      total: progress.total_units,
+      label: "units checked",
+      active: 0,
+    };
+  }
   if (nodeId === "synthesize_chapter" && progress.total_chapters > 0) {
     return {
-      current: Math.min(progress.completed_chapters, progress.total_chapters),
+      current: Math.min(progress.completed_chapter_guides, progress.total_chapters),
       total: progress.total_chapters,
-      label: "chapters explained",
+      label: "chapter guides written",
+      active: 0,
+    };
+  }
+  if (nodeId === "build_chapter_visuals" && progress.total_chapters > 0) {
+    return {
+      current: Math.min(progress.completed_chapter_visuals, progress.total_chapters),
+      total: progress.total_chapters,
+      label: "visual stages complete",
       active: 0,
     };
   }
@@ -155,6 +227,9 @@ export function distillBoardCaption(
     return failed ? `Run failed during ${failed.label.toLowerCase()}.` : "Run failed before completion.";
   }
   const current = DISTILL_NODES.find((node) => node.id === progress?.current_node);
+  if (current && progress?.current_task) {
+    return `Working on ${current.label.toLowerCase()} · ${progress.current_task}.`;
+  }
   return current ? `Working on ${current.label.toLowerCase()}.` : "Distill is processing the book.";
 }
 
@@ -165,10 +240,16 @@ function nodeKpi(
 ): string | null {
   if (status !== "done" || progress === null) return null;
   if (nodeId === "extract_unit" && progress.total_units > 0) {
+    return `${progress.completed_extractions.toLocaleString()} / ${progress.total_units.toLocaleString()} units`;
+  }
+  if (nodeId === "verify_unit" && progress.total_units > 0) {
     return `${progress.completed_units.toLocaleString()} / ${progress.total_units.toLocaleString()} units`;
   }
   if (nodeId === "synthesize_chapter" && progress.total_chapters > 0) {
-    return `${progress.completed_chapters.toLocaleString()} / ${progress.total_chapters.toLocaleString()} chapters`;
+    return `${progress.completed_chapter_guides.toLocaleString()} / ${progress.total_chapters.toLocaleString()} chapters`;
+  }
+  if (nodeId === "build_chapter_visuals" && progress.total_chapters > 0) {
+    return `${progress.completed_chapter_visuals.toLocaleString()} / ${progress.total_chapters.toLocaleString()} stages`;
   }
   return null;
 }
@@ -179,10 +260,20 @@ function nodeLiveLine(
   progress: DistillRun["progress"] | null,
 ): string | null {
   if (status !== "running" || progress === null || progress.current_node !== nodeId) return null;
+  if (progress.current_task) return progress.current_task;
   if (nodeId === "extract_unit" && progress.total_units > 0) {
+    return `${progress.completed_extractions.toLocaleString()}/${progress.total_units.toLocaleString()} units`;
+  }
+  if (nodeId === "verify_unit" && progress.total_units > 0) {
     return `${progress.completed_units.toLocaleString()}/${progress.total_units.toLocaleString()} units`;
   }
-  if ((nodeId === "prepare_chapters" || nodeId === "synthesize_chapter") && progress.total_chapters > 0) {
+  if (nodeId === "synthesize_chapter" && progress.total_chapters > 0) {
+    return `${progress.completed_chapter_guides.toLocaleString()}/${progress.total_chapters.toLocaleString()} chapter guides`;
+  }
+  if (nodeId === "build_chapter_visuals" && progress.total_chapters > 0) {
+    return `${progress.completed_chapter_visuals.toLocaleString()}/${progress.total_chapters.toLocaleString()} visual stages`;
+  }
+  if (nodeId === "prepare_chapters" && progress.total_chapters > 0) {
     return `${progress.completed_chapters.toLocaleString()}/${progress.total_chapters.toLocaleString()} chapters`;
   }
   return null;

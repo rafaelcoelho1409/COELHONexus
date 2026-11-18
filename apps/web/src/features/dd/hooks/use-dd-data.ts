@@ -1,40 +1,32 @@
 "use client";
 
-/** Docs Distiller ingestion — TanStack Query wrappers over the generated client. The generated types for
+/** DD Pages extraction — TanStack Query wrappers over the generated client. The generated types for
  * these endpoints are open objects, so every payload is parsed with its zod schema (a failed parse is the
  * query's error state). The `select` functions sit at module level so their results stay referentially stable. */
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import {
-  deleteDdIngestionSlug,
+  deleteDdPagesSlug,
   getDdCatalogOptions,
   getDdCatalogQueryKey,
-  getDdIngestionOptions,
-  getDdIngestionQueryKey,
-  getDdIngestionRunsActiveOptions,
-  getDdIngestionRunsActiveQueryKey,
-  getDdIngestionRunsRunIdOptions,
-  getDdIngestionRunsRunIdQueryKey,
-  getDdIngestionSlugManifestOptions,
-  getDdIngestionSlugManifestQueryKey,
-  getDdIngestionSlugPagesIdxOptions,
-  getDdIngestionSlugPagesIdxQueryKey,
-  postDdIngestionRuns,
-  postDdIngestionRunsRunIdCancel,
+  getDdPagesOptions,
+  getDdPagesQueryKey,
+  getDdPagesRunsActiveOptions,
+  getDdPagesRunsActiveQueryKey,
+  getDdPagesRunsRunIdOptions,
+  getDdPagesRunsRunIdQueryKey,
+  getDdPagesSlugManifestOptions,
+  getDdPagesSlugManifestQueryKey,
+  getDdPagesSlugPagesIdxOptions,
+  getDdPagesSlugPagesIdxQueryKey,
+  postDdPagesRuns,
+  postDdPagesRunsRunIdCancel,
 } from "@/shared/api";
 
+import { fetchExtractionUsage, fetchRunPageBody } from "../api";
+import { isRunTerminal } from "../domain/pages";
 import {
-  fetchIngestionUsage,
-  fetchRunPageBody,
-  replayAgenticRunNode,
-  resumeAgenticRun,
-  startAgenticRun,
-  wipeAgenticRun,
-} from "../api";
-import { isRunTerminal } from "../domain/ingestion";
-import {
-  type AgenticWipeResponse,
   activeRunsSchema,
   libraryListSchema,
   manifestSchema,
@@ -59,131 +51,70 @@ export function useCatalog() {
   return useQuery({ ...getDdCatalogOptions(), retry: false, select: parseCatalog });
 }
 
-/** GET /dd/ingestion — the ingested library with display names. */
+/** GET /dd/pages — the saved pages library with display names. */
 export function useLibrary() {
-  return useQuery({ ...getDdIngestionOptions(), retry: false, select: parseLibrary });
+  return useQuery({ ...getDdPagesOptions(), retry: false, select: parseLibrary });
 }
 
 export type StartRunOutcome = { kind: "cached" | "queued" | "locked"; runId?: string; message?: string };
 
-/** POST /dd/ingestion/runs — start (or refresh) an ingestion. */
+/** POST /dd/pages/runs — start or refresh documentation extraction. */
 export function useStartRun() {
   const queryClient = useQueryClient();
   return useMutation<StartRunOutcome, unknown, { slug: string; refresh?: boolean }>({
     mutationFn: async (body) => {
-      const result = await postDdIngestionRuns({ body, throwOnError: true });
+      const result = await postDdPagesRuns({ body, throwOnError: true });
       const data = startRunResponseSchema.parse(result.data);
       if (data.status === "cached") return { kind: "cached" };
       if (data.status === "queued") return { kind: "queued", runId: data.run_id };
       return { kind: "locked", message: data.message };
     },
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: getDdIngestionRunsActiveQueryKey() });
-      void queryClient.invalidateQueries({ queryKey: getDdIngestionQueryKey() });
+      void queryClient.invalidateQueries({ queryKey: getDdPagesRunsActiveQueryKey() });
+      void queryClient.invalidateQueries({ queryKey: getDdPagesQueryKey() });
     },
   });
 }
 
-function startOutcome(data: ReturnType<typeof startRunResponseSchema.parse>): StartRunOutcome {
-  if (data.status === "queued") return { kind: "queued", runId: data.run_id };
-  return { kind: "locked", message: data.message };
-}
-
-/** POST /dd/ingestion/{slug}/agentic/runs — start AI from the saved extracted pages. */
-export function useStartAgenticRun() {
-  const queryClient = useQueryClient();
-  return useMutation<StartRunOutcome, unknown, string>({
-    mutationFn: async (slug) => startOutcome(await startAgenticRun(slug)),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: getDdIngestionRunsActiveQueryKey() });
-      void queryClient.invalidateQueries({ queryKey: getDdIngestionQueryKey() });
-    },
-  });
-}
-
-/** POST /dd/ingestion/{slug}/agentic/runs/{run_id}/resume. */
-export function useResumeAgenticRun() {
-  const queryClient = useQueryClient();
-  return useMutation<StartRunOutcome, unknown, { slug: string; runId: string }>({
-    mutationFn: async ({ slug, runId }) => startOutcome(await resumeAgenticRun(slug, runId)),
-    onSuccess: (_outcome, { runId }) => {
-      void queryClient.invalidateQueries({ queryKey: getDdIngestionRunsActiveQueryKey() });
-      void queryClient.invalidateQueries({
-        queryKey: getDdIngestionRunsRunIdQueryKey({ path: { run_id: runId } }),
-      });
-    },
-  });
-}
-
-export function useReplayAgenticRunNode() {
-  const queryClient = useQueryClient();
-  return useMutation<void, unknown, { slug: string; runId: string; nodeId: string }>({
-    mutationFn: ({ slug, runId, nodeId }) => replayAgenticRunNode(slug, runId, nodeId),
-    onSuccess: (_result, { runId, slug }) => {
-      void queryClient.invalidateQueries({
-        queryKey: getDdIngestionRunsRunIdQueryKey({ path: { run_id: runId } }),
-      });
-      void queryClient.invalidateQueries(getDdIngestionSlugManifestOptions({ path: { slug } }));
-      void queryClient.invalidateQueries({ queryKey: getDdIngestionRunsActiveQueryKey() });
-    },
-  });
-}
-
-/** DELETE /dd/ingestion/{slug}/agentic/runs/{run_id} — remove AI-only artifacts. */
-export function useWipeAgenticRun() {
-  const queryClient = useQueryClient();
-  return useMutation<AgenticWipeResponse, unknown, { slug: string; runId: string }>({
-    mutationFn: ({ slug, runId }) => wipeAgenticRun(slug, runId),
-    onSuccess: (result) => {
-      void queryClient.invalidateQueries({
-        queryKey: getDdIngestionRunsRunIdQueryKey({ path: { run_id: result.run_id } }),
-      });
-      void queryClient.invalidateQueries(getDdIngestionSlugManifestOptions({ path: { slug: result.slug } }));
-      void queryClient.invalidateQueries({ queryKey: getDdIngestionQueryKey() });
-      void queryClient.invalidateQueries({ queryKey: ["dd", "ingestion", "usage", result.run_id] });
-    },
-  });
-}
-
-/** POST /dd/ingestion/runs/{run_id}/cancel — cooperative cancel. */
+/** POST /dd/pages/runs/{run_id}/cancel — cooperative cancel. */
 export function useCancelRun() {
   const queryClient = useQueryClient();
   return useMutation<string, unknown, string>({
     mutationFn: async (runId) => {
-      await postDdIngestionRunsRunIdCancel({ path: { run_id: runId }, throwOnError: true });
+      await postDdPagesRunsRunIdCancel({ path: { run_id: runId }, throwOnError: true });
       return runId;
     },
     onSuccess: (runId) => {
       void queryClient.invalidateQueries({
-        queryKey: getDdIngestionRunsRunIdQueryKey({ path: { run_id: runId } }),
+        queryKey: getDdPagesRunsRunIdQueryKey({ path: { run_id: runId } }),
       });
     },
   });
 }
 
-/** DELETE /dd/ingestion/{slug} — full wipe (the backend cascades to planner/synth/study state; the UI only
+/** DELETE /dd/pages/{slug} — full wipe (the backend cascades to planner/synth/study state; the UI only
  * refreshes what it reads). Resolves to the slug that was removed. */
 export function useDeleteLibrary() {
   const queryClient = useQueryClient();
   return useMutation<string, unknown, string>({
     mutationFn: async (slug) => {
-      await deleteDdIngestionSlug({ path: { slug }, throwOnError: true });
+      await deleteDdPagesSlug({ path: { slug }, throwOnError: true });
       return slug;
     },
     onSuccess: (slug) => {
-      queryClient.removeQueries({ queryKey: getDdIngestionSlugManifestQueryKey({ path: { slug } }) });
-      queryClient.removeQueries({ queryKey: getDdIngestionSlugPagesIdxQueryKey({ path: { slug, idx: 0 } }) });
-      void queryClient.invalidateQueries({ queryKey: getDdIngestionQueryKey() });
+      queryClient.removeQueries({ queryKey: getDdPagesSlugManifestQueryKey({ path: { slug } }) });
+      queryClient.removeQueries({ queryKey: getDdPagesSlugPagesIdxQueryKey({ path: { slug, idx: 0 } }) });
+      void queryClient.invalidateQueries({ queryKey: getDdPagesQueryKey() });
       void queryClient.invalidateQueries({ queryKey: getDdCatalogQueryKey() });
-      void queryClient.invalidateQueries({ queryKey: getDdIngestionRunsActiveQueryKey() });
+      void queryClient.invalidateQueries({ queryKey: getDdPagesRunsActiveQueryKey() });
     },
   });
 }
 
-/** GET /dd/ingestion/runs/active — resumes an in-flight run after a reload. */
+/** GET /dd/pages/runs/active — resumes an in-flight run after a reload. */
 export function useActiveRun(enabled: boolean) {
   const query = useQuery({
-    ...getDdIngestionRunsActiveOptions(),
+    ...getDdPagesRunsActiveOptions(),
     retry: false,
     refetchInterval: ACTIVE_RUN_REFRESH_MS,
     refetchIntervalInBackground: false,
@@ -195,7 +126,7 @@ export function useActiveRun(enabled: boolean) {
   return { run: runs[0], runs, isPending: query.isPending };
 }
 
-/** GET /dd/ingestion/runs/{run_id} — the poll stops at a terminal state. `live` says the run is in flight (the address names it): only then is it
+/** GET /dd/pages/runs/{run_id} — the poll stops at a terminal state. `live` says the run is in flight (the address names it): only then is it
  * asked about again, even while the server does not know it yet (a worker that has not picked the run up has not written its status). The status of a
  * finished run expires from the server, so for it the answer, found or gone, is read once.
  *
@@ -203,7 +134,7 @@ export function useActiveRun(enabled: boolean) {
  * made `isError` (and with it the whole screen) flip once per poll. */
 export function useRunPoll(runId: string | null, live: boolean) {
   const query = useQuery({
-    ...getDdIngestionRunsRunIdOptions({ path: { run_id: runId ?? "" } }),
+    ...getDdPagesRunsRunIdOptions({ path: { run_id: runId ?? "" } }),
     retry: 0,
     enabled: runId !== null,
     select: parseRunStatus,
@@ -220,10 +151,10 @@ export function useRunPoll(runId: string | null, live: boolean) {
   };
 }
 
-/** GET /dd/ingestion/{slug}/manifest. */
+/** GET /dd/pages/{slug}/manifest. */
 export function useManifest(slug: string | null) {
   const query = useQuery({
-    ...getDdIngestionSlugManifestOptions({ path: { slug: slug ?? "" } }),
+    ...getDdPagesSlugManifestOptions({ path: { slug: slug ?? "" } }),
     retry: false,
     enabled: slug !== null,
     select: parseManifest,
@@ -231,10 +162,10 @@ export function useManifest(slug: string | null) {
   return { data: query.data ?? null, isPending: query.isPending, isError: query.isError };
 }
 
-/** GET /dd/ingestion/{slug}/pages/{idx} — the explorer's page preview. */
+/** GET /dd/pages/{slug}/pages/{idx} — the explorer's page preview. */
 export function usePageBody(slug: string | null, idx: number | null, version: PageVersion = "processed") {
   const query = useQuery({
-    ...getDdIngestionSlugPagesIdxOptions({
+    ...getDdPagesSlugPagesIdxOptions({
       path: { slug: slug ?? "", idx: idx ?? 0 },
       query: { version },
     }),
@@ -245,7 +176,7 @@ export function usePageBody(slug: string | null, idx: number | null, version: Pa
   return { data: query.data ?? null, isPending: query.isPending, isError: query.isError };
 }
 
-/** GET /dd/ingestion/runs/{run_id}/pages/{idx} — page bodies from the in-flight raw-to-agentic manifest. */
+/** GET /dd/pages/runs/{run_id}/pages/{idx} — page bodies from the live extraction manifest. */
 export function useRunPageBody(
   runId: string | null,
   idx: number | null,
@@ -261,11 +192,11 @@ export function useRunPageBody(
   return { data: query.data ?? null, isPending: query.isPending, isError: query.isError };
 }
 
-/** Live while ingestion runs; the endpoint switches to its MinIO snapshot after Redis expires. */
-export function useIngestionUsage(runId: string | null, live: boolean, enabled = true) {
+/** Live while extraction runs; the endpoint switches to its MinIO snapshot after Redis expires. */
+export function useExtractionUsage(runId: string | null, live: boolean, enabled = true) {
   return useQuery({
-    queryKey: ["dd", "ingestion", "usage", runId],
-    queryFn: () => fetchIngestionUsage(runId ?? ""),
+    queryKey: ["dd", "pages", "usage", runId],
+    queryFn: () => fetchExtractionUsage(runId ?? ""),
     enabled: enabled && runId !== null,
     retry: false,
     refetchInterval: live ? USAGE_REFRESH_MS : false,

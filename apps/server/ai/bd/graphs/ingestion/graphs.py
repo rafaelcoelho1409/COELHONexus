@@ -38,8 +38,7 @@ def ingestion_graph(checkpointer: Any | None = None):
         nodes.ingestion.visual_enrichment.node.enrich_visuals)
     workflow.add_node(
         "materialize_processed_book",
-        nodes.ingestion.materialize_processed_book.node.materialize_processed_book,
-    )
+        nodes.ingestion.materialize_processed_book.node.materialize_processed_book)
     workflow.add_node(
         "reconcile_contents", 
         nodes.ingestion.reconcile_contents.node.reconcile_contents)

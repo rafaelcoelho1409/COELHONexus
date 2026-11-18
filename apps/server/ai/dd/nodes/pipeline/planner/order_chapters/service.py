@@ -106,7 +106,7 @@ async def prepare(state: graphs.pipeline.planner.order_chapters.states.OrderStat
     source_ranking: list[int] | None = None
     homes: list[list[str] | None] = [None] * n_chapters
     try:
-        manifest = await domains.dd.ingestion.storage.service.read_framework_manifest(blobs, slug)
+        manifest = await domains.dd.pages.storage.service.read_framework_manifest(blobs, slug)
         entries = (manifest or {}).get("entries") or []
         key_dir = chapter_select.domain.page_dirs(entries)
         homes = [list(home) if home else None for home in domain.chapter_home_dirs(chapters, key_dir)]

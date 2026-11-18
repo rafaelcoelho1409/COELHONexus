@@ -21,4 +21,5 @@ async def publish_report_with_dependencies(
         dependencies.progress_callback,
         "publish_report",
         lambda: service.publish_report(dependencies, graph_state),
+        controls = dependencies.controls,
     )

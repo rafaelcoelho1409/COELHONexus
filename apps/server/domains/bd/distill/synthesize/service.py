@@ -266,11 +266,11 @@ async def synthesize_chapter_batch(
         )
         learning_units_by_id = dict(zip(unit_ids, units, strict = True))
 
-    completed = []
+    synthesized = []
     for ref in chapter_batch:
         output = await synthesize_chapter(
             {**state, "chapter_ref": ref},
             learning_units_by_id,
         )
-        completed.extend(output.get("completed_chapters", []))
-    return {"completed_chapters": completed}
+        synthesized.extend(output.get("synthesized_chapters", []))
+    return {"synthesized_chapters": synthesized}

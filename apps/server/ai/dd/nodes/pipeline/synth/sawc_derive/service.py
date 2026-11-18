@@ -77,7 +77,7 @@ async def prepare(state: graphs.pipeline.synth.sawc_derive.states.DeriveState, r
     source_keys = sorted({k for k in (digest.get("source_keys") or []) if k} or {
         c.get("source_key") for s in sections for c in (s.get("citations") or []) if c.get("source_key")
     })
-    vault, _, _ = await domains.dd.ingestion.vault.service.load_rich(blobs, slug, source_keys)
+    vault, _, _ = await domains.dd.pages.vault.service.load_rich(blobs, slug, source_keys)
     thin: list[tuple[dict, dict, str, str]] = []
     for section, st, h in candidates:
         entry = vault.get(h)

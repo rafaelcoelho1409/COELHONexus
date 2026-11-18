@@ -40,22 +40,30 @@ AGENT_CALL_RETRY_WAIT_BASE_S = 5.0
 TRANSIENT_NODE_RETRY_ATTEMPTS = 3
 TRANSIENT_NODE_RETRY_INITIAL_INTERVAL_S = 5.0
 TRANSIENT_NODE_RETRY_MAX_INTERVAL_S = 30.0
-GRAPH_NODES = ("prepare_units", "extract_unit", "prepare_chapters", "synthesize_chapter", "synthesize_book", "publish_report")
+GRAPH_NODES = (
+    "prepare_units",
+    "extract_unit",
+    "verify_unit",
+    "prepare_chapters",
+    "synthesize_chapter",
+    "build_chapter_visuals",
+    "synthesize_book",
+    "write_decision_brief",
+    "research_context",
+    "publish_report",
+)
 LLM_COUNTER_NODES_BY_GRAPH_NODE = {
     "prepare_units": (),
-    "extract_unit": ("learning_extractor", "evidence_verifier"),
+    "extract_unit": ("learning_extractor",),
+    "verify_unit": ("evidence_verifier",),
     "prepare_chapters": (),
-    "synthesize_chapter": ("chapter_synthesizer", "visual_artifact_builder"),
-    "synthesize_book": ("book_synthesizer", "decision_brief_writer", "research_analyst"),
+    "synthesize_chapter": ("chapter_synthesizer",),
+    "build_chapter_visuals": ("visual_artifact_builder",),
+    "synthesize_book": ("book_synthesizer",),
+    "write_decision_brief": ("decision_brief_writer",),
+    "research_context": ("research_analyst",),
     "publish_report": ("report_reviewer",),
 }
-REPLAY_DESCENDANTS = {
-    "prepare_units": GRAPH_NODES,
-    "extract_unit": GRAPH_NODES[1:],
-    "prepare_chapters": GRAPH_NODES[2:],
-    "synthesize_chapter": GRAPH_NODES[3:],
-    "synthesize_book": GRAPH_NODES[4:],
-    "publish_report": GRAPH_NODES[5:],
-}
+REPLAY_DESCENDANTS = {node: GRAPH_NODES[index:] for index, node in enumerate(GRAPH_NODES)}
 TASK_NAME = "domains.bd.distill.task.run_distill"
 TERMINAL_STATUSES = frozenset({"done", "failed", "cancelled"})

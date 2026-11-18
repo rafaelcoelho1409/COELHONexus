@@ -67,9 +67,9 @@ describe("HomePage", () => {
   it("shows live figures from the API, not hard-coded ones", async () => {
     server.use(
       http.get(`${ORIGIN}/api/health`, () => HttpResponse.json({ status: "healthy" })),
-      http.get(`${ORIGIN}/api/v1/dd/ingestion`, () => HttpResponse.json([{ slug: "a" }, { slug: "b" }])),
+      http.get(`${ORIGIN}/api/v1/dd/pages`, () => HttpResponse.json([{ slug: "a" }, { slug: "b" }])),
       http.get(`${ORIGIN}/api/v1/ycs/admin/videos`, () => HttpResponse.json({ items: [], total: 1204 })),
-      http.get(`${ORIGIN}/api/v1/dd/ingestion/runs/active`, () =>
+      http.get(`${ORIGIN}/api/v1/dd/pages/runs/active`, () =>
         HttpResponse.json({ active: [{ id: "run-1" }] }),
       ),
     );
@@ -95,9 +95,9 @@ describe("HomePage", () => {
   it("does not trust a payload that has the wrong shape", async () => {
     server.use(
       http.get(`${ORIGIN}/api/health`, () => HttpResponse.json({ status: "degraded" })),
-      http.get(`${ORIGIN}/api/v1/dd/ingestion`, () => HttpResponse.json({ not: "a list" })),
+      http.get(`${ORIGIN}/api/v1/dd/pages`, () => HttpResponse.json({ not: "a list" })),
       http.get(`${ORIGIN}/api/v1/ycs/admin/videos`, () => HttpResponse.json({ items: [] })),
-      http.get(`${ORIGIN}/api/v1/dd/ingestion/runs/active`, () => HttpResponse.json({ runs: [] })),
+      http.get(`${ORIGIN}/api/v1/dd/pages/runs/active`, () => HttpResponse.json({ runs: [] })),
     );
     renderPage();
 

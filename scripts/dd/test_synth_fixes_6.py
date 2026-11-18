@@ -22,7 +22,7 @@ assert count([page(a, b), page(b, c)]) == 3
 assert count([]) == 0 and count(["", "no code here"]) == 0
 
 # 2) sentinelized bodies count their sentinels -----------------------------------------------------------------------------------------------
-sent, _ = domains.dd.ingestion.vault.domain.sentinelize_doc(page(a, b))
+sent, _ = domains.dd.pages.vault.domain.sentinelize_doc(page(a, b))
 assert count([sent]) == 2, count([sent])
 assert count([sent, page(c)]) == 3
 

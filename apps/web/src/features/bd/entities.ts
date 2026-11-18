@@ -170,7 +170,52 @@ export const agenticRunStatusSchema = z.looseObject({
 });
 export type AgenticRunStatus = z.infer<typeof agenticRunStatusSchema>;
 export type AgenticProgress = z.infer<typeof agenticProgressSchema>;
-export type BookSnapshot = Snapshot & { agentic: AgenticRunStatus | null };
+
+export const RETRIEVAL_INDEX_WORKFLOW_VERSION = "4.0";
+
+export const retrievalIndexStatusSchema = z.looseObject({
+  workflow_version: z.string().catch("1.0"),
+  book_id: z.string(),
+  extraction_run_id: z.string(),
+  agentic_run_id: z.string(),
+  processed_book_revision: z.number().int().positive(),
+  processed_page_count: z.number().int().nonnegative(),
+  status: z.enum(["queued", "running", "done", "failed", "cancelled"]),
+  replay_from_node: z.string().nullable().catch(null),
+  current_node: z.string().nullable().catch(null),
+  node_status: z.record(z.string(), z.enum(["pending", "running", "done", "failed", "cancelled"])).catch({}),
+  attempt: z.number().int().positive().catch(1),
+  elasticsearch_index: z.string().nullable().catch(null),
+  pin_sources_pages_completed: z.number().int().nonnegative().catch(0),
+  elasticsearch_document_count: z.number().int().nonnegative().catch(0),
+  elasticsearch_pages_completed: z.number().int().nonnegative().catch(0),
+  qdrant_collection: z.string().nullable().catch(null),
+  embedding_model: z.string().nullable().catch(null),
+  embedding_dimensions: z.number().int().positive().nullable().catch(null),
+  qdrant_point_count: z.number().int().nonnegative().catch(0),
+  qdrant_pages_completed: z.number().int().nonnegative().catch(0),
+  neo4j_node_count: z.number().int().nonnegative().catch(0),
+  neo4j_relationship_count: z.number().int().nonnegative().catch(0),
+  graph_batches_completed: z.number().int().nonnegative().catch(0),
+  graph_batches_total: z.number().int().nonnegative().catch(0),
+  neo4j_pages_completed: z.number().int().nonnegative().catch(0),
+  created_at: z.number().catch(0),
+  updated_at: z.number().catch(0),
+  finished_at: z.number().nullable().catch(null),
+  error: z.string().nullable().catch(null),
+});
+export type RetrievalIndexStatus = z.infer<typeof retrievalIndexStatusSchema>;
+export const retrievalIndexWipeResponseSchema = z.object({
+  book_id: z.string(),
+  agentic_run_id: z.string(),
+  wiped: z.boolean(),
+  objects_deleted: count,
+});
+export type RetrievalIndexWipeResponse = z.infer<typeof retrievalIndexWipeResponseSchema>;
+export type BookSnapshot = Snapshot & {
+  agentic: AgenticRunStatus | null;
+  retrievalIndex: RetrievalIndexStatus | null;
+};
 
 export const agenticRunStartSchema = z.object({
   status: z.literal("queued"),

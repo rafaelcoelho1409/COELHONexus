@@ -15,8 +15,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "server"))
 
 import domains
 
-extract = domains.dd.ingestion.tiers.extract.domain
-post = domains.dd.ingestion.post.domain
+extract = domains.dd.pages.tiers.extract.domain
+post = domains.dd.pages.post.domain
 
 
 def check(label: str, got, want) -> None:
@@ -128,12 +128,12 @@ class FakeStore:
 
 
 async def post_processing() -> None:
-    entities = domains.dd.ingestion.storage.entities
+    entities = domains.dd.pages.storage.entities
     bodies = {f"k{i}": f"# Page {i}\n\n" + f"Distinct documentation text number {i}. " * 40 for i in range(10)}
     entries = [entities.ManifestEntry(idx=i, slug=f"p{i}", url=f"https://x.dev/docs/p{i}", tier="sitemap", bytes=len(bodies[f"k{i}"]), title=f"Page {i} | Demo Docs", key=f"k{i}")
                for i in range(10)]
     store = FakeStore(entries, bodies)
-    summary = await domains.dd.ingestion.post.service.apply_to_store(store)
+    summary = await domains.dd.pages.post.service.apply_to_store(store)
     check("post-processing takes the site's name off every title, in the manifest that is finalized", ([e.title for e in store.manifest][:3], summary["output_files"]), (["Page 0", "Page 1", "Page 2"], 10))
 
 

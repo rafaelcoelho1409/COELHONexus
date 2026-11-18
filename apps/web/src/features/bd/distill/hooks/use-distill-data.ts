@@ -189,16 +189,33 @@ function reconcileRunState(
     return initialDistillRunState(snapshot);
   }
 
+  const currentNode = snapshot.progress.current_node ?? streamed.progress.current_node;
+  const currentTask =
+    snapshot.progress.current_task ??
+    (streamed.progress.current_node === currentNode ? streamed.progress.current_task : null);
   const progress = {
     ...streamed.progress,
     ...snapshot.progress,
-    current_node: snapshot.progress.current_node ?? streamed.progress.current_node,
+    current_node: currentNode,
+    current_task: currentTask,
     node_status: {
       ...streamed.progress.node_status,
       ...snapshot.progress.node_status,
     },
     completed_units: Math.max(streamed.progress.completed_units, snapshot.progress.completed_units),
+    completed_extractions: Math.max(
+      streamed.progress.completed_extractions,
+      snapshot.progress.completed_extractions,
+    ),
     total_units: Math.max(streamed.progress.total_units, snapshot.progress.total_units),
+    completed_chapter_guides: Math.max(
+      streamed.progress.completed_chapter_guides,
+      snapshot.progress.completed_chapter_guides,
+    ),
+    completed_chapter_visuals: Math.max(
+      streamed.progress.completed_chapter_visuals,
+      snapshot.progress.completed_chapter_visuals,
+    ),
     completed_chapters: Math.max(streamed.progress.completed_chapters, snapshot.progress.completed_chapters),
     total_chapters: Math.max(streamed.progress.total_chapters, snapshot.progress.total_chapters),
   };
@@ -212,8 +229,12 @@ function reconcileRunState(
       status: snapshot.status,
       progress: {
         ...snapshot.progress,
+        current_task: snapshot.progress.current_task,
         completed_units: progress.completed_units,
+        completed_extractions: progress.completed_extractions,
         total_units: progress.total_units,
+        completed_chapter_guides: progress.completed_chapter_guides,
+        completed_chapter_visuals: progress.completed_chapter_visuals,
         completed_chapters: progress.completed_chapters,
         total_chapters: progress.total_chapters,
       },

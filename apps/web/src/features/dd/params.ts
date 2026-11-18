@@ -5,7 +5,6 @@ import type { Section } from "@/shared/layout/section";
  * their URLs stay reachable as deep links to a single stage. */
 export const DD_STAGES = [
   { key: "catalog", label: "Catalog", href: "/dd", tab: true },
-  { key: "ingestion", label: "Ingestion", href: "/dd/ingestion", tab: false },
   { key: "pages", label: "Pages", href: "/dd/pages", tab: true },
   { key: "pipeline", label: "Pipeline", href: "/dd/pipeline", tab: true },
   { key: "planner", label: "Planner", href: "/dd/planner", tab: false },
@@ -23,7 +22,7 @@ export const DD_SECTION: Section = {
   description: "Browse source pages, plan distillation, study what was distilled",
   defaultTab: "catalog",
   carryParam: "slug",
-  tabs: DD_STAGES.filter((stage) => stage.key !== "ingestion").map((stage) => ({
+  tabs: DD_STAGES.map((stage) => ({
     ...stage,
     carry: stage.key !== "catalog",
   })),
@@ -37,14 +36,6 @@ export function stageHref(stage: DdStage, slug?: string | null): string {
   const entry = DD_STAGES.find((s) => s.key === stage);
   const base = entry ? entry.href : "/dd";
   return stage !== "catalog" && slug ? `${base}?slug=${encodeURIComponent(slug)}` : base;
-}
-
-export function ingestionHref(slug: string | null, runId?: string | null): string {
-  const qs = new URLSearchParams();
-  if (slug) qs.set("slug", slug);
-  if (runId) qs.set("run", runId);
-  const qsStr = qs.toString();
-  return qsStr ? `/dd/ingestion?${qsStr}` : "/dd/ingestion";
 }
 
 export function pagesHref(slug: string | null, runId?: string | null): string {
@@ -74,10 +65,10 @@ export const CHAPTER_ARTIFACT = "README.md";
 export const chapterCodeHref = (slug: string, chapterId: string) =>
   `/api/v1/dd/pipeline/synth/${encodeURIComponent(slug)}/study/${encodeURIComponent(chapterId)}/code.zip`;
 
-/** An ingestion run's status is re-read this often until it reaches a terminal state. */
+/** An extraction run's status is re-read this often until it reaches a terminal state. */
 export const RUN_POLL_MS = 1_500;
 
-/** The list of in-flight ingestion runs (page-reload recovery) is re-read this often. */
+/** The list of in-flight extraction runs (page-reload recovery) is re-read this often. */
 export const ACTIVE_RUN_REFRESH_MS = 8_000;
 
 /** Which graph nodes the server implements changes only on deploy. */

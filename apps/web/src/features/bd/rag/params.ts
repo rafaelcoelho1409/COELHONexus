@@ -30,7 +30,6 @@ export const ASK_EXAMPLES: ReadonlyArray<string> = [
   "What evidence supports the author's conclusions?",
 ];
 export const HISTORY_POLL_MS = 2500;
-export const RAG_INDEX_REFRESH_MS = 4000;
 export const STALL_TICKS_THRESHOLD = 6;
 export const SNIPPET_CAP = 220;
 

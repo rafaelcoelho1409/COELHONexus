@@ -2,19 +2,27 @@
 from __future__ import annotations
 
 from . import (
-    extract_unit,
-    prepare_chapters,
     prepare_units,
-    publish_report,
-    synthesize_book,
+    extract_unit,
+    verify_unit,
+    prepare_chapters,
     synthesize_chapter,
+    build_chapter_visuals,
+    synthesize_book,
+    write_decision_brief,
+    research_context,
+    publish_report,
 )
 
 __all__ = [
-    "extract_unit",
-    "prepare_chapters",
     "prepare_units",
-    "publish_report",
-    "synthesize_book",
+    "extract_unit",
+    "verify_unit",
+    "prepare_chapters",
     "synthesize_chapter",
+    "build_chapter_visuals",
+    "synthesize_book",
+    "write_decision_brief",
+    "research_context",
+    "publish_report",
 ]

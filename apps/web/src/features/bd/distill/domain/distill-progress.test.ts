@@ -4,14 +4,18 @@ import { DISTILL_NODES, distillBoardCaption, distillNodeStatus, distillNodeViews
 
 const progress = {
   current_node: "synthesize_chapter",
+  current_task: null,
   node_status: {
     prepare_units: "done",
     extract_unit: "done",
     prepare_chapters: "done",
     synthesize_chapter: "running",
   },
+  completed_extractions: 12,
   completed_units: 12,
   total_units: 12,
+  completed_chapter_guides: 3,
+  completed_chapter_visuals: 0,
   completed_chapters: 3,
   total_chapters: 8,
 };

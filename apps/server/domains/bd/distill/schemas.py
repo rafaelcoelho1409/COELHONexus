@@ -767,9 +767,13 @@ class StudyGuideDocument(BaseModel):
 
 class DistillProgress(BaseModel):
     current_node: str | None = None
+    current_task: str | None = Field(default = None, max_length = 240)
     node_status: dict[str, str] = Field(default_factory = dict)
+    completed_extractions: int = 0
     completed_units: int = 0
     total_units: int = 0
+    completed_chapter_guides: int = 0
+    completed_chapter_visuals: int = 0
     completed_chapters: int = 0
     total_chapters: int = 0
 
@@ -797,7 +801,7 @@ class StructuralQuality(BaseModel):
 class DistillRunManifest(BaseModel):
     model_config = ConfigDict(extra = "forbid")
 
-    schema_version: Literal["1.0", "1.1", "1.2", "1.3"] = versions.MANIFEST_SCHEMA_VERSION
+    schema_version: Literal["1.0", "1.1", "1.2", "1.3", "1.4"] = versions.MANIFEST_SCHEMA_VERSION
     workflow_version: NonEmptyText = versions.WORKFLOW_VERSION
     prompt_version: NonEmptyText = versions.PROMPT_VERSION
     renderer_version: NonEmptyText = versions.RENDERER_VERSION

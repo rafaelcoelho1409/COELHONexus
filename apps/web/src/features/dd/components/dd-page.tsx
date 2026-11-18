@@ -9,7 +9,7 @@ import { Suspense, useEffect } from "react";
 import { DD_STAGES, pagesHref, type DdStage } from "../params";
 import { AutoChainToggle } from "./auto-chain-toggle";
 import { CatalogStage } from "./catalog-stage";
-import { IngestionStage } from "./ingestion-stage";
+import { PagesStage } from "./pages-stage";
 import { DdOverlaysProvider } from "./overlays";
 import { PipelineView } from "./pipeline-view";
 import { PlannerView } from "./planner-view";
@@ -20,7 +20,8 @@ import { SynthView } from "./synth-view";
 const STAGE_BY_PATH = new Map<string, DdStage>(DD_STAGES.map((s) => [s.href, s.key]));
 export function DocsDistillerPage() {
   const pathname = usePathname() ?? "/dd";
-  const stage = STAGE_BY_PATH.get(pathname) ?? "catalog";
+  const legacyIngestionUrl = pathname === "/dd/ingestion";
+  const stage = legacyIngestionUrl ? "pages" : (STAGE_BY_PATH.get(pathname) ?? "catalog");
   return (
     <DdOverlaysProvider>
       <div className="mx-auto w-full max-w-6xl p-4">
@@ -28,7 +29,7 @@ export function DocsDistillerPage() {
           <CatalogStage />
         ) : (
           <Suspense fallback={<p className="text-sm text-muted-foreground">Loading…</p>}>
-            <StageWithSearchParams stage={stage} />
+            <StageWithSearchParams stage={stage} legacyIngestionUrl={legacyIngestionUrl} />
           </Suspense>
         )}
       </div>
@@ -36,13 +37,17 @@ export function DocsDistillerPage() {
   );
 }
 
-function StageWithSearchParams({ stage }: { stage: DdStage }) {
+function StageWithSearchParams({
+  stage,
+  legacyIngestionUrl,
+}: {
+  stage: DdStage;
+  legacyIngestionUrl: boolean;
+}) {
   const params = useSearchParams();
   const router = useRouter();
   const slug = params.get("slug");
   const runId = params.get("run");
-  const legacyIngestionUrl = stage === "ingestion";
-
   useEffect(() => {
     if (legacyIngestionUrl) {
       router.replace(pagesHref(slug, runId), { scroll: false });
@@ -66,8 +71,8 @@ function StageWithSearchParams({ stage }: { stage: DdStage }) {
 }
 
 function StageBody({ stage, slug, runId }: { stage: DdStage; slug: string | null; runId: string | null }) {
-  if (stage === "ingestion" || stage === "pages") {
-    return <IngestionStage slug={slug} runId={runId} view="materials" />;
+  if (stage === "pages") {
+    return <PagesStage slug={slug} runId={runId} />;
   }
   if (stage === "pipeline") {
     return <PipelineView slug={slug} />;

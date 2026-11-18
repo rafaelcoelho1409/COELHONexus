@@ -3,10 +3,9 @@
 
 import {
   client,
-  deleteDdIngestionSlugAgenticRunsRunId,
   deleteDdPipelinePlannerSlugWipe,
   deleteDdPipelineSynthSlugWipe,
-  getDdIngestionRunsRunIdPagesIdx,
+  getDdPagesRunsRunIdPagesIdx,
   getDdPipelineActive,
   getDdPipelinePlannerDebugGraphThreadIdLlmCounters,
   getDdPipelinePlannerDebugGraphThreadIdState,
@@ -23,8 +22,6 @@ import {
   getDdPipelineSynthSlugActive,
   getDdPipelineSynthSlugStudyChapterIdArtifactArtifactName,
   getDdPipelineSynthSlugStudyChapters,
-  postDdIngestionSlugAgenticRuns,
-  postDdIngestionSlugAgenticRunsRunIdResume,
   postDdPipelinePlannerSlug,
   postDdPipelinePlannerThreadIdCancel,
   postDdPipelinePlannerThreadIdResume,
@@ -33,23 +30,18 @@ import {
 } from "@/shared/api";
 
 import type {
-  AgenticWipeResponse,
   GraphState,
-  GraphTopology,
   PipelineActive,
   PipelineState,
   PlannerHealth,
   StageActiveRun,
   StageInfo,
-  StartRunResponse,
   SynthActiveRun,
   SynthChapters,
   UsagePayload,
 } from "./entities";
 import {
-  agenticWipeResponseSchema,
   graphStateSchema,
-  graphTopologySchema,
   pageBodySchema,
   pipelineActiveSchema,
   pipelineStateSchema,
@@ -59,7 +51,6 @@ import {
   stageRecentSchema,
   stageStartResponseSchema,
   stageTimingSchema,
-  startRunResponseSchema,
   synthActiveRunSchema,
   synthChaptersSchema,
   synthStartResponseSchema,
@@ -92,16 +83,6 @@ export async function fetchStageInfo(stage: RunStage): Promise<StageInfo> {
       ? await getDdPipelinePlannerInfo({ throwOnError: true })
       : await getDdPipelineSynthInfo({ throwOnError: true });
   return stageInfoSchema.parse(result.data);
-}
-
-/** The compiled Ingestion LangGraph topology (read-only; this does not run the graph). */
-export async function fetchIngestionGraph(): Promise<GraphTopology> {
-  const result = await client.request({
-    method: "GET",
-    url: "/api/v1/dd/ingestion/agentic-graph",
-    throwOnError: true,
-  });
-  return graphTopologySchema.parse(result.data);
 }
 
 /** Latest checkpoint thread per slug. */
@@ -212,40 +193,15 @@ export async function fetchChapterMarkdown(slug: string, chapterId: string): Pro
   return typeof result.data === "string" ? result.data : "";
 }
 
-/** Live or snapshotted LLM calls for a DD ingestion run. */
-export async function fetchIngestionUsage(runId: string): Promise<UsagePayload> {
+/** Live or snapshotted LLM calls for a DD Pages extraction run. */
+export async function fetchExtractionUsage(runId: string): Promise<UsagePayload> {
   const result = await client.request({
     method: "GET",
-    url: "/api/v1/dd/ingestion/runs/{run_id}/llm-counters",
+    url: "/api/v1/dd/pages/runs/{run_id}/llm-counters",
     path: { run_id: runId },
     throwOnError: true,
   });
   return usagePayloadSchema.parse(result.data);
-}
-
-/** Start a fresh Agentic AI candidate from the saved page set. */
-export async function startAgenticRun(slug: string): Promise<StartRunResponse> {
-  const result = await postDdIngestionSlugAgenticRuns({ path: { slug }, throwOnError: true });
-  return startRunResponseSchema.parse(result.data);
-}
-
-/** Resume a failed or stopped candidate using its checkpoint. */
-export async function resumeAgenticRun(slug: string, runId: string): Promise<StartRunResponse> {
-  const result = await postDdIngestionSlugAgenticRunsRunIdResume({
-    path: { slug, run_id: runId },
-    throwOnError: true,
-  });
-  return startRunResponseSchema.parse(result.data);
-}
-
-/** Replay one saved graph node and its descendants from the latest completed checkpoint. */
-export async function replayAgenticRunNode(slug: string, runId: string, nodeId: string): Promise<void> {
-  await client.request({
-    method: "POST",
-    url: "/api/v1/dd/ingestion/{slug}/agentic/runs/{run_id}/replay/{node_id}",
-    path: { slug, run_id: runId, node_id: nodeId },
-    throwOnError: true,
-  });
 }
 
 export async function replayPlannerNode(threadId: string, nodeId: string): Promise<void> {
@@ -266,22 +222,13 @@ export async function replaySynthNode(threadId: string, nodeId: string): Promise
   });
 }
 
-/** Wipe AI artifacts while preserving the extracted page set. */
-export async function wipeAgenticRun(slug: string, runId: string): Promise<AgenticWipeResponse> {
-  const result = await deleteDdIngestionSlugAgenticRunsRunId({
-    path: { slug, run_id: runId },
-    throwOnError: true,
-  });
-  return agenticWipeResponseSchema.parse(result.data);
-}
-
 /** Read a page from the current live run manifest. `pageKey` is used by the query cache to refresh the body when AI publish swaps it. */
 export async function fetchRunPageBody(
   runId: string,
   idx: number,
   version: "processed" | "original" = "processed",
 ): Promise<string> {
-  const result = await getDdIngestionRunsRunIdPagesIdx({
+  const result = await getDdPagesRunsRunIdPagesIdx({
     path: { run_id: runId, idx },
     query: { version },
     throwOnError: true,

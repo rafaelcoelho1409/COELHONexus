@@ -77,7 +77,7 @@ async def prepare(state: graphs.pipeline.planner.chapter_assign.states.AssignSta
     paths: dict[str, str] = {}
     if params.URL_PATH_IN_PROMPT:
         try:
-            manifest_obj = await domains.dd.ingestion.storage.service.read_framework_manifest(blobs, slug)
+            manifest_obj = await domains.dd.pages.storage.service.read_framework_manifest(blobs, slug)
             paths = domain.url_paths((manifest_obj or {}).get("entries") or [])
         except Exception as error:
             logger.info(f"[chapter_assign] {slug}: manifest unavailable, no URL paths for the scorer ({type(error).__name__})")

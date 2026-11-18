@@ -1,4 +1,4 @@
-"""Distill workflow: extract units, synthesize chapters/book, optionally search, then publish."""
+"""Distill workflow with separate extraction, verification, synthesis, and publication stages."""
 from __future__ import annotations
 import domains
 from . import entities, states
@@ -37,6 +37,11 @@ def distill_graph(
         retry_policy = provider_retry_policy,
     )
     workflow.add_node(
+        "verify_unit",
+        nodes.distill.verify_unit.node.verify_unit,
+        retry_policy = provider_retry_policy,
+    )
+    workflow.add_node(
         "prepare_chapters",
         nodes.distill.prepare_chapters.node.prepare_chapters,
     )
@@ -46,8 +51,23 @@ def distill_graph(
         retry_policy = provider_retry_policy,
     )
     workflow.add_node(
+        "build_chapter_visuals",
+        nodes.distill.build_chapter_visuals.node.build_chapter_visuals,
+        retry_policy = provider_retry_policy,
+    )
+    workflow.add_node(
         "synthesize_book",
         nodes.distill.synthesize_book.node.synthesize_book,
+        retry_policy = provider_retry_policy,
+    )
+    workflow.add_node(
+        "write_decision_brief",
+        nodes.distill.write_decision_brief.node.write_decision_brief,
+        retry_policy = provider_retry_policy,
+    )
+    workflow.add_node(
+        "research_context",
+        nodes.distill.research_context.node.research_context,
         retry_policy = provider_retry_policy,
     )
     workflow.add_node(
@@ -64,13 +84,25 @@ def distill_graph(
         nodes.distill.prepare_units.node.dispatch_units,
         ["extract_unit", "prepare_chapters"],
     )
-    workflow.add_edge("extract_unit", "prepare_chapters")
+    workflow.add_conditional_edges(
+        "extract_unit",
+        nodes.distill.verify_unit.node.dispatch_units,
+        ["verify_unit", "prepare_chapters"],
+    )
+    workflow.add_edge("verify_unit", "prepare_chapters")
     workflow.add_conditional_edges(
         "prepare_chapters",
         nodes.distill.prepare_chapters.node.dispatch_chapters,
         ["synthesize_chapter", "synthesize_book"],
     )
-    workflow.add_edge("synthesize_chapter", "synthesize_book")
-    workflow.add_edge("synthesize_book", "publish_report")
+    workflow.add_conditional_edges(
+        "synthesize_chapter",
+        nodes.distill.build_chapter_visuals.node.dispatch_chapters,
+        ["build_chapter_visuals", "synthesize_book"],
+    )
+    workflow.add_edge("build_chapter_visuals", "synthesize_book")
+    workflow.add_edge("synthesize_book", "write_decision_brief")
+    workflow.add_edge("write_decision_brief", "research_context")
+    workflow.add_edge("research_context", "publish_report")
     workflow.add_edge("publish_report", END)
     return workflow.compile(checkpointer = checkpointer)

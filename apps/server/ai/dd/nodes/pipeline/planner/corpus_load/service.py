@@ -22,7 +22,7 @@ async def corpus_load_run(state: graphs.pipeline.planner.states.PlannerState, bl
 
     started = time.monotonic()
     graphs.service.emit("corpus_load", "start", slug=slug)
-    manifest = await domains.dd.ingestion.storage.service.read_framework_manifest(blobs, slug)
+    manifest = await domains.dd.pages.storage.service.read_framework_manifest(blobs, slug)
     if not manifest:
         raise RuntimeError(f"no finalized ingestion for {slug!r} — run ingestion first")
 
@@ -47,7 +47,7 @@ async def corpus_load_run(state: graphs.pipeline.planner.states.PlannerState, bl
             continue
         keys.append(
             entry.get("key")
-            or domains.dd.ingestion.storage.keys.page_key(slug, idx, entry.get("slug") or "")
+            or domains.dd.pages.storage.keys.page_key(slug, idx, entry.get("slug") or "")
         )
         byte_sizes.append(int(entry.get("bytes") or 0))
 

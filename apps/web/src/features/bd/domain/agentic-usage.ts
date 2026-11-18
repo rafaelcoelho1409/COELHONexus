@@ -44,6 +44,7 @@ const AGENT_LABELS: Readonly<Record<string, string>> = {
   materialize_processed_book: "Build processed pages",
   reconcile_contents: "Reconcile contents",
   contents_reconciler: "Contents reconciler",
+  neo4j: "Knowledge graph extraction",
   publish: "Publish results",
 };
 

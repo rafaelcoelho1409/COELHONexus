@@ -3,8 +3,8 @@
 import { useQuery } from "@tanstack/react-query";
 
 import {
-  getDdIngestionOptions,
-  getDdIngestionRunsActiveOptions,
+  getDdPagesOptions,
+  getDdPagesRunsActiveOptions,
   getHealthOptions,
   getYcsAdminVideosOptions,
 } from "@/shared/api";
@@ -18,11 +18,11 @@ const live = { refetchInterval: PLATFORM_REFRESH_MS, retry: false } as const;
 export function usePlatformStatus() {
   const api = useQuery({ ...getHealthOptions(), ...live, select: isHealthy });
   const documentationSets = useQuery({
-    ...getDdIngestionOptions(),
+    ...getDdPagesOptions(),
     ...live,
     select: countDocumentationSets,
   });
   const videos = useQuery({ ...getYcsAdminVideosOptions(), ...live, select: countIndexedVideos });
-  const activeRuns = useQuery({ ...getDdIngestionRunsActiveOptions(), ...live, select: countActiveRuns });
+  const activeRuns = useQuery({ ...getDdPagesRunsActiveOptions(), ...live, select: countActiveRuns });
   return { api, documentationSets, videos, activeRuns };
 }

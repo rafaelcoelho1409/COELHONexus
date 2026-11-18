@@ -1,6 +1,6 @@
 """Tools available to Docs Distiller agents."""
 from __future__ import annotations
 
-from . import ingestion, pipeline
+from . import pipeline
 
-__all__ = ["ingestion", "pipeline"]
+__all__ = ["pipeline"]

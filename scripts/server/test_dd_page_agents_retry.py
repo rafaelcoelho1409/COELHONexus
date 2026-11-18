@@ -685,11 +685,11 @@ check("a quoted GFM header and alignment row are valid table syntax",
 check("a quoted body row is recognized in its source table",
       page_audit.domain.is_valid_table_row_context(quoted_table, "> | item | 1 |"), True)
 
-figure = '<figure>![](/api/v1/dd/ingestion/slug/artifacts/chart.png)<figcaption>Chart</figcaption></figure>'
+figure = '<figure>![](/api/v1/dd/pages/slug/artifacts/chart.png)<figcaption>Chart</figcaption></figure>'
 image_issue = schemas.PageIssue(
     issue_id = "image", category = "markdown_formatting", severity = "medium",
     description = "The image syntax is missing a closing parenthesis.",
-    evidence = "![](/api/v1/dd/ingestion/slug/artifacts/chart.png)", confidence = 0.99,
+    evidence = "![](/api/v1/dd/pages/slug/artifacts/chart.png)", confidence = 0.99,
 )
 image_assessment, _ = page_audit.domain.sanitize_assessment(
     schemas.PageAssessment(page_kind = schemas.PageKind.DOCUMENTATION, confidence = 0.9, issues = [image_issue]),

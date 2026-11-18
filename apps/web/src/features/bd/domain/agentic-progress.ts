@@ -13,7 +13,7 @@ export const AGENTIC_NODES = [
 ] as const;
 
 export type AgenticNodeId = (typeof AGENTIC_NODES)[number]["id"];
-export type AgenticNodeStatus = "pending" | "running" | "done" | "failed";
+export type AgenticNodeStatus = "pending" | "running" | "done" | "failed" | "cancelled";
 
 /** What each node does, in plain words (the sheet's Overview), and what it reads, writes and asks of a model. */
 export type AgenticNodeDetails = {

@@ -309,9 +309,13 @@ const structuralQualitySchema = z.looseObject({
 
 const progressSchema = z.looseObject({
   current_node: z.string().nullable().catch(null),
+  current_task: z.string().nullable().catch(null),
   node_status: z.record(z.string(), z.string()).catch({}),
+  completed_extractions: z.number().int().nonnegative().catch(0),
   completed_units: z.number().int().nonnegative().catch(0),
   total_units: z.number().int().nonnegative().catch(0),
+  completed_chapter_guides: z.number().int().nonnegative().catch(0),
+  completed_chapter_visuals: z.number().int().nonnegative().catch(0),
   completed_chapters: z.number().int().nonnegative().catch(0),
   total_chapters: z.number().int().nonnegative().catch(0),
 });

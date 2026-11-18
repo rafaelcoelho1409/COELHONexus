@@ -90,6 +90,22 @@ def agentic_manifest_key(book_id: str, agentic_run_id: str) -> str:
     return f"{agentic_prefix(book_id, agentic_run_id)}manifest.json"
 
 
+def agentic_retrieval_index_prefix(book_id: str, agentic_run_id: str) -> str:
+    return f"{agentic_prefix(book_id, agentic_run_id)}retrieval-index/"
+
+
+def agentic_retrieval_index_manifest_key(book_id: str, agentic_run_id: str) -> str:
+    return f"{agentic_retrieval_index_prefix(book_id, agentic_run_id)}manifest.json"
+
+
+def agentic_retrieval_index_sources_key(book_id: str, agentic_run_id: str) -> str:
+    return f"{agentic_retrieval_index_prefix(book_id, agentic_run_id)}sources.jsonl"
+
+
+def current_retrieval_index_key(book_id: str) -> str:
+    return f"{ingestion_prefix(book_id)}retrieval-index/current.json"
+
+
 def agentic_page_key(book_id: str, agentic_run_id: str, page_no: int) -> str:
     _positive_page(page_no)
     return f"{agentic_prefix(book_id, agentic_run_id)}pages/{page_no:04d}.md"

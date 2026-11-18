@@ -31,8 +31,8 @@ import {
   useCancelBook,
   useContentSelection,
   useProcessedBook,
-  useResumeAgenticRun,
   useReplayAgenticRunNode,
+  useResumeAgenticRun,
   useRunBook,
   useSnapshot,
   useStartAgenticRun,
@@ -41,11 +41,16 @@ import {
 } from "../hooks/use-bd-data";
 import { useBookRun } from "../hooks/use-book-run";
 import { useBdOverlays } from "../hooks/use-overlays";
-import { usePageContent, type PageVersion } from "../hooks/use-page-content";
+import { type PageVersion, usePageContent } from "../hooks/use-page-content";
 import { useReaderLayout } from "../hooks/use-reader-layout";
-import { CONTENTS_ENTRIES_PER_PAGE, type BookViewId } from "../params";
+import { type BookViewId, CONTENTS_ENTRIES_PER_PAGE } from "../params";
 import { ActionButton } from "./action-button";
-import { AgenticPipelineOverview, AgenticProgressBar, AgenticUsageSheet } from "./agentic-pipeline";
+import {
+  AgenticPipelineOverview,
+  AgenticPipelineUsage,
+  AgenticProgressBar,
+  AgenticUsageSheet,
+} from "./agentic-pipeline";
 import { BookReadingMode } from "./book-reading-mode";
 import { BookReadingProgress } from "./book-reading-progress";
 import { BookSearch } from "./book-search";
@@ -54,6 +59,8 @@ import { GeneratedContentsPage } from "./generated-contents-page";
 import { PageList } from "./page-list";
 import { PageOutline } from "./page-outline";
 import { PageReader } from "./page-reader";
+import { RetrievalIndexPanel } from "./retrieval-index-panel";
+import { RetrievalIndexProgress } from "./retrieval-index-progress";
 import { RunProgress } from "./run-progress";
 import { StatusChip } from "./status-chip";
 import { ToggleGroup } from "./toggle-group";
@@ -841,7 +848,7 @@ function BookDetail({
         onClose={() => setUsageOpen(false)}
       />
       <section aria-label="Agents" hidden={activeView !== "pipeline"} className="mt-4">
-        <div className="mb-4 grid grid-cols-1 items-stretch gap-3 lg:grid-cols-2">
+        <div className="mb-4 grid grid-cols-1 items-stretch gap-3 md:grid-cols-2 xl:grid-cols-3">
           <section
             aria-label="Docling extraction progress"
             className="min-w-0 rounded-md border border-border bg-card p-3"
@@ -925,7 +932,7 @@ function BookDetail({
             />
           </section>
           <section
-            aria-label="Agentic AI progress"
+            aria-label="Ingestion Agentic AI progress"
             className="min-w-0 rounded-md border border-border bg-card p-3"
           >
             <AgenticProgressBar
@@ -948,25 +955,38 @@ function BookDetail({
               onWipe={() => void wipeAgenticProcessing()}
             />
           </section>
+          <RetrievalIndexProgress
+            bookId={bookId}
+            run={agentic.status === "done" ? agentic.run : null}
+            index={agentic.status === "done" ? snapshot.retrievalIndex : null}
+          />
         </div>
-        <AgenticPipelineOverview
-          bookId={bookId}
-          run={agentic.run}
-          status={agentic.status}
-          progress={agentic.progress}
-          error={agentic.error}
-          replayError={replayError}
-          units={units}
-          chapters={state.chapters.length > 0 ? state.chapters : manifest.chapters}
-          onOpenUsage={() => setUsageOpen(true)}
-          replayPending={replayAgenticNode.isPending}
-          replayPendingNodeId={replayPendingNodeId}
-          onPlayNode={
-            agentic.run && ["done", "failed", "cancelled"].includes(agentic.status ?? "")
-              ? (nodeId) => void replayAgenticFromNode(nodeId)
-              : undefined
-          }
-        />
+        <div className="mt-4 grid min-w-0 grid-cols-1 items-start gap-4 xl:grid-cols-[minmax(0,4fr)_minmax(0,4fr)_minmax(0,2fr)]">
+          <AgenticPipelineOverview
+            bookId={bookId}
+            run={agentic.run}
+            status={agentic.status}
+            progress={agentic.progress}
+            error={agentic.error}
+            replayError={replayError}
+            units={units}
+            chapters={state.chapters.length > 0 ? state.chapters : manifest.chapters}
+            onOpenUsage={() => setUsageOpen(true)}
+            replayPending={replayAgenticNode.isPending}
+            replayPendingNodeId={replayPendingNodeId}
+            onPlayNode={
+              agentic.run && ["done", "failed", "cancelled"].includes(agentic.status ?? "")
+                ? (nodeId) => void replayAgenticFromNode(nodeId)
+                : undefined
+            }
+          />
+          <RetrievalIndexPanel
+            bookId={bookId}
+            run={agentic.status === "done" ? agentic.run : null}
+            index={agentic.status === "done" ? snapshot.retrievalIndex : null}
+          />
+          <AgenticPipelineUsage bookId={bookId} run={agentic.run} status={agentic.status} />
+        </div>
       </section>
       <section
         aria-label="Pages"

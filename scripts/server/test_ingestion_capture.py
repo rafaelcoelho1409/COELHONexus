@@ -21,7 +21,7 @@ from capture_fakes import CaptureMinio
 
 import domains
 
-ingestion = domains.dd.ingestion
+ingestion = domains.dd.pages
 capture = ingestion.capture
 tiers = ingestion.tiers
 errors = tiers.errors

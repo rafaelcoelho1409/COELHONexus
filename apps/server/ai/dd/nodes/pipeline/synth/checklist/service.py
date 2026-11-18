@@ -218,7 +218,7 @@ async def prepare(state: graphs.pipeline.synth.checklist.states.ChecklistState, 
     vault_bodies: dict[str, str] = {}
     if used_hashes:
         try:
-            rich, _, _ = await domains.dd.ingestion.vault.service.load_rich(blobs, slug, list(digest.get("source_keys") or []))
+            rich, _, _ = await domains.dd.pages.vault.service.load_rich(blobs, slug, list(digest.get("source_keys") or []))
             vault_bodies = {h: e.fence_text for h, e in rich.items() if h in (used_hashes | routed) and getattr(e, "fence_text", "")}
         except Exception as error:
             logger.info(f"[checklist_eval] {slug}/{chapter_id}: vault bodies unavailable for the alignment gate ({type(error).__name__})")

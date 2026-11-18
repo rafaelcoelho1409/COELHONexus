@@ -82,10 +82,10 @@ beforeAll(() => server.listen({ onUnhandledFrame: "error" }));
 beforeEach(() => {
   client.setConfig({ baseUrl: ORIGIN });
   server.use(
-    http.get(`${ORIGIN}/api/v1/dd/ingestion`, () => HttpResponse.json(LIBRARY)),
-    http.get(`${ORIGIN}/api/v1/dd/ingestion/runs/active`, () => HttpResponse.json({ active: [] })),
-    http.get(`${ORIGIN}/api/v1/dd/ingestion/a/manifest`, () => HttpResponse.json(MANIFEST)),
-    http.get(`${ORIGIN}/api/v1/dd/ingestion/a/pages/0`, () => HttpResponse.json({ body: "quickstart body" })),
+    http.get(`${ORIGIN}/api/v1/dd/pages`, () => HttpResponse.json(LIBRARY)),
+    http.get(`${ORIGIN}/api/v1/dd/pages/runs/active`, () => HttpResponse.json({ active: [] })),
+    http.get(`${ORIGIN}/api/v1/dd/pages/a/manifest`, () => HttpResponse.json(MANIFEST)),
+    http.get(`${ORIGIN}/api/v1/dd/pages/a/pages/0`, () => HttpResponse.json({ body: "quickstart body" })),
   );
   routerState.pathname = "/dd";
   routerState.search = "";
@@ -109,7 +109,7 @@ describe("DocsDistillerPage", () => {
     expect(screen.queryByRole("button", { name: /alpha/i })).not.toBeInTheDocument();
   });
 
-  it("renders the ingestion explorer with groups, search shortcut and preview", async () => {
+  it("forwards the old ingestion URL to the Pages explorer", async () => {
     routerState.pathname = "/dd/ingestion";
     routerState.search = "slug=a";
     const user = userEvent.setup();

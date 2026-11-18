@@ -18,10 +18,10 @@ import httpx
 
 import domains
 
-ingestion = domains.dd.ingestion
+ingestion = domains.dd.pages
 post = ingestion.post
 tier1 = ingestion.tiers.tier1
-normalize = domains.dd.ingestion.corpus_normalize
+normalize = domains.dd.pages.corpus_normalize
 
 
 def check(label: str, got, want) -> None:
@@ -459,10 +459,10 @@ check("…a tag with no src, or quoted in code, stays", normalized('<img alt="x"
 check("rewritten tags are counted", normalize.domain.normalize_doc('<img src="/a.png" /> and <img src="/b.png" />\n').stats.img_tags_rewritten, 2)
 
 # an image this app stores keeps its own path when the page's links are made absolute
-OWN_IMG = "![x](/api/v1/dd/ingestion/transformers/artifacts/a590b05e22690c59.svg) and [guide](/docs/guide) and ![y](/api/v1/docs-distiller/ingestion/t/artifacts/b.png)\n"
+OWN_IMG = "![x](/api/v1/dd/pages/transformers/artifacts/a590b05e22690c59.svg) and [guide](/docs/guide) and ![y](/api/v1/docs-distiller/ingestion/t/artifacts/b.png)\n"
 check("absolutizing leaves the app's own artifact paths alone and makes the page's links absolute",
       post.domain.absolutize_links(OWN_IMG, "https://huggingface.co/docs/transformers/v5/index.md"),
-      "![x](/api/v1/dd/ingestion/transformers/artifacts/a590b05e22690c59.svg) and [guide](https://huggingface.co/docs/guide) and ![y](/api/v1/docs-distiller/ingestion/t/artifacts/b.png)\n")
+      "![x](/api/v1/dd/pages/transformers/artifacts/a590b05e22690c59.svg) and [guide](https://huggingface.co/docs/guide) and ![y](/api/v1/docs-distiller/ingestion/t/artifacts/b.png)\n")
 
 # Mintlify's empty permalink in front of a heading, and a `[#](#anchor)` ending a line (v9)
 check("an empty permalink in front of a heading's text goes", normalized("## [](#overview) Overview\n\nText.\n"), "## Overview\n\nText.\n")

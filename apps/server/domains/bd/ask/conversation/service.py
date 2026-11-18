@@ -97,18 +97,6 @@ async def thread_book_id(thread_id: str) -> str | None:
     return row[0] if row else None
 
 
-async def thread_run_id(thread_id: str) -> str | None:
-    if not thread_id:
-        return None
-    async with await infra.postgres.service.connect() as conn:
-        result = await conn.execute(
-            f"SELECT distill_run_id FROM {params.TABLE_NAME} WHERE thread_id = %s "
-            "ORDER BY created_at ASC LIMIT 1", (thread_id,),
-        )
-        row = await result.fetchone()
-    return row[0] if row and row[0] else None
-
-
 async def insert_turn(book_id: str, run_id: str, thread_id: str, question: str) -> int:
     async with await infra.postgres.service.connect() as conn:
         result = await conn.execute(

@@ -22,7 +22,8 @@ RULES: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
     "elasticsearch": (
         ("elasticsearch", "elastic_transport"),
         ('environ["ELASTICSEARCH_', 'environ.get("ELASTICSEARCH_', 'getenv("ELASTICSEARCH_',
-         "coelhonexus-youtube-metadata", "coelhonexus-youtube-transcriptions"),
+         "coelhonexus-ycs-metadata", "coelhonexus-ycs-transcriptions",
+         "coelhonexus-bd-ingestion"),
     ),
     "langfuse": (
         ("langfuse",),

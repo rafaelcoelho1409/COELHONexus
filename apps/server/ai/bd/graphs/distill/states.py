@@ -30,10 +30,12 @@ class DistillRunState(TypedDict, total = False):
     source_chapters: list[dict[str, Any]]
     source_pages: list[domains.bd.distill.entities.SourcePage]
     unit_refs: list[domains.bd.distill.entities.UnitRef]
+    extracted_units: Annotated[list[domains.bd.distill.entities.UnitRef], operator.add]
     completed_units: Annotated[list[domains.bd.distill.entities.UnitRef], operator.add]
     unit_ref: domains.bd.distill.entities.UnitRef
     unit_batch: list[domains.bd.distill.entities.UnitRef]
     chapter_refs: list[domains.bd.distill.entities.ChapterRef]
+    synthesized_chapters: Annotated[list[domains.bd.distill.entities.ChapterRef], operator.add]
     completed_chapters: Annotated[list[domains.bd.distill.entities.ChapterRef], operator.add]
     chapter_ref: domains.bd.distill.entities.ChapterRef
     chapter_batch: list[domains.bd.distill.entities.ChapterRef]

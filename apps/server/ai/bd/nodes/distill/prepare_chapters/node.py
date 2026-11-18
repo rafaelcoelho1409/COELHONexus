@@ -42,4 +42,5 @@ async def prepare_chapters(
         dependencies.progress_callback,
         "prepare_chapters",
         execute,
+        controls = dependencies.controls,
     )

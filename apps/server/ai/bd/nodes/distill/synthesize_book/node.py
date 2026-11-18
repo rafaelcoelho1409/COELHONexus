@@ -1,4 +1,4 @@
-"""Synthesize the whole-book guide, optional research, and decision brief."""
+"""Synthesize the whole-book Learning Guide."""
 from __future__ import annotations
 from . import service
 from .... import graphs
@@ -15,4 +15,5 @@ async def synthesize_book(
         dependencies.progress_callback,
         "synthesize_book",
         lambda: service.synthesize_book(dependencies, graph_state),
+        controls = dependencies.controls,
     )

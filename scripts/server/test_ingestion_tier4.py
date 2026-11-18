@@ -20,7 +20,7 @@ from capture_fakes import CaptureMinio
 
 import domains
 
-ingestion = domains.dd.ingestion
+ingestion = domains.dd.pages
 extract = ingestion.tiers.extract.domain
 sphinx = ingestion.tiers.tier4.sphinx
 tier3 = ingestion.tiers.tier3

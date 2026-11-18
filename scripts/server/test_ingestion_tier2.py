@@ -22,7 +22,7 @@ from capture_fakes import CaptureMinio
 
 import domains
 
-ingestion = domains.dd.ingestion
+ingestion = domains.dd.pages
 tiers = ingestion.tiers
 tier2, tier3, fetch = tiers.tier2, tiers.tier3, tiers.fetch
 errors = tiers.errors
@@ -544,7 +544,7 @@ async def main() -> None:
     stored = minio.objects[entry.key]
     images = re.findall(r"!\[[^\]]*\]\(([^)]+)\)", stored)
     check("both images are stored as this app's artifacts, on this app's path",
-          (len(images), all(url.startswith("/api/v1/dd/ingestion/demo/artifacts/") for url in images)), (2, True))
+          (len(images), all(url.startswith("/api/v1/dd/pages/demo/artifacts/") for url in images)), (2, True))
     check("…none of them was made a path on the docs' host", "https://huggingface.co/api/" in stored, False)
     check("…while a page link is still made absolute", "[setup](https://huggingface.co/docs/setup)" in stored, True)
     await store._artifact_client.aclose()

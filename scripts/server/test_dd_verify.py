@@ -87,7 +87,7 @@ async def test_service() -> None:
     drafted = await service.verify_text(text, ENV)
     check("a draft's fences are verified, named by the hash of their code", (drafted.summary()["failed"], len({result.hash for result in drafted.results})), (1, 2))
 
-    built = domains.dd.pipeline.ledger.domain.build([("a.md", domains.dd.ingestion.vault.domain.sentinelize_doc(f"```python\n{GOOD}```\n")[1])])
+    built = domains.dd.pipeline.ledger.domain.build([("a.md", domains.dd.pages.vault.domain.sentinelize_doc(f"```python\n{GOOD}```\n")[1])])
     from_ledger = await service.verify_ledger(built, ENV)
     check("the ledger's must-teach blocks are verified", from_ledger.summary(), {"verified": 1, "unverified": 0, "failed": 0, "total": 1})
 

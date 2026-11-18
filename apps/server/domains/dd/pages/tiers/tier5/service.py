@@ -1,0 +1,256 @@
+"""GitHub README crawler: resolve default branch, list tree recursively, filter to .md/.mdx docs blobs, parallel-fetch from raw.githubusercontent.com. GITHUB_TOKEN lifts API limit from 60/h to 5000/h (raw CDN is unmetered)."""
+from __future__ import annotations
+import domains
+from . import domain, params
+from .. import fetch
+
+import asyncio
+import json
+import logging
+import os
+import time
+
+import httpx
+from tenacity import (
+    retry,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential_jitter,
+)
+
+
+logger = logging.getLogger(__name__)
+
+
+def _auth_headers() -> dict[str, str]:
+    h = {"User-Agent": params.USER_AGENT, "Accept": params.GITHUB_ACCEPT}
+    tok = os.environ.get("GITHUB_TOKEN", "").strip()
+    if tok:
+        h["Authorization"] = f"Bearer {tok}"
+    return h
+
+
+@retry(
+    reraise = True,
+    retry = retry_if_exception_type(fetch.params.RETRYABLE_ERRORS),
+    stop = stop_after_attempt(params.GET_ATTEMPTS),
+    wait = wait_exponential_jitter(initial = params.API_WAIT_INITIAL_S, max = params.API_WAIT_MAX_S),
+)
+async def _get_json(client: httpx.AsyncClient, url: str) -> dict:
+    r = await client.get(url, headers = _auth_headers())
+    if r.status_code != 200:
+        raise RuntimeError(f"GitHub API {url} → HTTP {r.status_code}")
+    return r.json()
+
+
+async def _default_branch(
+    client: httpx.AsyncClient, org: str, repo: str,
+) -> str:
+    data = await _get_json(client, domain.repo_api_url(org, repo))
+    return data.get("default_branch") or params.DEFAULT_BRANCH
+
+
+async def _list_blobs(
+    client: httpx.AsyncClient, org: str, repo: str, branch: str,
+) -> tuple[list[tuple[str, int | None]], dict]:
+    """Return ([(path, size_bytes?), ...] for every blob in the repo tree, the tree as the API answered)."""
+    data = await _get_json(client, domain.tree_api_url(org, repo, branch))
+    if data.get("truncated"):
+        logger.warning(
+            f"[tier-5] {org}/{repo} tree was truncated by GitHub — "
+            f"large monorepos may miss some blobs"
+        )
+    return domain.blobs_of_tree(data), data
+
+
+@retry(
+    reraise = True,
+    retry = retry_if_exception_type(fetch.params.RETRYABLE_ERRORS),
+    stop = stop_after_attempt(params.GET_ATTEMPTS),
+    wait = wait_exponential_jitter(initial = params.RAW_WAIT_INITIAL_S, max = params.RAW_WAIT_MAX_S),
+)
+async def _fetch_blob(
+    client: httpx.AsyncClient, org: str, repo: str, branch: str, path: str,
+) -> httpx.Response:
+    return await client.get(domain.raw_url(org, repo, branch, path), headers = {"User-Agent": params.USER_AGENT})
+
+
+async def _fetch_one(
+    client: httpx.AsyncClient,
+    org: str, repo: str, branch: str,
+    path: str,
+    *,
+    progress: domains.dd.pages.runtime.progress.service.Progress,
+    writer: domains.dd.pages.capture.service.Writer | None = None,
+) -> tuple[str, str, str, str] | None:
+    raw_url = domain.raw_url(org, repo, branch, path)
+    t0 = time.monotonic()
+    try:
+        resp = await _fetch_blob(client, org, repo, branch, path)
+    except Exception as e:
+        await fetch.service.keep(writer, raw_url, None, error = f"{type(e).__name__}: {e}")
+        await progress.record_url(
+            raw_url,
+            status = "fetch_error",
+            tier = params.TIER_KIND,
+            fetch_ms = int((time.monotonic() - t0) * 1000),
+            error_msg = f"{type(e).__name__}: {e}",
+        )
+        return None
+    fetch_ms = int((time.monotonic() - t0) * 1000)
+    await fetch.service.keep(writer, raw_url, resp)
+    if resp.status_code != 200:
+        await progress.record_url(
+            raw_url,
+            status = "http_error",
+            tier = params.TIER_KIND,
+            http_code = resp.status_code,
+            fetch_ms = fetch_ms,
+            error_msg = f"HTTP {resp.status_code}",
+        )
+        return None
+    body = resp.text or ""
+    if len(body.encode("utf-8")) < params.MIN_OK_BYTES:
+        await progress.record_url(
+            raw_url,
+            status = "extract_empty",
+            tier = params.TIER_KIND,
+            http_code = resp.status_code,
+            fetch_ms = fetch_ms,
+            bytes_fetched = len(body),
+            extracted_chars = len(body),
+            error_msg = f"body too short ({len(body)}B)",
+        )
+        return None
+    await progress.record_url(
+        raw_url,
+        status = "success",
+        tier = params.TIER_KIND,
+        http_code = resp.status_code,
+        fetch_ms = fetch_ms,
+        bytes_fetched = len(body),
+        extracted_chars = len(body),
+    )
+    slug = domain.slug_from_path(path)
+    title = path
+    return (slug, raw_url, body, title)
+
+
+async def run(
+    *,
+    url: str,
+    framework_slug: str,
+    progress: domains.dd.pages.runtime.progress.service.Progress,
+    store: domains.dd.pages.storage.service.Store,
+) -> int:
+    parsed = domain.parse_repo(url)
+    if not parsed:
+        raise RuntimeError(f"Tier 5: not a github.com repo URL: {url!r}")
+    org, repo = parsed
+    logger.info(f"[tier-5] framework={framework_slug} repo={org}/{repo}")
+    await progress.start(tier = params.TIER_KIND, total = 0)
+    async with httpx.AsyncClient(
+        timeout = httpx.Timeout(params.TIMEOUT_S, connect = params.CONNECT_TIMEOUT_S),
+        follow_redirects = True,
+    ) as client:
+        t0 = time.monotonic()
+        try:
+            branch = await _default_branch(client, org, repo)
+        except Exception as e:
+            err = f"{type(e).__name__}: {e}"
+            await progress.record_url(
+                domain.repo_api_url(org, repo),
+                status = "fetch_error",
+                tier = params.TIER_KIND,
+                fetch_ms = int((time.monotonic() - t0) * 1000),
+                error_msg = err,
+            )
+            await progress.finish(status = "failed")
+            raise RuntimeError(f"Tier 5: repo lookup failed: {err}")
+        await progress.record_url(
+            domain.repo_api_url(org, repo),
+            status = "success",
+            tier = params.TIER_KIND,
+            fetch_ms = int((time.monotonic() - t0) * 1000),
+        )
+
+        t0 = time.monotonic()
+        try:
+            blobs, tree = await _list_blobs(client, org, repo, branch)
+        except Exception as e:
+            err = f"{type(e).__name__}: {e}"
+            await progress.record_url(
+                domain.tree_api_url(org, repo, branch, recursive = False),
+                status = "fetch_error",
+                tier = params.TIER_KIND,
+                fetch_ms = int((time.monotonic() - t0) * 1000),
+                error_msg = err,
+            )
+            await progress.finish(status = "failed")
+            raise RuntimeError(f"Tier 5: tree fetch failed: {err}")
+        await progress.record_url(
+            domain.tree_api_url(org, repo, branch, recursive = False),
+            status = "success",
+            tier = params.TIER_KIND,
+            fetch_ms = int((time.monotonic() - t0) * 1000),
+        )
+        keep: list[str] = [
+            path for path, _size in blobs if domain.is_docs_blob(path)
+        ]
+        if not keep:
+            await progress.finish(status = "failed")
+            raise RuntimeError(
+                f"Tier 5: {org}/{repo}@{branch} has no .md/.mdx docs blobs "
+                f"after filter ({len(blobs)} total blobs in tree)"
+            )
+        logger.info(
+            f"[tier-5] {len(blobs)} blobs → {len(keep)} docs after filter "
+            f"(branch={branch})"
+        )
+        await progress.update_total(len(keep))
+        # The repository's tree (as the API answered) and every file fetched are kept as they come: what a transform starts from.
+        raw = domains.dd.pages.capture
+        writer = raw.service.Writer(
+            store.minio, framework_slug, params.TIER_KIND, url, run_id=store.run_id,
+            capture_params = {"org": org, "repo": repo, "branch": branch, "paths": keep},
+        )
+        await writer.begin()
+        await writer.add(
+            params.TREE_FILE, role = raw.params.ROLE_INDEX, url = domain.tree_api_url(org, repo, branch), status = 200,
+            content_type = "application/json", text = json.dumps(tree, ensure_ascii = False), via = raw.params.VIA_HTTP,
+        )
+        sem = asyncio.Semaphore(params.CONCURRENCY)
+        written = 0
+
+        async def _bound(p: str):
+            nonlocal written
+            async with sem:
+                await progress.raise_if_cancelled()
+                r = await _fetch_one(
+                    client, org, repo, branch, p, progress = progress, writer = writer,
+                )
+            if r is not None:
+                slug, raw_url, body, title = r
+                await store.add_page(
+                    slug = slug,
+                    url = raw_url,
+                    body = body,
+                    tier = params.TIER_KIND,
+                    title = title,
+                    # The capture holds the file as the repository has it; a second copy, already changed, is not kept next to the pages.
+                    keep_raw = False,
+                )
+                written += 1
+            await progress.update(current = written, last_url = p)
+            return r
+
+        await asyncio.gather(
+            *(_bound(p) for p in keep),
+            return_exceptions = False,
+        )
+    if written == 0:
+        await progress.finish(status = "failed")
+        raise RuntimeError(f"Tier 5: {org}/{repo} all blob fetches failed")
+    await writer.finish()
+    # No `finish`: post-processing and finalizing follow, and the dispatcher alone marks the run done.
+    return written

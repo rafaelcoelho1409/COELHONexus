@@ -169,17 +169,13 @@ async def ask_stream(payload: schemas.AskRequest, request: Request) -> Streaming
     prior_book = await domains.bd.ask.conversation.service.thread_book_id(payload.thread_id)
     if prior_book is not None and prior_book != payload.book_id:
         raise HTTPException(status_code = 409, detail = "An Ask thread is locked to its original book")
-    prior_run = await domains.bd.ask.conversation.service.thread_run_id(payload.thread_id)
-    run = (
-        await domains.bd.distill.service.read_run(payload.book_id, prior_run)
-        if prior_run is not None
-        else await domains.bd.distill.service.read_current_run(payload.book_id)
-    )
-    if run is None or run.get("status") != "done":
-        raise HTTPException(status_code = 409, detail = "This book has no completed Distill run to ask about")
-    index = await domains.bd.rag.service.read_index(payload.book_id, run["run_id"])
-    if index is None or index.get("status") != "done":
-        raise HTTPException(status_code = 409, detail = "The current book version is not fully indexed for Ask")
+    index = await domains.bd.ingestion.ai.retrieval_index.service.read_current_index(payload.book_id)
+    if index is None:
+        raise HTTPException(
+            status_code = 409,
+            detail = "This book has no completed Ingestion retrieval index to ask about",
+        )
+    indexed_run_id = index["agentic_run_id"]
     model = getattr(request.app.state, "llm", None)
     if model is None:
         raise HTTPException(status_code = 503, detail = "The configured chat model is unavailable")
@@ -193,7 +189,7 @@ async def ask_stream(payload: schemas.AskRequest, request: Request) -> Streaming
     graph = ai.bd.graphs.ask.adaptive.graphs.adaptive_ask_graph()
     context = ai.bd.graphs.ask.adaptive.entities.AskContext(
         book_id = payload.book_id,
-        run_id = run["run_id"],
+        run_id = indexed_run_id,
         planner = planner,
         grader = grader,
         answerer = answerer,
@@ -201,7 +197,7 @@ async def ask_stream(payload: schemas.AskRequest, request: Request) -> Streaming
     )
     try:
         turn_id = await domains.bd.ask.conversation.service.insert_turn(
-            payload.book_id, run["run_id"], payload.thread_id, payload.question,
+            payload.book_id, indexed_run_id, payload.thread_id, payload.question,
         )
     except Exception as error:
         logger.exception("[bd:ask] could not create conversation turn")

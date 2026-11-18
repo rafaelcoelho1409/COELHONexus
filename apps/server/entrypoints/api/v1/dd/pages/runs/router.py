@@ -1,0 +1,135 @@
+"""In-flight ingestion lifecycle. Single-flight per slug via Redis lock;
+the running tier polls a cancel flag and surrenders cleanly."""
+
+import domains, infra
+import domains.dd.pages.task
+from . import schemas
+from ... import catalog
+
+import logging
+from typing import Literal
+
+from fastapi import APIRouter, HTTPException, Query
+
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter()
+
+
+@router.post("")
+async def start_run(body: schemas.StartRunBody) -> dict:
+    """Status: cached (manifest present, no refresh) / queued (lock
+    acquired, Celery dispatched) / locked (another in flight)."""
+    await catalog.service.get_catalog_entry(body.slug)
+
+    gate = await domains.dd.pages.runtime.dispatch.service.reserve_run(
+        body.slug, body.refresh
+    )
+    if gate["status"] != "reserved":
+        return gate
+
+    run_id = gate["run_id"]
+    try:
+        task = domains.dd.pages.task.run_ingestion.delay(run_id, body.slug)
+        # Nice-to-have cross-reference (Tempo/Langfuse UI ↔ task_id in
+        # logs) — CeleryInstrumentor already links this HTTP span to the
+        # task's own root span via injected trace-context headers, this
+        # doesn't replace that.
+        infra.opentelemetry.service.tag_celery_task(task.id)
+    except Exception:
+        await domains.dd.pages.runtime.dispatch.service.release_run(
+            body.slug, run_id
+        )
+        raise
+
+    return domains.dd.pages.runtime.dispatch.domain.queued(body.slug, run_id)
+
+
+@router.get("/active")
+async def list_active_runs() -> dict:
+    """Lock-held runs with progress; cross-checked so locks without a
+    written progress record (rare race) aren't surfaced."""
+    async with infra.redis.service.client() as r:
+        active = await domains.dd.pages.runtime.progress.service.list_active(r)
+    return {"active": active}
+
+
+@router.post("/{run_id}/cancel")
+async def cancel_run(run_id: str) -> dict:
+    async with infra.redis.service.client() as r:
+        await domains.dd.pages.runtime.cancel.service.request_cancel(r, run_id)
+    return domains.dd.pages.runtime.dispatch.domain.cancel_requested(run_id)
+
+
+@router.get("/{run_id}")
+async def get_run(run_id: str) -> dict:
+    """In-flight snapshot from Redis (canonical post-finalize manifest
+    lives in MinIO under /ingestion/{slug})."""
+    async with infra.redis.service.client() as r:
+        progress = await domains.dd.pages.runtime.progress.service.read_progress(
+            r, run_id
+        )
+        manifest = await domains.dd.pages.storage.service.read_live_manifest(
+            r, run_id
+        )
+        post = await domains.dd.pages.runtime.progress.service.read_post(r, run_id)
+        benchmark = await domains.dd.pages.runtime.progress.service.read_benchmark(
+            r, run_id
+        )
+
+    if progress is None and not manifest and benchmark is None:
+        raise HTTPException(status_code=404, detail=f"run {run_id!r} not found")
+
+    return domains.dd.pages.runtime.dispatch.domain.run_snapshot(
+        run_id, progress, manifest, post, benchmark
+    )
+
+
+@router.get("/{run_id}/url-records")
+async def get_url_records(run_id: str) -> list[dict]:
+    async with infra.redis.service.client() as r:
+        return await domains.dd.pages.runtime.progress.service.read_url_records(
+            r, run_id
+        )
+
+
+@router.get("/{run_id}/llm-counters")
+async def get_llm_counters(run_id: str) -> dict:
+    """Live ingestion usage, with the persisted snapshot as a fallback after Redis expires."""
+    return await domains.settings.llm_counter.service.read_counters("dd", run_id)
+
+
+@router.get("/{run_id}/pages/{idx}")
+async def get_page(
+    run_id: str,
+    idx: int,
+    version: Literal["processed", "original"] = Query(default="processed"),
+) -> dict:
+    async with infra.redis.service.client() as r:
+        manifest = await domains.dd.pages.storage.service.read_live_manifest(
+            r, run_id
+        )
+    entry = domains.dd.pages.storage.domain.entry_with_idx(manifest or [], idx)
+    if entry is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"page idx={idx} not found in run {run_id!r}",
+        )
+    key = entry.get("key") if version == "processed" else entry.get("source_key")
+    minio = infra.minio.service.get_storage()
+    if version == "original" and not key:
+        key = entry.get("raw_key")
+    if not key:
+        raise HTTPException(
+            status_code=404,
+            detail=f"manifest entry has no MinIO key (idx={idx})",
+        )
+    try:
+        body = await minio.read_text(key)
+    except Exception as e:
+        raise HTTPException(
+            status_code=404,
+            detail=f"page read failed: {type(e).__name__}: {e}",
+        )
+    return {"run_id": run_id, "idx": idx, "version": version, "body": body}

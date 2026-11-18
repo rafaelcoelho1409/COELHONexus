@@ -42,7 +42,7 @@ async def prepare(state: graphs.pipeline.planner.doc_distill.states.DistillState
 
     entries: list[dict] = []
     try:
-        entries = ((await domains.dd.ingestion.storage.service.read_framework_manifest(blobs, slug)) or {}).get("entries") or []
+        entries = ((await domains.dd.pages.storage.service.read_framework_manifest(blobs, slug)) or {}).get("entries") or []
     except Exception:
         pass
     sizes = {e.get("key"): e.get("bytes") for e in entries if e.get("key")}

@@ -1,4 +1,4 @@
-"""Whole-book synthesis, research, and decision-brief agents."""
+"""Synthesize the whole-book guide from completed chapter guides."""
 from __future__ import annotations
 import domains
 from .... import graphs, prompts, skills
@@ -126,6 +126,15 @@ async def synthesize_book(
         ]
         next_level = []
         for batch_index, batch in enumerate(batches):
+            await graphs.service.report(
+                dependencies.progress_callback,
+                kind = "activity",
+                node = "synthesize_book",
+                current_task = (
+                    f"Connecting book sections · level {level + 1}, "
+                    f"batch {batch_index + 1} of {len(batches)}"
+                ),
+            )
             key = domains.bd.distill.keys.synthesis_key(state["book_id"], state["run_id"], level, batch_index)
             if await storage.exists(key):
                 record = json.loads(await storage.read_text(key))
@@ -196,203 +205,13 @@ async def synthesize_book(
                 "summary": domains.bd.distill.synthesize.domain.book_summary(synthesis),
             })
         if len(next_level) == 1:
-            final_record = next_level[0]
-            final_synthesis = domains.bd.distill.schemas.BookSynthesis.model_validate(
-                final_record["synthesis"],
-            )
             synthesis_key = domains.bd.distill.keys.synthesis_key(
                 state["book_id"], state["run_id"], level, 0,
             )
-            await _write_decision_brief(
-                dependencies,
-                state,
-                synthesis_key,
-                final_record,
-            )
-            research_context_key = await _write_research_context(
-                dependencies,
-                state,
-                final_synthesis,
-            )
-            return {
-                "book_synthesis_key": synthesis_key,
-                "research_context_key": research_context_key,
-            }
+            return {"book_synthesis_key": synthesis_key}
         current = next_level
         level += 1
         if level > 8:
             raise ValueError("whole-book synthesis exceeded the hierarchy depth limit")
 
 
-async def _write_research_context(
-    dependencies: graphs.distill.entities.DistillDependencies,
-    state: dict[str, Any],
-    synthesis: domains.bd.distill.schemas.BookSynthesis,
-) -> str:
-    key = domains.bd.distill.keys.research_context_key(state["book_id"], state["run_id"])
-    if await dependencies.storage.exists(key):
-        context = domains.bd.distill.schemas.ResearchContext.model_validate_json(
-            await dependencies.storage.read_text(key),
-        )
-        return key
-
-    if not dependencies.research_enabled:
-        context = domains.bd.distill.schemas.ResearchContext(status = "disabled")
-    else:
-        title = str(state.get("title") or "Book")
-        search_session = dependencies.research_search_session
-        analysis = None
-        try:
-            research_payload = {
-                "book_title": title,
-                "book_synthesis": domains.bd.distill.synthesize.domain.book_summary(synthesis),
-            }
-            with domains.settings.llm_counter.service.llm_context(
-                ns = "bd", run_id = state["run_id"], node_id = "research_analyst", stage = "distill",
-            ):
-                result = await domains.settings.chat.service.resilient_ainvoke(
-                    lambda: dependencies.research_analyst.ainvoke({
-                        "messages": [{
-                            "role": "user",
-                            "content": json.dumps(research_payload, ensure_ascii = False),
-                        }],
-                        "files": skills.service.files_for("distill_research_analyst"),
-                    }, config = {
-                        "callbacks": [domains.settings.llm_counter.service.LLMCounterCallback()],
-                    }, context = search_session),
-                    attempts = domains.bd.distill.params.AGENT_CALL_ATTEMPTS,
-                    wait_base_s = domains.bd.distill.params.AGENT_CALL_RETRY_WAIT_BASE_S,
-                )
-            analysis = domains.bd.distill.domain.structured_model_from_agent_result(
-                result,
-                domains.bd.distill.schemas.ResearchAnalysisOutput,
-            )
-        except Exception as error:  # noqa: BLE001 — optional external research never fails Distill.
-            logger.warning(
-                "[bd-distill] research analyst unavailable; retaining collected Search MCP sources "
-                "run=%s error_type=%s",
-                state["run_id"],
-                type(error).__name__,
-            )
-
-        sources = [
-            domains.bd.distill.schemas.ResearchSource.model_validate(item)
-            for item in search_session.sources.values()
-        ]
-        allowed_source_ids = {source.source_id for source in sources}
-        findings = []
-        if isinstance(analysis, domains.bd.distill.schemas.ResearchAnalysisOutput):
-            findings = [
-                finding for finding in analysis.findings
-                if finding.source_ids and set(finding.source_ids) <= allowed_source_ids
-            ]
-            if len(findings) != len(analysis.findings):
-                logger.warning(
-                    "[bd-distill] omitted external research findings with unknown source IDs run=%s",
-                    state["run_id"],
-                )
-        context = domains.bd.distill.schemas.ResearchContext(
-            status = search_session.status,
-            provider_id = search_session.provider_id,
-            queries = search_session.queries,
-            sources = sources,
-            findings = findings,
-            error_type = search_session.error_type,
-        )
-    await dependencies.storage.write(
-        key,
-        domains.bd.distill.domain.json_body(context.model_dump(mode = "json")),
-        content_type = domains.bd.distill.params.JSON_TYPE,
-    )
-    return key
-
-
-async def _write_decision_brief(
-    dependencies: graphs.distill.entities.DistillDependencies,
-    state: dict[str, Any],
-    synthesis_key: str,
-    synthesis_record: dict[str, Any],
-) -> None:
-    """Write a distinct, source-cited decision brief after the hierarchical book synthesis."""
-    synthesis = domains.bd.distill.schemas.BookSynthesis.model_validate(synthesis_record["synthesis"])
-    synthesis = synthesis.model_copy(update = {"decision_brief": None})
-    synthesis_record = {**synthesis_record, "synthesis": synthesis.model_dump(mode = "json")}
-    await dependencies.storage.write(
-        synthesis_key,
-        domains.bd.distill.domain.json_body(synthesis_record),
-        content_type = domains.bd.distill.params.JSON_TYPE,
-    )
-    allowed_ids = list(dict.fromkeys(
-        [*synthesis.central_thesis_learning_unit_ids]
-        + [unit_id for item in [*synthesis.key_takeaways, *synthesis.cross_chapter_connections, *synthesis.limitations]
-           for unit_id in item.learning_unit_ids]
-    ))
-    if not allowed_ids:
-        logger.info("[bd-distill] no cited whole-book evidence is available for a decision brief run=%s", state["run_id"])
-        return
-    unit_sources = [
-        source
-        for ref in state.get("completed_chapters", [])
-        for source in ref.get("unit_sources", [])
-        if source.get("learning_unit_id") in set(allowed_ids)
-    ]
-    units = await domains.bd.distill.synthesize.service.read_learning_units(
-        dependencies.storage,
-        state["book_id"],
-        state["run_id"],
-        allowed_ids,
-        unit_sources,
-    )
-    payload = {
-        "book_synthesis": synthesis.model_dump(mode = "json"),
-        "allowed_learning_unit_ids": allowed_ids,
-        "learning_units": units,
-    }
-    try:
-        with domains.settings.llm_counter.service.llm_context(
-            ns = "bd", run_id = state["run_id"], node_id = "decision_brief_writer", stage = "distill",
-        ):
-            result = await domains.settings.chat.service.resilient_ainvoke(
-                lambda: dependencies.decision_brief_writer.ainvoke({
-                    "messages": [{
-                        "role": "user",
-                        "content": json.dumps(payload, ensure_ascii = False),
-                    }],
-                    "files": skills.service.files_for("distill_decision_brief_writer"),
-                }, config = {
-                    "callbacks": [domains.settings.llm_counter.service.LLMCounterCallback()],
-                }),
-                attempts = domains.bd.distill.params.AGENT_CALL_ATTEMPTS,
-                wait_base_s = domains.bd.distill.params.AGENT_CALL_RETRY_WAIT_BASE_S,
-            )
-        output = domains.bd.distill.domain.structured_model_from_agent_result(
-            result,
-            domains.bd.distill.schemas.DecisionBriefOutput,
-        )
-        if not isinstance(output, domains.bd.distill.schemas.DecisionBriefOutput):
-            raise ValueError("decision-brief DeepAgent returned no valid DecisionBriefOutput")
-        decision = output.decision_brief
-        if decision is not None:
-            cited_ids = set(decision.recommendation_learning_unit_ids)
-            for item in [*decision.options, *decision.action_plan]:
-                cited_ids.update(item.learning_unit_ids)
-            if not cited_ids or cited_ids - set(allowed_ids):
-                logger.warning(
-                    "[bd-distill] omitted decision brief with unresolved citations run=%s",
-                    state["run_id"],
-                )
-                decision = None
-        synthesis = synthesis.model_copy(update = {"decision_brief": decision})
-        synthesis_record = {**synthesis_record, "synthesis": synthesis.model_dump(mode = "json")}
-        await dependencies.storage.write(
-            synthesis_key,
-            domains.bd.distill.domain.json_body(synthesis_record),
-            content_type = domains.bd.distill.params.JSON_TYPE,
-        )
-    except Exception as error:  # noqa: BLE001 — a decision brief is optional; keep the core guide publishable.
-        logger.warning(
-            "[bd-distill] decision-brief writer unavailable; publishing source-grounded book guide "
-            "run=%s error_type=%s",
-            state["run_id"],
-            type(error).__name__,
-        )

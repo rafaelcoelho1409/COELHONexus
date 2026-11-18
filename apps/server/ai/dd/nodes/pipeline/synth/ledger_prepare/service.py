@@ -20,7 +20,7 @@ Context = graphs.pipeline.synth.entities.SynthContext
 
 def _source_excerpt(markdown: str, digest: str) -> str:
     """The prose nearest a code sentinel, kept as evidence for the step writer and checklist judge."""
-    pattern = domains.dd.ingestion.vault.patterns.SENTINEL_RE
+    pattern = domains.dd.pages.vault.patterns.SENTINEL_RE
     matches = list(pattern.finditer(markdown))
     target_index = next((index for index, match in enumerate(matches) if match.group("hash") == digest), None)
     if target_index is None:
@@ -89,7 +89,7 @@ async def ledger_prepare(state: graphs.pipeline.synth.states.SynthState, runtime
         text = body.decode("utf-8", errors = "replace") if isinstance(body, (bytes, bytearray)) else str(body)
         if "<code-ref hash=" not in text:
             try:
-                text, _entries = domains.dd.ingestion.vault.domain.sentinelize_doc(text)
+                text, _entries = domains.dd.pages.vault.domain.sentinelize_doc(text)
             except Exception as error:
                 logger.info(f"[ledger_prepare] could not create source sentinels for {source_key!r}: {type(error).__name__}")
         source_texts[source_key] = text

@@ -1,0 +1,516 @@
+"""Sphinx discovery — pure helpers (no I/O): objects.inv v2 binary parsing,
+sidebar/body link extraction from an already-fetched HTML string, and
+multi-topic page splitting (inventory/autodoc/anchor precedence). Network
+fetching lives in service.py."""
+from __future__ import annotations
+import domains
+from . import entities, params, patterns
+
+import copy
+import logging
+import zlib
+from urllib.parse import urljoin, urlparse
+
+from bs4 import BeautifulSoup, Tag
+
+
+
+logger = logging.getLogger(__name__)
+
+
+def _soup(html: str) -> BeautifulSoup:
+    """The page parsed with the extractor's parser, or the standard library's when that cannot read it."""
+    extract_params = domains.dd.pages.tiers.extract.params
+    try:
+        return BeautifulSoup(html, extract_params.PARSER)
+    except Exception:  # noqa: BLE001
+        return BeautifulSoup(html, extract_params.FALLBACK_PARSER)
+
+
+def has_version_segment(path: str) -> bool:
+    """Path includes a version dir (stable/latest/vN.M) → skip sibling probe."""
+    for seg in (path or "").strip("/").split("/"):
+        if patterns.VERSION_RE.match(seg):
+            return True
+    return False
+
+
+def parse_inventory_v2(
+    raw: bytes, base_url: str,
+) -> entities.Inventory | None:
+    """Parse v2 binary. None on malformed input."""
+    if not raw.startswith(params.V2_HEADER):
+        return None
+    project = ""
+    version = ""
+    cursor = 0
+    for _ in range(params.HEADER_LINES):
+        nl = raw.find(b"\n", cursor)
+        if nl == -1:
+            return None
+        line = raw[cursor:nl].decode("utf-8", "replace")
+        cursor = nl + 1
+        if line.startswith(params.INVENTORY_PROJECT_PREFIX):
+            project = line.split(":", 1)[1].strip()
+        elif line.startswith(params.INVENTORY_VERSION_PREFIX):
+            version = line.split(":", 1)[1].strip()
+    try:
+        payload = zlib.decompress(raw[cursor:]).decode("utf-8", "replace")
+    except Exception as e:
+        logger.info(f"[objects.inv] zlib decompress failed: {e}")
+        return None
+
+    parsed: list[entities.InventoryEntity] = []
+    seen: set[tuple[str, str]] = set()
+    for line in payload.splitlines():
+        if not line or line.startswith("#"):
+            continue
+        # name domain:role priority uri dispname
+        parts = line.split(None, 4)
+        if len(parts) < 5:
+            continue
+        name, role, _priority, uri, dispname = parts
+        # Sphinx `$` shorthand → use `name` as anchor.
+        if "$" in uri:
+            uri = uri.replace("$", name)
+        if dispname == "-":
+            dispname = name
+        # Reject externally-scoped (forward intersphinx refs).
+        if "://" in uri:
+            continue
+        full = urljoin(base_url, uri)
+        page_url, _, anchor = full.partition("#")
+        if not page_url:
+            continue
+        key = (page_url, anchor or name)
+        if key in seen:
+            continue
+        seen.add(key)
+        parsed.append(entities.InventoryEntity(
+            name=name, role=role, page_url=page_url,
+            anchor=anchor, dispname=dispname,
+        ))
+    return entities.Inventory(
+        project=project, version=version,
+        base_url=base_url, entities=parsed,
+    )
+
+
+def _normalize_href(href: str, base_url: str) -> str | None:
+    href = (href or "").strip()
+    if not href or href.startswith(params.SKIP_HREF_PREFIXES):
+        return None
+    full = urljoin(base_url, href).split("#", 1)[0]
+    if not full.startswith(domains.dd.pages.tiers.tier4.params.HTTP_SCHEMES):
+        return None
+    path = urlparse(full).path or ""
+    if patterns.EXCLUDE_PATH_RE.search(path) or patterns.EXCLUDE_EXT_RE.search(path):
+        return None
+    return full
+
+
+def _sidebar_links(soup: BeautifulSoup, base_url: str) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for sel in params.SIDEBAR_SELECTORS:
+        anchors = soup.select(sel)
+        if not anchors:
+            continue
+        for a in anchors:
+            full = _normalize_href(a.get("href"), base_url)
+            if full and full not in seen:
+                seen.add(full)
+                out.append(full)
+        break  # first-matching theme wins
+    return out
+
+
+def _body_links(soup: BeautifulSoup, base_url: str) -> list[str]:
+    root = None
+    for sel in params.ARTICLE_ROOTS:
+        node = soup.select_one(sel)
+        if node:
+            root = node
+            break
+    if root is None:
+        root = soup.body or soup
+    out: list[str] = []
+    seen: set[str] = set()
+    for sel in params.BODY_SELECTORS:
+        for a in root.select(sel):
+            full = _normalize_href(a.get("href"), base_url)
+            if full and full not in seen:
+                seen.add(full)
+                out.append(full)
+    return out
+
+
+def extract_internal_pages(html: str, base_url: str) -> dict[str, list[str]]:
+    """Sphinx/MkDocs surfaces → {sidebar, body}. Both empty ⇒ not Sphinx/MkDocs."""
+    if not html:
+        return {"sidebar": [], "body": []}
+    soup = _soup(html)
+    return {
+        "sidebar": _sidebar_links(soup, base_url),
+        "body": _body_links(soup, base_url),
+    }
+
+
+def ordered_doc_pages(inventory: entities.Inventory) -> list[str]:
+    """The inventory's document pages (`std:doc` / `std:label`), each once, in the inventory's own order — Sphinx's source-tree
+    order, which `Inventory.doc_pages()` (a set) loses."""
+    pages: dict[str, None] = {}
+    for ent in inventory.entities:
+        if ent.role in params.DOC_ROLES and ent.page_url:
+            pages.setdefault(ent.page_url)
+    return list(pages)
+
+
+def _slugify(s: str) -> str:
+    return patterns.SLUG_RE.sub("-", (s or "").lower()).strip("-")[: params.SLUG_MAX_CHARS] or params.SLUG_FALLBACK
+
+
+def _md(html: str, source_url: str, lang: str) -> str:
+    return domains.dd.pages.tiers.extract.domain.html_to_markdown(html, source_url = source_url, default_code_language = lang)
+
+
+def compose_child(parent_title: str, heading: str, body_md: str, fallback: str = "") -> tuple[str, str]:
+    """`(title, body)` of a page cut out of a bigger one, in the shape every other split page has: the title is "Parent › heading"
+    — the parent as its page name, not its raw `<title>` with the docs' name and version in it ("Tasks — Celery 5.6.3
+    documentation") — and the body opens with `# Parent` and, unless the piece already starts with a heading of its own,
+    `## heading`. An autodoc piece is a `<dl>` that opens with a signature, so before this 676 of Elasticsearch-py's 691
+    pages had no H1, and a title made of the page's `<title>` and a signature's text."""
+    parent = domains.dd.pages.tiers.extract.domain.page_name(parent_title or "")
+    # `¶` (Sphinx) or ` #` (pydata-sphinx-theme: "Model considerations #") is the heading's permalink, read as part of its text.
+    heading = patterns.HEADING_PERMALINK_RE.sub(
+        "", patterns.WHITESPACE_RE.sub(" ", (heading or "").strip()).rstrip(params.PERMALINK_MARK).strip(),
+    )[: params.HEADING_MAX_CHARS]
+    if parent and heading and heading.casefold() != parent.casefold():
+        title = f"{parent} › {heading}"
+    else:
+        title = heading or parent or fallback
+    first = next((line for line in body_md.splitlines() if line.strip()), "")
+    prefix = ""
+    # An H1 is a `# Title` outside code: a `# comment` in a fenced example is not one (103 of Celery's pieces had no H1 for that reason).
+    extract_patterns = domains.dd.pages.tiers.extract.patterns
+    if parent and not extract_patterns.H1_LINE_RE.search(extract_patterns.FENCED_BLOCK_RE.sub("", body_md)):
+        prefix += f"# {parent}\n\n"
+    if heading and not patterns.HEADING_START_RE.match(first):
+        prefix += f"## {heading}\n\n"
+    return title, prefix + body_md
+
+
+def maybe_split_page(
+    html: str, source_url: str, parent_title: str = "",
+    inventory: entities.Inventory | None = None,
+    default_code_language: str = "",
+) -> list[entities.SubPage]:
+    """Split precedence: inventory (per-entity) → autodoc (≥4 dl.py.class or 1-class-N-methods) → anchor (≥12 H2). Returns [] if page stays whole."""
+    if not html:
+        return []
+    soup = _soup(html)
+
+    domains.dd.pages.tiers.extract.domain.strip_chrome(soup)
+    root = domains.dd.pages.tiers.extract.domain.find_content_root(soup)
+
+    lang = default_code_language
+    if inventory is not None:
+        out = _split_by_inventory(soup, root, source_url, parent_title, inventory, lang)
+        if out:
+            n_entity = len(out)
+            out += _split_residual(root, out, source_url, parent_title, lang)
+            logger.info(
+                f"[page-split] inventory split: {n_entity} entity + "
+                f"{len(out) - n_entity} narrative virtual pages from {source_url}"
+            )
+            return out
+
+    out = _split_autodoc(root, source_url, parent_title, lang)
+    if out:
+        n_entity = len(out)
+        out += _split_residual(root, out, source_url, parent_title, lang)
+        logger.info(
+            f"[page-split] autodoc split: {n_entity} entity + "
+            f"{len(out) - n_entity} narrative virtual pages from {source_url}"
+        )
+        return out
+
+    out = _split_anchored(root, source_url, parent_title, lang)
+    if out:
+        n_entity = len(out)
+        out += _split_residual(root, out, source_url, parent_title, lang)
+        logger.info(
+            f"[page-split] anchor split: {n_entity} section + "
+            f"{len(out) - n_entity} narrative virtual pages from {source_url}"
+        )
+    return out
+
+
+def _container_for_anchor(soup: BeautifulSoup, root: Tag, anchor: str) -> Tag | None:
+    """Resolve anchor id to container: autodoc → <dt>'s parent <dl>; narrative → <section>/<div.section>; older Sphinx → <h2>."""
+    node = root.find(id=anchor) or soup.find(id=anchor)
+    if node is None or not isinstance(node, Tag):
+        return None
+    if node.name == "dt":
+        # Wrap up: the <dt> is part of a <dl> definition list.
+        return node.parent if node.parent is not None else node
+    if node.name in ("section",):
+        return node
+    if node.name == "div" and "section" in (node.get("class") or []):
+        return node
+    if node.name in ("h2", "h3"):
+        sect = _h2_section_ancestor(node)
+        return sect or node
+    return node
+
+
+def _split_by_inventory(
+    soup: BeautifulSoup, root: Tag, source_url: str,
+    parent_title: str, inventory: entities.Inventory, lang: str = "",
+) -> list[entities.SubPage]:
+    """Inventory-driven split: one SubPage per splittable entity on page.
+    Top-level first; falls back to members on 1-class-N-methods pages."""
+    top, members = inventory.splittable_entities_on(source_url)
+    chosen = top if len(top) >= params.AUTODOC_MIN_BLOCKS else (
+        members if len(members) >= params.AUTODOC_MIN_BLOCKS else []
+    )
+    if not chosen:
+        return []
+
+    out: list[entities.SubPage] = []
+    parent_url = source_url.split("#", 1)[0]
+    seen: set[str] = set()
+    n_stubs_dropped = 0
+    for ent in chosen:
+        if not ent.anchor or ent.anchor in seen:
+            continue
+        container = _container_for_anchor(soup, root, ent.anchor)
+        if container is None:
+            continue
+        body_md = _md(str(container), source_url, lang)
+        if len(body_md.encode("utf-8")) < params.INVENTORY_MIN_BODY_BYTES:
+            n_stubs_dropped += 1
+            continue
+        seen.add(ent.anchor)
+        # The entity's own (qualified) name names the piece — `dispname` is, for an autodoc entity, its whole signature.
+        title, body_md = compose_child(parent_title, ent.name or ent.dispname, body_md, ent.anchor)
+        out.append(entities.SubPage(
+            slug_suffix=_slugify(ent.anchor),
+            sub_url=f"{parent_url}#{ent.anchor}",
+            title=title,
+            body_md=body_md,
+        ))
+    # Quality gate: if most entities were 1-line stubs (CPython errno consts etc.),
+    # the parent IS the better corpus chunk than a handful of disconnected fragments.
+    if len(out) < params.INVENTORY_MIN_SPLITS:
+        if out or n_stubs_dropped:
+            logger.info(
+                f"[page-split] inventory split abandoned for {source_url}: "
+                f"only {len(out)} useful sub-page(s) survived "
+                f"(dropped {n_stubs_dropped} stub(s) <{params.INVENTORY_MIN_BODY_BYTES}B); "
+                f"keeping parent page whole"
+            )
+        return []
+    return out
+
+
+def _is_h2_section(sec: Tag) -> bool:
+    """A `<section>`/`div.section` whose own heading is an h2."""
+    head = sec.find(["h1", "h2", "h3", "h4"], recursive=False)
+    return head is not None and head.name == "h2"
+
+
+def _split_residual(
+    root: Tag, emitted: list[entities.SubPage], source_url: str, parent_title: str, lang: str = "",
+) -> list[entities.SubPage]:
+    """Narrative the entity/anchor split would otherwise discard.
+
+    The autodoc / inventory / anchor splits keep only their own containers
+    (`dl` definitions, entity sections, anchored H2s), so everything between
+    them — lead text, concept sections, and above all "Examples" sections,
+    where a Sphinx reference page keeps its code — never reached the corpus
+    (asyncio Queues/Subprocesses chapter shipped with no code because both
+    pages' examples were dropped). Remove the containers already emitted from
+    a copy of the page and turn what is left into one page per H2 section
+    plus an overview page for the text outside any H2. Stubs too small to be
+    useful (a bare heading once its `dl` is gone) are skipped."""
+    emitted_ids = [
+        sp.sub_url.split("#", 1)[1] for sp in emitted if "#" in sp.sub_url
+    ]
+    taken = set(emitted_ids)
+    work = copy.copy(root)
+    for anchor in emitted_ids:
+        node = _container_for_anchor(work, work, anchor)
+        if node is not None and node is not work:
+            node.decompose()
+
+    parent_url = source_url.split("#", 1)[0]
+
+    def md_of(html: str, source_url: str) -> str:
+        return _md(html, source_url, lang)
+
+    def _unique(anchor: str) -> str:
+        base, n = anchor, 1
+        while anchor in taken:
+            n += 1
+            anchor = f"{base}{params.NARRATIVE_SUFFIX}" if n == 2 else f"{base}{params.NARRATIVE_SUFFIX}-{n}"
+        taken.add(anchor)
+        return anchor
+
+    out: list[entities.SubPage] = []
+    sections = [
+        sec for sec in work.select("section, div.section")
+        if _is_h2_section(sec)
+    ]
+    for sec in sections:
+        body_md = md_of(str(sec), source_url)
+        heading = sec.find("h2")
+        if len(body_md.encode("utf-8")) >= params.MIN_BODY_BYTES:
+            anchor = _unique(
+                (sec.get("id") or "").strip()
+                or _slugify(heading.get_text(strip=True) if heading else "")
+            )
+            title, body_md = compose_child(parent_title, heading.get_text(" ", strip=True) if heading else "", body_md, anchor)
+            out.append(entities.SubPage(
+                slug_suffix=_slugify(anchor),
+                sub_url=f"{parent_url}#{anchor}",
+                title=title,
+                body_md=body_md,
+            ))
+        sec.decompose()
+
+    overview_md = md_of(str(work), source_url)
+    if len(overview_md.encode("utf-8")) >= params.MIN_BODY_BYTES:
+        h1_sec = next(
+            (sec for sec in work.select("section, div.section")
+             if sec.find("h1", recursive=False) is not None),
+            None,
+        )
+        anchor = _unique(
+            ((h1_sec.get("id") or "").strip() if h1_sec is not None else "")
+            or "overview"
+        )
+        title, overview_md = compose_child(parent_title, "Overview", overview_md, anchor)
+        out.append(entities.SubPage(
+            slug_suffix=_slugify(anchor),
+            sub_url=f"{parent_url}#{anchor}",
+            title=title,
+            body_md=overview_md,
+        ))
+    return out
+
+
+def _split_autodoc(
+    root: Tag, source_url: str, parent_title: str, lang: str = "",
+) -> list[entities.SubPage]:
+    blocks = root.select(params.AUTODOC_SELECTOR)
+    # Top-level only — a class with nested methods is ONE unit, not 1+N.
+    blocks_set = {id(b) for b in blocks}
+    top: list[Tag] = []
+    for b in blocks:
+        if not any(id(a) in blocks_set for a in b.parents):
+            top.append(b)
+    # Fallback: 1-class-N-methods pages (ElasticSearch-Py indices.html) — split by members.
+    if len(top) < params.AUTODOC_MIN_BLOCKS:
+        members = root.select(params.MEMBER_SELECTOR)
+        if len(members) >= params.AUTODOC_MIN_BLOCKS:
+            top = members
+        else:
+            return []
+
+    out: list[entities.SubPage] = []
+    parent_url = source_url.split("#", 1)[0]
+    seen_ids: set[str] = set()
+    for dl in top:
+        # The id lives on the first <dt> child (Sphinx autodoc convention).
+        dt = dl.find("dt", recursive=False) or dl.find("dt")
+        if dt is None:
+            continue
+        anchor_id = (dt.get("id") or "").strip()
+        if not anchor_id or anchor_id in seen_ids:
+            continue
+        seen_ids.add(anchor_id)
+        title_text = dt.get_text(strip=True).rstrip(params.PERMALINK_MARK).strip()[: params.TITLE_TEXT_MAX_CHARS]
+        body_md = _md(str(dl), source_url, lang)
+        if len(body_md.encode("utf-8")) < params.MIN_BODY_BYTES:
+            continue
+        slug_suffix = _slugify(anchor_id) or _slugify(title_text)
+        # The object's id (`celery.app.task.Task.retry`) names the piece; the `<dt>`'s text is its signature.
+        title, body_md = compose_child(parent_title, anchor_id, body_md, title_text)
+        out.append(entities.SubPage(
+            slug_suffix=slug_suffix,
+            sub_url=f"{parent_url}#{anchor_id}",
+            title=title,
+            body_md=body_md,
+        ))
+    return out
+
+
+def _h2_section_ancestor(h2: Tag) -> Tag | None:
+    """Enclosing section across Sphinx versions: 4+ emits `<section id=...>`;
+    1-3 + nbsphinx use `<div class="section">`. Closest match wins."""
+    for anc in h2.parents:
+        if not isinstance(anc, Tag):
+            continue
+        if anc.name == "section" and anc.get("id"):
+            return anc
+        if anc.name == "div" and "section" in (anc.get("class") or []) \
+                and anc.get("id"):
+            return anc
+    return None
+
+
+def _section_html_for_h2(h2: Tag, anchor_id: str) -> str:
+    """HTML for the section under h2. Prefers the enclosing section container
+    when its id matches; falls back to h2 + siblings up to the next h2."""
+    sect = _h2_section_ancestor(h2)
+    if sect is not None and (sect.get("id") or "").strip() == anchor_id:
+        return str(sect)
+    parts = [str(h2)]
+    for sib in h2.next_siblings:
+        if isinstance(sib, Tag) and sib.name == "h2":
+            break
+        parts.append(str(sib))
+    return "".join(parts)
+
+
+def _split_anchored(
+    root: Tag, source_url: str, parent_title: str, lang: str = "",
+) -> list[entities.SubPage]:
+    h2s = root.select("h2")
+    anchored: list[tuple[Tag, str]] = []
+    for h in h2s:
+        # `¶` permalink = author-intended discrete section.
+        if h.select_one("a.headerlink") is None:
+            continue
+        anchor_id = (h.get("id") or "").strip()
+        if not anchor_id:
+            sect = _h2_section_ancestor(h)
+            if sect is not None:
+                anchor_id = (sect.get("id") or "").strip()
+        if anchor_id:
+            anchored.append((h, anchor_id))
+
+    if len(anchored) < params.ANCHOR_MIN_H2:
+        return []
+
+    out: list[entities.SubPage] = []
+    parent_url = source_url.split("#", 1)[0]
+    seen_ids: set[str] = set()
+    for h2, anchor_id in anchored:
+        if anchor_id in seen_ids:
+            continue
+        seen_ids.add(anchor_id)
+        sub_html = _section_html_for_h2(h2, anchor_id)
+        body_md = _md(sub_html, source_url, lang)
+        if len(body_md.encode("utf-8")) < params.MIN_BODY_BYTES:
+            continue
+        title_text = h2.get_text(" ", strip=True).rstrip(params.PERMALINK_MARK).strip()[: params.TITLE_TEXT_MAX_CHARS]
+        title, body_md = compose_child(parent_title, title_text, body_md, anchor_id)
+        out.append(entities.SubPage(
+            slug_suffix=_slugify(anchor_id),
+            sub_url=f"{parent_url}#{anchor_id}",
+            title=title,
+            body_md=body_md,
+        ))
+    return out

@@ -1,7 +1,6 @@
 """LangGraph workflows for Docs Distiller."""
 from __future__ import annotations
 
-from . import service
-from . import ingestion, pipeline
+from . import service, pipeline
 
-__all__ = ["ingestion", "pipeline", "service"]
+__all__ = ["pipeline", "service"]

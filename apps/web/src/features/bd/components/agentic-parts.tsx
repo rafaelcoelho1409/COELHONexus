@@ -21,6 +21,7 @@ export function AgenticStatusGlyph({ status }: { status: AgenticNodeStatus }) {
     return <CircleDot aria-hidden className={`${GLYPH_CLASS} animate-pulse text-running-text`} />;
   }
   if (status === "failed") return <X aria-hidden className={`${GLYPH_CLASS} text-destructive-text`} />;
+  if (status === "cancelled") return <Circle aria-hidden className={`${GLYPH_CLASS} text-warning-text`} />;
   return <Circle aria-hidden className={`${GLYPH_CLASS} text-muted-foreground`} />;
 }
 
@@ -67,6 +68,7 @@ export const AGENTIC_STATUS_LABEL: Record<AgenticNodeStatus, string> = {
   running: "running",
   pending: "pending",
   failed: "failed",
+  cancelled: "cancelled",
 };
 
 /** Glyph plus the state in words, so it never rests on the icon or its colour alone. */
@@ -84,6 +86,7 @@ export function AgenticNodeList({
   rows,
   onOpen,
   onPlay,
+  replayDisabled = false,
   replayPending = false,
   replayPendingNodeId = null,
   label = "Agentic pipeline nodes",
@@ -91,6 +94,7 @@ export function AgenticNodeList({
   rows: readonly AgenticNodeView[];
   onOpen: (nodeId: string) => void;
   onPlay?: (nodeId: string) => void;
+  replayDisabled?: boolean;
   replayPending?: boolean;
   replayPendingNodeId?: string | null;
   label?: string;
@@ -138,7 +142,7 @@ export function AgenticNodeList({
                 label={row.label}
                 onPlay={() => onPlay(row.id)}
                 pending={replayPending && replayPendingNodeId === row.id}
-                disabled={replayPending}
+                disabled={replayDisabled || replayPending}
                 className="self-start"
               />
             ) : null}

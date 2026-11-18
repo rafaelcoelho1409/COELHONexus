@@ -1,7 +1,6 @@
-"""infra/elasticsearch — shared async ES client + YCS index bootstrap.
+"""infra/elasticsearch — shared async ES client + application index bootstrap.
 
-Single consumer today (YCS metadata + transcripts), but it lives at
-the infra layer so future DD code can reuse the client.
+YCS and BD define their index contracts here; domains share the client.
 
 Mirror of `infra/qdrant/` shape. See `docs/CODE-CONVENTIONS.md` §8 +
 `docs/YCS-PORT-PLAN-2026-06-06.md` Wave 2."""

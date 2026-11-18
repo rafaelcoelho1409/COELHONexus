@@ -4,8 +4,7 @@ import domains
 
 import logging
 import time
-from collections.abc import Awaitable, Callable
-from typing import Any, Protocol
+from typing import Any
 
 from langgraph.config import get_stream_writer
 
@@ -16,40 +15,6 @@ logger = logging.getLogger(__name__)
 def mermaid_source(compiled_graph: Any) -> str:
     """Render a compiled graph's topology, including nested subgraphs, without invoking its nodes."""
     return compiled_graph.get_graph(xray = True).draw_mermaid()
-
-
-class ProgressReporter(Protocol):
-    async def raise_if_cancelled(self) -> None: ...
-
-    async def update(self, *, current: int) -> None: ...
-
-    async def update_agentic_node(
-        self,
-        node: str,
-        *,
-        status: str | None = None,
-        current: int | None = None,
-        total: int | None = None,
-    ) -> None: ...
-
-
-async def run_node(
-    progress: ProgressReporter | None,
-    node: str,
-    operation: Callable[[], Awaitable[dict[str, Any]]],
-) -> dict[str, Any]:
-    """Run one graph node's work and report it as running, then done, or failed if it raises."""
-    if progress is not None:
-        await progress.update_agentic_node(node, status = "running")
-    try:
-        result = await operation()
-    except BaseException:
-        if progress is not None:
-            await progress.update_agentic_node(node, status = "failed")
-        raise
-    if progress is not None:
-        await progress.update_agentic_node(node, status = "done")
-    return result
 
 
 def emit(step: str, kind: str, **fields: Any) -> None:

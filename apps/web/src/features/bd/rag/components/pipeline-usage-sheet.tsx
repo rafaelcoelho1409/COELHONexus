@@ -113,7 +113,7 @@ const NODE_LABELS: Readonly<Record<string, string>> = {
   decision_brief_writer: "Write decision brief",
   research_analyst: "Research book topics",
   report_reviewer: "Review Learning Guide",
-  rag_graph_extractor: "Extract knowledge graph",
+  neo4j: "Knowledge graph extraction",
 };
 
 function RunUsageSheet({

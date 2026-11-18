@@ -16,7 +16,7 @@ os.environ.setdefault("DD_STUDY_SEM", "1")
 
 ledger = domains.dd.pipeline.ledger
 domain = ledger.domain
-vault = domains.dd.ingestion.vault
+vault = domains.dd.pages.vault
 
 
 def check(label: str, got, want) -> None:

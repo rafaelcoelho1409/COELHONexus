@@ -7,7 +7,7 @@
 import { type RefObject, useEffect, useRef } from "react";
 
 import { fmtBytes } from "../domain/format";
-import { type ExplorerGroup, ROOT_GROUP } from "../domain/ingestion";
+import { type ExplorerGroup, ROOT_GROUP } from "../domain/pages";
 
 /** Scrolls `list` — and only it, never the document — just far enough for `item` to be in view. */
 function revealIn(list: HTMLElement, item: HTMLElement) {

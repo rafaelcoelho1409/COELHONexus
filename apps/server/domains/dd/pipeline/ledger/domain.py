@@ -104,7 +104,7 @@ def score_block(*, lines: int, parses: bool | None, imports: tuple[str, ...], de
     return round(score, 3)
 
 
-def make_block(entry: domains.dd.ingestion.vault.schemas.VaultEntry, pages: tuple[str, ...], order: int) -> entities.Block:
+def make_block(entry: domains.dd.pages.vault.schemas.VaultEntry, pages: tuple[str, ...], order: int) -> entities.Block:
     lang = language(entry.lang)
     body = fence_body(entry.fence_text)
     lines = len([line for line in body.splitlines() if line.strip()])
@@ -159,9 +159,9 @@ def group_variants(blocks: list[entities.Block]) -> list[list[entities.Block]]:
     return [[blocks[index] for index in members[seed]] for seed in seeds]
 
 
-def build(pages: list[tuple[str, dict[str, domains.dd.ingestion.vault.schemas.VaultEntry]]]) -> entities.Ledger:
+def build(pages: list[tuple[str, dict[str, domains.dd.pages.vault.schemas.VaultEntry]]]) -> entities.Ledger:
     """The ledger of a chapter from its pages, in reading order: each page is `(page key, its vault entries in document order)`."""
-    entries: dict[str, domains.dd.ingestion.vault.schemas.VaultEntry] = {}
+    entries: dict[str, domains.dd.pages.vault.schemas.VaultEntry] = {}
     where: dict[str, list[str]] = {}
     for key, vault in pages:
         for digest, entry in vault.items():
