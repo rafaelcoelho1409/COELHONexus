@@ -278,12 +278,12 @@ async def publish(
     }
     report_content = _json(quality_report)
     report_sha256 = hashlib.sha256(report_content.encode("utf-8")).hexdigest()
-    report_key = domains.bd.ingestion.storage.keys.agentic_quality_report_key(
+    report_key = domains.bd.ingestion.source.storage.keys.agentic_quality_report_key(
         state["book_id"], state["agentic_run_id"],
     )
     await _write(write_artifact, report_key, report_content, "application/json")
 
-    page_artifacts = [domains.bd.ingestion.ai.schemas.IngestionPageArtifact(
+    page_artifacts = [domains.bd.ingestion.ai.runs.schemas.IngestionPageArtifact(
         page_number = page["page"],
         source_key = next(ref["source_key"] for ref in state["page_refs"] if ref["page"] == page["page"]),
         source_sha256 = page["source_sha256"],
@@ -298,21 +298,21 @@ async def publish(
         converted_figures = page.get("converted_figures", []),
         assessment_sha256 = page["assessment_sha256"],
         patch_proposals_sha256 = page["patch_proposals_sha256"],
-        status = domains.bd.ingestion.ai.schemas.AgenticPageStatus(page["status"]),
+        status = domains.bd.ingestion.ai.runs.schemas.AgenticPageStatus(page["status"]),
         delivery_disposition = page.get("delivery_disposition", "include"),
     ) for page in page_results]
     finished_at = time.time()
-    manifest = domains.bd.ingestion.ai.schemas.IngestionAIRunManifest(
+    manifest = domains.bd.ingestion.ai.runs.schemas.IngestionAIRunManifest(
         workflow_version = state["workflow_version"],
         agentic_run_id = state["agentic_run_id"],
         book_id = state["book_id"],
         extraction_run_id = state["extraction_run_id"],
         source_manifest_key = state["source_manifest_key"],
         source_manifest_sha256 = state["source_manifest_sha256"],
-        status = domains.bd.ingestion.ai.schemas.AgenticRunStatus.DONE,
+        status = domains.bd.ingestion.ai.runs.schemas.AgenticRunStatus.DONE,
         expected_page_count = expected_page_count,
         pages = page_artifacts,
-        book_metadata_key = domains.bd.ingestion.storage.keys.agentic_book_metadata_key(
+        book_metadata_key = domains.bd.ingestion.source.storage.keys.agentic_book_metadata_key(
             state["book_id"], state["agentic_run_id"],
         ),
         book_metadata_sha256 = state["book_metadata_sha256"],
@@ -339,7 +339,7 @@ async def publish(
         finished_at = finished_at,
     )
     manifest_content = _json(manifest.model_dump(mode = "json"))
-    manifest_key = domains.bd.ingestion.storage.keys.agentic_manifest_key(
+    manifest_key = domains.bd.ingestion.source.storage.keys.agentic_manifest_key(
         state["book_id"], state["agentic_run_id"],
     )
     await _write(write_artifact, manifest_key, manifest_content, "application/json")

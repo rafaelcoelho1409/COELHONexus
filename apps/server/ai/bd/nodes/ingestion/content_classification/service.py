@@ -60,12 +60,12 @@ async def classify_content(
 
     params = domains.bd.ingestion.ai.content_selection.params
     revision = params.CONTENT_SELECTION_REVISION
-    output_key = domains.bd.ingestion.storage.keys.agentic_content_selection_key(
+    output_key = domains.bd.ingestion.source.storage.keys.agentic_content_selection_key(
         book_id, agentic_run_id, revision,
     )
     if await artifact_exists(output_key):
         existing = await _read_page(read_page, output_key)
-        saved = domains.bd.ingestion.ai.schemas.ContentSelectionManifest.model_validate_json(existing)
+        saved = domains.bd.ingestion.ai.content_selection.schemas.ContentSelectionManifest.model_validate_json(existing)
         if (
             saved.book_id != book_id
             or saved.extraction_run_id != extraction_run_id
@@ -75,7 +75,7 @@ async def classify_content(
             raise ValueError("saved content selection does not match the current ingestion run")
         content = _json_body(saved.model_dump(mode = "json"))
         digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
-        pointer_key = domains.bd.ingestion.storage.keys.agentic_current_content_selection_key(
+        pointer_key = domains.bd.ingestion.source.storage.keys.agentic_current_content_selection_key(
             book_id, agentic_run_id,
         )
         await _write(
@@ -184,7 +184,7 @@ async def classify_content(
                     selected = "include"
                     decision_source = "conservative_fallback"
 
-            page = domains.bd.ingestion.ai.schemas.ContentSelectionPage(
+            page = domains.bd.ingestion.ai.content_selection.schemas.ContentSelectionPage(
                 page_number = page_number,
                 role = role,
                 confidence = confidence,
@@ -226,7 +226,7 @@ async def classify_content(
                 ),
             )
 
-    manifest = domains.bd.ingestion.ai.schemas.ContentSelectionManifest(
+    manifest = domains.bd.ingestion.ai.content_selection.schemas.ContentSelectionManifest(
         classifier_version = domains.bd.ingestion.ai.content_selection.versions.CONTENT_CLASSIFIER_VERSION,
         book_id = book_id,
         extraction_run_id = extraction_run_id,
@@ -239,7 +239,7 @@ async def classify_content(
     content = _json_body(manifest.model_dump(mode = "json"))
     digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
     await _write(write_artifact, output_key, content, "application/json")
-    pointer_key = domains.bd.ingestion.storage.keys.agentic_current_content_selection_key(book_id, agentic_run_id)
+    pointer_key = domains.bd.ingestion.source.storage.keys.agentic_current_content_selection_key(book_id, agentic_run_id)
     await _write(
         write_artifact,
         pointer_key,

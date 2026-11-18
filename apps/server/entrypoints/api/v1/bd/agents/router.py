@@ -169,7 +169,7 @@ async def ask_stream(payload: schemas.AskRequest, request: Request) -> Streaming
     prior_book = await domains.bd.ask.conversation.service.thread_book_id(payload.thread_id)
     if prior_book is not None and prior_book != payload.book_id:
         raise HTTPException(status_code = 409, detail = "An Ask thread is locked to its original book")
-    index = await domains.bd.ingestion.ai.retrieval_index.service.read_current_index(payload.book_id)
+    index = await domains.bd.rag.service.read_current_index(payload.book_id)
     if index is None:
         raise HTTPException(
             status_code = 409,

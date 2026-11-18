@@ -143,7 +143,7 @@ async def enrich_visuals(
         nonlocal completed, converted, failed
         if cancel_check is not None and await cancel_check():
             raise asyncio.CancelledError
-        figure_key = domains.bd.ingestion.storage.keys.figure_key(
+        figure_key = domains.bd.ingestion.source.storage.keys.figure_key(
             book_id,
             figure_name,
             state["extraction_run_id"],
@@ -191,7 +191,7 @@ async def enrich_visuals(
                 )
                 for visual_version in domains.bd.ingestion.ai.versions.VISUAL_ENRICHMENT_COMPATIBLE_VERSIONS
             )
-            cache_key = domains.bd.ingestion.storage.keys.agentic_visual_figure_key(
+            cache_key = domains.bd.ingestion.source.storage.keys.agentic_visual_figure_key(
                 book_id,
                 run_id,
                 page_number,
@@ -281,7 +281,7 @@ async def enrich_visuals(
             previous = marker.end()
         chunks.append(markdown[previous:])
         enriched = "".join(chunks)
-        visual_key = domains.bd.ingestion.storage.keys.agentic_visual_artifacts_key(book_id, run_id, page_number)
+        visual_key = domains.bd.ingestion.source.storage.keys.agentic_visual_artifacts_key(book_id, run_id, page_number)
         visual_payload = {
             "schema_version": domains.bd.ingestion.ai.versions.VISUAL_ENRICHMENT_VERSION,
             "page_number": page_number,
@@ -302,7 +302,7 @@ async def enrich_visuals(
         visual_content = _json(visual_payload)
         await _write(write_artifact, visual_key, visual_content, "application/json")
         if converted_figures:
-            enriched_key = domains.bd.ingestion.storage.keys.agentic_visual_page_key(book_id, run_id, page_number)
+            enriched_key = domains.bd.ingestion.source.storage.keys.agentic_visual_page_key(book_id, run_id, page_number)
             await _write(write_artifact, enriched_key, enriched, "text/markdown; charset=utf-8")
             enriched_digest = _sha256(enriched)
         else:

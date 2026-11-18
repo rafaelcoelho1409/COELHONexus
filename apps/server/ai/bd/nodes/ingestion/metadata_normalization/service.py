@@ -94,7 +94,7 @@ async def normalize_metadata(
         "errors": errors,
     }
     content = json.dumps(artifact, ensure_ascii = False, separators = (",", ":"), sort_keys = True)
-    key = domains.bd.ingestion.storage.keys.agentic_book_metadata_key(
+    key = domains.bd.ingestion.source.storage.keys.agentic_book_metadata_key(
         state["book_id"], state["agentic_run_id"],
     )
     result = write_artifact(key, content, "application/json")

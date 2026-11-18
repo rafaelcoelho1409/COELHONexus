@@ -1,5 +1,5 @@
+"""Limits and workflow identifiers for agentic Book Distiller ingestion."""
 from __future__ import annotations
-
 
 PAGE_AUDIT_CONCURRENCY = 16
 PAGE_REPAIR_CONCURRENCY = 8
@@ -29,7 +29,6 @@ VERIFIED_CODES = ("structure", "other")
 VERIFY_BELOW_CONFIDENCE = 0.8
 MAX_VERIFIER_CONTEXT_CHARS = 3000
 # Publication check: a page may lose no more letters and digits than this (the larger of the two) between source and output.
-PROCESSED_BOOK_READ_CONCURRENCY = 16
 CONTENTS_RECONCILIATION_BATCH_SIZE = 20
 CONTENTS_RECONCILIATION_MIN_BATCH_SIZE = 10
 AGENTIC_CANCEL_POLL_INTERVAL_SECONDS = 1.0
@@ -40,6 +39,7 @@ SOURCE_PAGE_IMAGE_JPEG_QUALITY = 82
 VISUAL_ENRICHMENT_CONCURRENCY = 4
 VISUAL_FIGURE_MAX_BYTES = 8 * 1024 * 1024
 VISUAL_CONTEXT_CHARS = 1600
+# Keep the registered Celery ID stable across the domain-module move.
 TASK_NAME = "domains.bd.ingestion.ai.task.run_ingestion_ai"
 AUTO_RUN_ID_PREFIX = "auto-"
 GRAPH_NODES = (

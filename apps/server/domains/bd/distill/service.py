@@ -10,9 +10,11 @@ import time
 import uuid
 from typing import Any
 
-import ai, domains
-import infra
 from langgraph.types import Overwrite
+
+import ai
+import domains
+import infra
 
 from . import keys, params, progress, schemas, versions
 
@@ -208,7 +210,7 @@ async def read_current_run(
     if not _safe_segment(run_id):
         return None
     run = await read_run(book_id, run_id, storage = storage)
-    source = await domains.bd.ingestion.storage.service.read_manifest(storage, book_id)
+    source = await domains.bd.ingestion.source.storage.service.read_manifest(storage, book_id)
     if run is None or source is None or source.get("extraction_id") != run["extraction_run_id"]:
         return None
     return run
@@ -254,13 +256,13 @@ async def create_distill_run(
             blocking_timeout = 30,
         ),
     ):
-        source_manifest = await domains.bd.ingestion.storage.service.read_manifest(storage, book_id)
-        if source_manifest is None or source_manifest.get("status") != domains.bd.ingestion.storage.params.STATUS_DONE:
+        source_manifest = await domains.bd.ingestion.source.storage.service.read_manifest(storage, book_id)
+        if source_manifest is None or source_manifest.get("status") != domains.bd.ingestion.source.storage.params.STATUS_DONE:
             raise ValueError("book extraction must be complete before Distill can start")
         extraction_run_id = source_manifest.get("extraction_id")
         if not _safe_segment(extraction_run_id):
             raise ValueError("the completed extraction has no valid run ID")
-        source_manifest_key = domains.bd.ingestion.storage.keys.manifest_key(book_id)
+        source_manifest_key = domains.bd.ingestion.source.storage.keys.manifest_key(book_id)
         source_manifest_sha256 = _canonical_sha256(source_manifest)
         page_count = source_manifest.get("n_pages")
         if type(page_count) is not int or page_count < 1:
@@ -275,12 +277,12 @@ async def create_distill_run(
         if qa_manifest is None:
             raise ValueError("a completed ingestion QA run is required before Distill")
         qa_run_id = qa_manifest["agentic_run_id"]
-        qa_manifest_key = domains.bd.ingestion.storage.keys.agentic_manifest_key(book_id, qa_run_id)
+        qa_manifest_key = domains.bd.ingestion.source.storage.keys.agentic_manifest_key(book_id, qa_run_id)
         qa_manifest_content = await storage.read_text(qa_manifest_key)
-        qa_manifest = domains.bd.ingestion.ai.schemas.IngestionAIRunManifest.model_validate_json(
+        qa_manifest = domains.bd.ingestion.ai.runs.schemas.IngestionAIRunManifest.model_validate_json(
             qa_manifest_content,
         ).model_dump(mode = "json")
-        if qa_manifest.get("status") != domains.bd.ingestion.ai.schemas.AgenticRunStatus.DONE.value:
+        if qa_manifest.get("status") != domains.bd.ingestion.ai.runs.schemas.AgenticRunStatus.DONE.value:
             raise ValueError("the selected ingestion QA run is not complete")
         if qa_manifest.get("quality_status") not in {"complete", "complete_with_review"}:
             raise ValueError("the selected ingestion QA run has no publishable quality result")
@@ -309,6 +311,7 @@ async def create_distill_run(
                 selection,
                 selection_key,
                 selection_sha256,
+                ingestion_ai_run = qa_manifest,
                 storage = storage,
             )
         )
@@ -837,7 +840,7 @@ async def run_distill(
             "Redeploy the Celery worker before resuming."
         )
 
-    source_manifest = await domains.bd.ingestion.storage.service.read_manifest(storage, book_id)
+    source_manifest = await domains.bd.ingestion.source.storage.service.read_manifest(storage, book_id)
     if source_manifest is None or source_manifest.get("extraction_id") != manifest["extraction_run_id"]:
         raise ValueError("the book extraction changed after this Distill run was created")
     if _canonical_sha256(source_manifest) != manifest["source_manifest_sha256"]:
@@ -849,7 +852,7 @@ async def run_distill(
         selection_content = await storage.read_text(manifest["content_selection_key"])
         if hashlib.sha256(selection_content.encode("utf-8")).hexdigest() != manifest["content_selection_sha256"]:
             raise ValueError("the content-selection revision changed after this Distill run was created")
-        selection = domains.bd.ingestion.ai.schemas.ContentSelectionManifest.model_validate_json(selection_content)
+        selection = domains.bd.ingestion.ai.content_selection.schemas.ContentSelectionManifest.model_validate_json(selection_content)
         if (
             selection.book_id != book_id
             or selection.extraction_run_id != manifest["extraction_run_id"]
@@ -865,7 +868,7 @@ async def run_distill(
         processed_content = await storage.read_text(manifest["processed_book_key"])
         if hashlib.sha256(processed_content.encode("utf-8")).hexdigest() != manifest["processed_book_sha256"]:
             raise ValueError("the pinned processed-book manifest failed its integrity check")
-        processed = domains.bd.ingestion.ai.schemas.ProcessedBookManifest.model_validate_json(processed_content)
+        processed = domains.bd.ingestion.ai.processed_book.schemas.ProcessedBookManifest.model_validate_json(processed_content)
         if (
             processed.book_id != book_id
             or processed.agentic_run_id != manifest["ingestion_ai_run_id"]

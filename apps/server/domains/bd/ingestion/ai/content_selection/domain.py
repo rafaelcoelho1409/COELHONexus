@@ -1,30 +1,9 @@
 """Pure page selection and versioned selection-manifest rules."""
 from __future__ import annotations
+from . import params, patterns, schemas, versions
 
 import json
-import re
 from typing import Any
-
-from .. import schemas
-from . import params, versions
-
-
-_CONTENTS_TITLE = re.compile(
-    r"^(?:(?:brief|detailed)\s+)?(?:table\s+of\s+)?contents"
-    r"(?:\s+(?:in\s+detail|continued|\(continued\)))?\s*[:.]?$",
-    re.I,
-)
-_CONTENTS_LEADER = re.compile(
-    r"^\s*\S.{1,180}?(?:\.{2,}|…{2,}|·{2,}|_{2,}|\t+)\s*(?:\d{1,4}|[ivxlcdm]{1,8})\s*$",
-    re.I,
-)
-_CONTENTS_NUMBERED_ENTRY = re.compile(
-    r"^\s*(?:(?:chapter|part|appendix)\s+)?(?:\d+(?:\.\d+)*|[ivxlcdm]+)[.)]?\s+\S.{2,140}?"
-    r"\s{2,}(?:\d{1,4}|[ivxlcdm]{1,8})\s*$",
-    re.I,
-)
-_CONTENTS_TRAILING_PAGE = re.compile(r"^\s*\S.{2,160}?\s{2,}(?:\d{1,4}|[ivxlcdm]{1,8})\s*$", re.I)
-_CONTENTS_TABLE_PAGE = re.compile(r"^[.\s·…]*(?:\d{1,4}|[ivxlcdm]{1,8})[.\s·…]*$", re.I)
 
 
 def is_source_contents_page(markdown: str, section_path: list[str] | None = None) -> bool:
@@ -33,20 +12,20 @@ def is_source_contents_page(markdown: str, section_path: list[str] | None = None
     if not lines:
         return False
 
-    normalized_lines = [re.sub(r"^\s{0,3}#{1,6}\s*|[*_`]", "", line).strip() for line in lines]
-    has_contents_title = any(_CONTENTS_TITLE.fullmatch(line) for line in normalized_lines[:8])
+    normalized_lines = [patterns.MARKDOWN_DECORATION_PREFIX_RE.sub("", line).strip() for line in lines]
+    has_contents_title = any(patterns.CONTENTS_TITLE_RE.fullmatch(line) for line in normalized_lines[:8])
     has_contents_section = any(
         isinstance(value, str)
-        and _CONTENTS_TITLE.fullmatch(re.sub(r"^\s{0,3}#{1,6}\s*|[*_`]", "", value).strip())
+        and patterns.CONTENTS_TITLE_RE.fullmatch(patterns.MARKDOWN_DECORATION_PREFIX_RE.sub("", value).strip())
         for value in (section_path or [])
     )
-    leader_entries = sum(_CONTENTS_LEADER.fullmatch(line) is not None for line in lines)
-    numbered_entries = sum(_CONTENTS_NUMBERED_ENTRY.fullmatch(line) is not None for line in lines)
-    trailing_page_entries = sum(_CONTENTS_TRAILING_PAGE.fullmatch(line) is not None for line in lines)
+    leader_entries = sum(patterns.CONTENTS_LEADER_RE.fullmatch(line) is not None for line in lines)
+    numbered_entries = sum(patterns.CONTENTS_NUMBERED_ENTRY_RE.fullmatch(line) is not None for line in lines)
+    trailing_page_entries = sum(patterns.CONTENTS_TRAILING_PAGE_RE.fullmatch(line) is not None for line in lines)
     table_page_entries = sum(
         len(cells := [cell.strip() for cell in line.strip("|").split("|")]) >= 2
         and bool(cells[0])
-        and _CONTENTS_TABLE_PAGE.fullmatch(cells[-1]) is not None
+        and patterns.CONTENTS_TABLE_PAGE_RE.fullmatch(cells[-1]) is not None
         for line in lines
         if line.startswith("|") and line.endswith("|")
     )

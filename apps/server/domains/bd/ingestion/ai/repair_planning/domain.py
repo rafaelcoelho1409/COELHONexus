@@ -1,34 +1,9 @@
 """Create page-local specialist assignments without importing agent or graph contracts."""
 from __future__ import annotations
+from . import params
 
 from collections.abc import Mapping
 from typing import Any
-
-
-_MECHANICAL_ISSUES = frozenset({"control_characters", "soft_hyphen"})
-_ISSUES_BY_ROLE = {
-    "text_repair": frozenset({
-        "control_characters",
-        "split_word",
-        "soft_hyphen",
-        "fused_marker",
-        "text_corruption",
-    }),
-    "structure": frozenset({"structure", "toc_noise", "table_or_index_layout"}),
-}
-_KNOWN_ISSUES = frozenset({
-    "control_characters",
-    "near_empty",
-    "split_word",
-    "soft_hyphen",
-    "toc_noise",
-    "fused_marker",
-    "text_corruption",
-    "structure",
-    "table_or_index_layout",
-    "metadata",
-    "other",
-})
 
 
 def _value(value: Any) -> Any:
@@ -72,15 +47,15 @@ def plan_repairs(state: Mapping[str, Any]) -> dict[str, Any]:
         ):
             raise ValueError(f"page {page_number} assessment has invalid or duplicate issue identities")
 
-        for role, allowed_codes in _ISSUES_BY_ROLE.items():
+        for role, allowed_codes in params.ISSUES_BY_ROLE.items():
             selected = []
             for issue in issues:
                 if not isinstance(issue, dict):
                     raise ValueError(f"page {page_number} contains a malformed issue")
                 issue_code = _value(issue.get("code"))
-                if not isinstance(issue_code, str) or issue_code not in _KNOWN_ISSUES:
+                if not isinstance(issue_code, str) or issue_code not in params.KNOWN_ISSUES:
                     raise ValueError(f"page {page_number} contains an unknown issue code")
-                if issue_code in allowed_codes and issue_code not in _MECHANICAL_ISSUES:
+                if issue_code in allowed_codes and issue_code not in params.MECHANICAL_ISSUES:
                     selected.append(issue)
             if not selected:
                 continue

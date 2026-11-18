@@ -15,8 +15,8 @@ async def index_pages(
     context = runtime.context
 
     async def operation() -> dict[str, Any]:
-        rows = await domains.bd.ingestion.ai.retrieval_index.service.read_sources(state, context.storage)
-        index_pages = domains.bd.ingestion.ai.retrieval_index.qdrant_index.service.index_pages
+        rows = await domains.bd.rag.service.read_sources(state, context.storage)
+        index_pages = domains.bd.rag.qdrant_index.service.index_pages
 
         async def report_pages(completed: int, _total: int) -> None:
             await context.progress_callback(

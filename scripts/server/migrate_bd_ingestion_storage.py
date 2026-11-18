@@ -28,8 +28,8 @@ import infra
 
 async def migrate(*, apply: bool, delete_legacy: bool) -> int:
     storage = infra.minio.service.get_storage()
-    service = domains.bd.ingestion.storage.service
-    keys = domains.bd.ingestion.storage.keys
+    service = domains.bd.ingestion.source.storage.service
+    keys = domains.bd.ingestion.source.storage.keys
     previous_ids = set(await storage.list_subfolders(keys.PREVIOUS_BOOKS_PREFIX))
     legacy_ids = set(await storage.list_subfolders(keys.LEGACY_BOOKS_PREFIX))
     book_ids = sorted(previous_ids | legacy_ids)

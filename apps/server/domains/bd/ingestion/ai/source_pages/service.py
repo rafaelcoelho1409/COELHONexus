@@ -1,5 +1,6 @@
 """Bounded rendering of original PDF pages for autonomous OCR-patch verification."""
 from __future__ import annotations
+from .. import params
 
 import asyncio
 import inspect
@@ -8,9 +9,7 @@ import logging
 from collections.abc import Awaitable, Callable
 from concurrent.futures import ThreadPoolExecutor
 
-import pypdfium2 as pdfium
-
-import domains
+from pypdfium2 import PdfDocument
 
 
 logger = logging.getLogger(__name__)
@@ -46,7 +45,7 @@ class PdfPageImageReader:
             return None
         if (
             self._source_size_bytes is not None
-            and self._source_size_bytes > domains.bd.ingestion.ai.params.SOURCE_PDF_VERIFY_MAX_BYTES
+            and self._source_size_bytes > params.SOURCE_PDF_VERIFY_MAX_BYTES
         ):
             self._unavailable_reason = "original PDF exceeds the visual-verification size limit"
             return None
@@ -93,13 +92,13 @@ class PdfPageImageReader:
         if not isinstance(content, bytes) or not content.startswith(b"%PDF-"):
             self._unavailable_reason = "the original source is not a readable PDF"
             return
-        if len(content) > domains.bd.ingestion.ai.params.SOURCE_PDF_VERIFY_MAX_BYTES:
+        if len(content) > params.SOURCE_PDF_VERIFY_MAX_BYTES:
             self._unavailable_reason = "original PDF exceeds the visual-verification size limit"
             return
         self._executor = ThreadPoolExecutor(max_workers = 1, thread_name_prefix = "bd-pdf-evidence")
         loop = asyncio.get_running_loop()
         try:
-            self._document = await loop.run_in_executor(self._executor, pdfium.PdfDocument, content)
+            self._document = await loop.run_in_executor(self._executor, PdfDocument, content)
             page_count = await loop.run_in_executor(self._executor, len, self._document)
             if page_count != self._expected_page_count:
                 self._unavailable_reason = "original PDF page count does not match the extraction"
@@ -131,18 +130,18 @@ class PdfPageImageReader:
         source_image = None
         image = None
         try:
-            bitmap = page.render(scale = domains.bd.ingestion.ai.params.SOURCE_PAGE_IMAGE_SCALE)
+            bitmap = page.render(scale = params.SOURCE_PAGE_IMAGE_SCALE)
             source_image = bitmap.to_pil()
             image = source_image.convert("RGB")
             image.thumbnail((
-                domains.bd.ingestion.ai.params.SOURCE_PAGE_IMAGE_MAX_DIMENSION,
-                domains.bd.ingestion.ai.params.SOURCE_PAGE_IMAGE_MAX_DIMENSION,
+                params.SOURCE_PAGE_IMAGE_MAX_DIMENSION,
+                params.SOURCE_PAGE_IMAGE_MAX_DIMENSION,
             ))
             output = io.BytesIO()
             image.save(
                 output,
                 format = "JPEG",
-                quality = domains.bd.ingestion.ai.params.SOURCE_PAGE_IMAGE_JPEG_QUALITY,
+                quality = params.SOURCE_PAGE_IMAGE_JPEG_QUALITY,
                 optimize = True,
             )
             return output.getvalue()

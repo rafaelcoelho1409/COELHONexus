@@ -35,13 +35,13 @@ def retrieval_index_graph(checkpointer: Any | None = None):
     workflow.add_edge("pin_sources", "elasticsearch")
     workflow.add_conditional_edges(
         "elasticsearch",
-        domains.bd.ingestion.ai.retrieval_index.domain.dispatch_to_stores,
+        domains.bd.rag.domain.dispatch_to_stores,
         ["qdrant", "neo4j"],
     )
     workflow.add_edge(["qdrant", "neo4j"], "publish_retrieval_index")
     workflow.add_conditional_edges(
         "qdrant",
-        lambda state: domains.bd.ingestion.ai.retrieval_index.domain.publish_after_replayed_store(
+        lambda state: domains.bd.rag.domain.publish_after_replayed_store(
             state,
             "qdrant",
         ),
@@ -49,7 +49,7 @@ def retrieval_index_graph(checkpointer: Any | None = None):
     )
     workflow.add_conditional_edges(
         "neo4j",
-        lambda state: domains.bd.ingestion.ai.retrieval_index.domain.publish_after_replayed_store(
+        lambda state: domains.bd.rag.domain.publish_after_replayed_store(
             state,
             "neo4j",
         ),

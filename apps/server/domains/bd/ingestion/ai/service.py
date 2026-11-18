@@ -1,8 +1,18 @@
 """Run integration between completed Book Distiller extractions and the AI graph."""
 from __future__ import annotations
-import ai, domains, infra
-from . import content_selection, schemas
-
+import ai, infra
+from . import (
+    content_selection,
+    params,
+    processed_book,
+    progress,
+    runs,
+    schemas,
+    source_pages,
+    versions,
+)
+from .. import source
+from .... import settings
 
 import asyncio
 import hashlib
@@ -22,13 +32,6 @@ class _InterruptedRunError(RuntimeError):
     """An Agentic AI worker stopped while its persisted run was still active."""
 
 
-def _safe_segment(value: object) -> bool:
-    return isinstance(value, str) and bool(value) and all(
-        character.isascii() and (character.isalnum() or character in "-_")
-        for character in value
-    )
-
-
 def _is_missing_storage_object(error: Exception) -> bool:
     if isinstance(error, FileNotFoundError):
         return True
@@ -43,7 +46,7 @@ async def _load_run_source(
     expected_extraction_id: str | None,
     storage: infra.minio.service.MinIOStorage,
 ) -> tuple[dict, str, str, str, list[dict]]:
-    source_manifest = await domains.bd.ingestion.storage.service.read_manifest(storage, book_id)
+    source_manifest = await source.storage.service.read_manifest(storage, book_id)
     if source_manifest is None:
         raise FileNotFoundError(f"book {book_id} has no ingestion manifest")
     extraction_id, request = _extraction_request(
@@ -61,7 +64,7 @@ async def _load_run_source(
             [item for item in section_path if isinstance(item, str)]
             if isinstance(section_path, list) else []
         )
-    source_manifest_key = domains.bd.ingestion.storage.keys.manifest_key(book_id)
+    source_manifest_key = source.storage.keys.manifest_key(book_id)
     source_manifest_json = json.dumps(
         source_manifest, ensure_ascii = False, separators = (",", ":"), sort_keys = True,
     )
@@ -85,7 +88,7 @@ def _manifest_fields(
     created_at: float,
 ) -> dict[str, Any]:
     return {
-        "workflow_version": domains.bd.ingestion.ai.versions.WORKFLOW_VERSION,
+        "workflow_version": versions.WORKFLOW_VERSION,
         "agentic_run_id": agentic_run_id,
         "book_id": book_id,
         "extraction_run_id": extraction_id,
@@ -94,10 +97,10 @@ def _manifest_fields(
         "expected_page_count": expected_page_count,
         "progress": _initial_progress(),
         "pages": [],
-        "book_metadata_key": domains.bd.ingestion.storage.keys.agentic_book_metadata_key(
+        "book_metadata_key": source.storage.keys.agentic_book_metadata_key(
             book_id, agentic_run_id,
         ),
-        "quality_report_key": domains.bd.ingestion.storage.keys.agentic_quality_report_key(
+        "quality_report_key": source.storage.keys.agentic_quality_report_key(
             book_id, agentic_run_id,
         ),
         "created_at": created_at,
@@ -110,7 +113,7 @@ async def _write_current_run_pointer(
     agentic_run_id: str,
     extraction_run_id: str,
 ) -> None:
-    key = domains.bd.ingestion.storage.keys.current_agentic_run_key(book_id)
+    key = source.storage.keys.current_agentic_run_key(book_id)
     payload = json.dumps(
         {"agentic_run_id": agentic_run_id, "extraction_run_id": extraction_run_id},
         separators = (",", ":"),
@@ -129,8 +132,8 @@ def _initial_progress() -> dict[str, Any]:
     return {
         "current_node": None,
         "node_status": {
-            node: domains.bd.ingestion.ai.schemas.AgenticNodeStatus.PENDING.value
-            for node in domains.bd.ingestion.ai.params.GRAPH_NODES
+            node: runs.schemas.AgenticNodeStatus.PENDING.value
+            for node in params.GRAPH_NODES
         },
         "audited_pages": [],
         "audit_warning_pages": [],
@@ -180,9 +183,9 @@ def _safe_error_message(error: Exception | str) -> str:
 
 
 def automatic_run_id(extraction_run_id: str) -> str:
-    if not _safe_segment(extraction_run_id):
+    if not schemas.is_safe_segment(extraction_run_id):
         raise ValueError("extraction_run_id must be a safe path segment")
-    return f"{domains.bd.ingestion.ai.params.AUTO_RUN_ID_PREFIX}{extraction_run_id}"
+    return f"{params.AUTO_RUN_ID_PREFIX}{extraction_run_id}"
 
 
 async def create_ingestion_ai_run(
@@ -192,12 +195,12 @@ async def create_ingestion_ai_run(
     agentic_run_id: str | None = None,
     storage: infra.minio.service.MinIOStorage | None = None,
 ) -> dict[str, Any]:
-    if not _safe_segment(book_id):
+    if not schemas.is_safe_segment(book_id):
         raise ValueError("book_id must be a safe path segment")
     async with (
         infra.redis.service.client() as redis,
         redis.lock(
-            domains.bd.ingestion.ai.progress.keys.book_mutation_lock_key(book_id),
+            progress.keys.book_mutation_lock_key(book_id),
             timeout = 120,
             blocking_timeout = 30,
         ),
@@ -218,13 +221,13 @@ async def _create_ingestion_ai_run_unlocked(
     storage: infra.minio.service.MinIOStorage | None = None,
 ) -> dict[str, Any]:
     """Create a queued candidate manifest before dispatching its Celery task."""
-    if not _safe_segment(book_id):
+    if not schemas.is_safe_segment(book_id):
         raise ValueError("book_id must be a safe path segment")
-    if expected_extraction_id is not None and not _safe_segment(expected_extraction_id):
+    if expected_extraction_id is not None and not schemas.is_safe_segment(expected_extraction_id):
         raise ValueError("expected_extraction_id must be a safe path segment")
     if agentic_run_id is None:
         agentic_run_id = uuid.uuid4().hex
-    if not _safe_segment(agentic_run_id):
+    if not schemas.is_safe_segment(agentic_run_id):
         raise ValueError("agentic_run_id must be a safe path segment")
     if storage is None:
         storage = infra.minio.service.get_storage()
@@ -235,15 +238,15 @@ async def _create_ingestion_ai_run_unlocked(
     active_run = await find_active_ingestion_ai_run(book_id, storage = storage)
     if active_run is not None and active_run["agentic_run_id"] != agentic_run_id:
         raise ValueError("another Agentic AI run is already active for this book")
-    manifest_key = domains.bd.ingestion.storage.keys.agentic_manifest_key(
+    manifest_key = source.storage.keys.agentic_manifest_key(
         book_id, agentic_run_id,
     )
     if await storage.exists(manifest_key):
         raise ValueError("agentic_run_id already exists; use a new ID to preserve immutable run history")
-    await domains.bd.ingestion.ai.progress.service.clear_cancel(book_id, agentic_run_id)
+    await progress.service.clear_cancel(book_id, agentic_run_id)
 
     now = time.time()
-    manifest = domains.bd.ingestion.ai.schemas.IngestionAIRunManifest(
+    manifest = runs.schemas.IngestionAIRunManifest(
         **_manifest_fields(
             book_id,
             agentic_run_id,
@@ -253,7 +256,7 @@ async def _create_ingestion_ai_run_unlocked(
             len(source_page_refs),
             now,
         ),
-        status = domains.bd.ingestion.ai.schemas.AgenticRunStatus.QUEUED,
+        status = runs.schemas.AgenticRunStatus.QUEUED,
         updated_at = now,
     )
     await storage.write(
@@ -306,32 +309,32 @@ async def read_current_ingestion_ai_run(
     """Read the most recently active/current candidate for the book's extraction."""
     if storage is None:
         storage = infra.minio.service.get_storage()
-    source_manifest = await domains.bd.ingestion.storage.service.read_manifest(storage, book_id)
-    if source_manifest is None or source_manifest.get("status") != domains.bd.ingestion.storage.params.STATUS_DONE:
+    source_manifest = await source.storage.service.read_manifest(storage, book_id)
+    if source_manifest is None or source_manifest.get("status") != source.storage.params.STATUS_DONE:
         return None
     extraction_run_id = source_manifest.get("extraction_id")
-    if not _safe_segment(extraction_run_id):
+    if not schemas.is_safe_segment(extraction_run_id):
         return None
-    pointer_key = domains.bd.ingestion.storage.keys.current_agentic_run_key(book_id)
+    pointer_key = source.storage.keys.current_agentic_run_key(book_id)
     if await storage.exists(pointer_key):
-        pointer = domains.bd.ingestion.storage.domain.parse_json(
+        pointer = source.storage.domain.parse_json(
             await storage.read_text(pointer_key),
             {},
         )
         if isinstance(pointer, dict) and pointer.get("agentic_run_id") is None:
             return None
         run_id = pointer.get("agentic_run_id") if isinstance(pointer, dict) else None
-        if _safe_segment(run_id):
+        if schemas.is_safe_segment(run_id):
             current = await read_ingestion_ai_run(book_id, run_id, storage = storage)
             if current is not None and current.get("extraction_run_id") == extraction_run_id:
                 return current
     run_ids = await storage.list_subfolders(
-        domains.bd.ingestion.storage.keys.agentic_runs_prefix(book_id),
+        source.storage.keys.agentic_runs_prefix(book_id),
     )
     runs = await asyncio.gather(*(
         read_ingestion_ai_run(book_id, run_id, storage = storage)
         for run_id in run_ids
-        if _safe_segment(run_id)
+        if schemas.is_safe_segment(run_id)
     ))
     current_runs = [
         run for run in runs
@@ -383,25 +386,25 @@ async def read_display_page(
     page_number: int,
     *,
     storage: infra.minio.service.MinIOStorage | None = None,
-    source: str | None = None,
+    page_source: str | None = None,
 ) -> tuple[str | None, str, list[str]]:
     """Return a completed automatic AI page when available, otherwise the immutable Docling page.
 
-    `source` pins one side for comparison: "docling" always reads the raw page; "agentic" reads the AI page or nothing."""
+    `page_source` pins one side for comparison: "docling" always reads the raw page; "agentic" reads the AI page or nothing."""
     if storage is None:
         storage = infra.minio.service.get_storage()
-    if source != "docling":
+    if page_source != "docling":
         run = await read_current_ingestion_ai_run(book_id, storage = storage)
         if run is not None and page_number in run["progress"]["processed_pages"]:
             artifact = next((item for item in run["pages"] if item["page_number"] == page_number), None)
             normalized_key = artifact.get("enriched_key") if artifact is not None else None
-            visual_key = domains.bd.ingestion.storage.keys.agentic_visual_page_key(
+            visual_key = source.storage.keys.agentic_visual_page_key(
                 book_id, run["agentic_run_id"], page_number,
             )
             try:
                 if normalized_key is None and await storage.exists(visual_key):
                     markdown = await storage.read_text(visual_key)
-                    artifacts_key = domains.bd.ingestion.storage.keys.agentic_visual_artifacts_key(
+                    artifacts_key = source.storage.keys.agentic_visual_artifacts_key(
                         book_id, run["agentic_run_id"], page_number,
                     )
                     converted = []
@@ -416,7 +419,7 @@ async def read_display_page(
                 if normalized_key is None:
                     normalized_key = (
                         artifact["normalized_key"]
-                        if artifact is not None else domains.bd.ingestion.storage.keys.agentic_page_key(
+                        if artifact is not None else source.storage.keys.agentic_page_key(
                             book_id, run["agentic_run_id"], page_number,
                         )
                     )
@@ -427,14 +430,14 @@ async def read_display_page(
                     if artifact is not None else None
                 )
                 if expected_sha256 and hashlib.sha256(markdown.encode("utf-8")).hexdigest() != expected_sha256:
-                    if source == "agentic":
+                    if page_source == "agentic":
                         return None, "agentic", []
                 return markdown, "agentic", converted
             except FileNotFoundError:
                 pass
-        if source == "agentic":
+        if page_source == "agentic":
             return None, "agentic", []
-    markdown = await domains.bd.ingestion.storage.service.read_page(storage, book_id, page_number)
+    markdown = await source.storage.service.read_page(storage, book_id, page_number)
     return markdown, "docling", []
 
 
@@ -532,16 +535,14 @@ async def read_ingestion_ai_run(
     storage: infra.minio.service.MinIOStorage | None = None,
 ) -> dict[str, Any] | None:
     """Read one persisted candidate manifest for API status polling."""
-    if not _safe_segment(book_id) or not _safe_segment(agentic_run_id):
+    if not schemas.is_safe_segment(book_id) or not schemas.is_safe_segment(agentic_run_id):
         raise ValueError("book_id and agentic_run_id must be safe path segments")
     if storage is None:
         storage = infra.minio.service.get_storage()
-    manifest_key = domains.bd.ingestion.storage.keys.agentic_manifest_key(
-        book_id, agentic_run_id,
-    )
+    manifest_key = source.storage.keys.agentic_manifest_key(book_id, agentic_run_id)
     if not await storage.exists(manifest_key):
         return None
-    manifest = domains.bd.ingestion.ai.schemas.IngestionAIRunManifest.model_validate_json(
+    manifest = runs.schemas.IngestionAIRunManifest.model_validate_json(
         await storage.read_text(manifest_key),
     )
     if manifest.book_id != book_id or manifest.agentic_run_id != agentic_run_id:
@@ -554,7 +555,7 @@ async def _ensure_ingestion_ai_worker_stopped(
     book_id: str,
     agentic_run_id: str,
 ) -> None:
-    if await domains.bd.ingestion.ai.progress.service.run_execution_lock_is_held(
+    if await progress.service.run_execution_lock_is_held(
         redis,
         book_id,
         agentic_run_id,
@@ -571,11 +572,11 @@ async def _recover_stale_running_ingestion_ai_run(
     storage: infra.minio.service.MinIOStorage,
 ) -> dict[str, Any]:
     """Mark an abandoned run failed only after its worker lease and progress have both gone stale."""
-    if manifest.get("status") != domains.bd.ingestion.ai.schemas.AgenticRunStatus.RUNNING.value:
+    if manifest.get("status") != runs.schemas.AgenticRunStatus.RUNNING.value:
         return manifest
     await _ensure_ingestion_ai_worker_stopped(redis, book_id, agentic_run_id)
     updated_at = manifest.get("updated_at")
-    stale_after = domains.bd.ingestion.ai.progress.params.RUN_EXECUTION_LOCK_STALE_AFTER_S
+    stale_after = progress.params.RUN_EXECUTION_LOCK_STALE_AFTER_S
     if type(updated_at) not in {int, float} or time.time() - updated_at < stale_after:
         raise ValueError("the Agentic AI run is still active; wait for the current graph node to finish")
 
@@ -590,8 +591,8 @@ async def _recover_stale_running_ingestion_ai_run(
     recovered = await read_ingestion_ai_run(book_id, agentic_run_id, storage = storage)
     if recovered is None:
         raise FileNotFoundError(f"agentic run {agentic_run_id} was not found for book {book_id}")
-    if recovered["status"] == domains.bd.ingestion.ai.schemas.AgenticRunStatus.FAILED.value:
-        await domains.bd.ingestion.ai.progress.service.emit(
+    if recovered["status"] == runs.schemas.AgenticRunStatus.FAILED.value:
+        await progress.service.emit(
             book_id,
             agentic_run_id,
             "run_failed",
@@ -607,13 +608,13 @@ async def read_selection(
     agentic_run_id: str,
     *,
     storage: infra.minio.service.MinIOStorage | None = None,
-) -> tuple[schemas.ContentSelectionManifest, str, str] | None:
+) -> tuple[content_selection.schemas.ContentSelectionManifest, str, str] | None:
     """Return the current page-selection revision, key, and exact content hash."""
-    if not _safe_segment(book_id) or not _safe_segment(agentic_run_id):
+    if not schemas.is_safe_segment(book_id) or not schemas.is_safe_segment(agentic_run_id):
         raise ValueError("book_id and agentic_run_id must be safe path segments")
     if storage is None:
         storage = infra.minio.service.get_storage()
-    pointer_key = domains.bd.ingestion.storage.keys.agentic_current_content_selection_key(
+    pointer_key = source.storage.keys.agentic_current_content_selection_key(
         book_id, agentic_run_id,
     )
     if not await storage.exists(pointer_key):
@@ -624,7 +625,7 @@ async def read_selection(
     revision = pointer.get("revision") if isinstance(pointer, dict) else None
     if type(revision) is not int or revision < 1 or not isinstance(key, str) or not isinstance(digest, str):
         raise ValueError("the current content-selection pointer is malformed")
-    expected_key = domains.bd.ingestion.storage.keys.agentic_content_selection_key(
+    expected_key = source.storage.keys.agentic_content_selection_key(
         book_id, agentic_run_id, revision,
     )
     if key != expected_key:
@@ -633,7 +634,7 @@ async def read_selection(
     actual_digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
     if actual_digest != digest:
         raise ValueError("the current content-selection revision failed its integrity check")
-    manifest = schemas.ContentSelectionManifest.model_validate_json(content)
+    manifest = content_selection.schemas.ContentSelectionManifest.model_validate_json(content)
     if manifest.book_id != book_id or manifest.agentic_run_id != agentic_run_id:
         raise ValueError("the current content selection belongs to a different run")
     return manifest, key, actual_digest
@@ -643,16 +644,16 @@ async def ensure_selection(
     book_id: str,
     agentic_run_id: str,
     *,
-    run_manifest: dict[str, Any] | None = None,
+    ingestion_ai_run: dict[str, Any] | None = None,
     storage: infra.minio.service.MinIOStorage | None = None,
-) -> tuple[schemas.ContentSelectionManifest, str, str]:
+) -> tuple[content_selection.schemas.ContentSelectionManifest, str, str]:
     """Return a selection, migrating completed pre-classifier runs with a conservative default.
 
     Older completed runs have no content-selection artifact. Keep known blank pages excluded and
     retain every other page as unknown so a compatibility migration can never silently drop book
     content. The generated artifact is immutable and reviewed edits continue through revisions.
     """
-    if not _safe_segment(book_id) or not _safe_segment(agentic_run_id):
+    if not schemas.is_safe_segment(book_id) or not schemas.is_safe_segment(agentic_run_id):
         raise ValueError("book_id and agentic_run_id must be safe path segments")
     if storage is None:
         storage = infra.minio.service.get_storage()
@@ -660,7 +661,7 @@ async def ensure_selection(
     async with (
         infra.redis.service.client() as redis,
         redis.lock(
-            domains.bd.ingestion.ai.progress.keys.book_mutation_lock_key(book_id),
+            progress.keys.book_mutation_lock_key(book_id),
             timeout = 120,
             blocking_timeout = 30,
         ),
@@ -669,17 +670,17 @@ async def ensure_selection(
         if current is not None:
             return current
 
-        manifest = run_manifest or await read_ingestion_ai_run(book_id, agentic_run_id, storage = storage)
+        manifest = ingestion_ai_run or await read_ingestion_ai_run(book_id, agentic_run_id, storage = storage)
         if manifest is None:
             raise FileNotFoundError(f"Agentic ingestion run {agentic_run_id!r} was not found")
         if manifest.get("book_id") != book_id or manifest.get("agentic_run_id") != agentic_run_id:
             raise ValueError("the ingestion run does not match the requested content selection")
-        if manifest.get("status") != schemas.AgenticRunStatus.DONE.value:
+        if manifest.get("status") != runs.schemas.AgenticRunStatus.DONE.value:
             raise ValueError("content selection is available after ingestion completes")
 
         revision = 1
         while True:
-            key = domains.bd.ingestion.storage.keys.agentic_content_selection_key(
+            key = source.storage.keys.agentic_content_selection_key(
                 book_id, agentic_run_id, revision,
             )
             if not await storage.exists(key):
@@ -691,7 +692,7 @@ async def ensure_selection(
 
             content = await storage.read_text(key)
             try:
-                existing = schemas.ContentSelectionManifest.model_validate_json(content)
+                existing = content_selection.schemas.ContentSelectionManifest.model_validate_json(content)
             except ValueError:
                 revision += 1
                 continue
@@ -708,7 +709,7 @@ async def ensure_selection(
             digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
             break
 
-        pointer_key = domains.bd.ingestion.storage.keys.agentic_current_content_selection_key(
+        pointer_key = source.storage.keys.agentic_current_content_selection_key(
             book_id, agentic_run_id,
         )
         await storage.write(
@@ -730,16 +731,16 @@ async def apply_overrides(
     *,
     expected_revision: int,
     storage: infra.minio.service.MinIOStorage | None = None,
-) -> schemas.ContentSelectionManifest:
+) -> content_selection.schemas.ContentSelectionManifest:
     """Append a reviewed selection revision and only then move its current pointer."""
-    if not _safe_segment(book_id) or not _safe_segment(agentic_run_id):
+    if not schemas.is_safe_segment(book_id) or not schemas.is_safe_segment(agentic_run_id):
         raise ValueError("book_id and agentic_run_id must be safe path segments")
     if storage is None:
         storage = infra.minio.service.get_storage()
     async with (
         infra.redis.service.client() as redis,
         redis.lock(
-            domains.bd.ingestion.ai.progress.keys.book_mutation_lock_key(book_id),
+            progress.keys.book_mutation_lock_key(book_id),
             timeout = 120,
             blocking_timeout = 30,
         ),
@@ -755,7 +756,7 @@ async def _apply_selection_overrides_unlocked(
     overrides: list[dict[str, Any]],
     expected_revision: int,
     storage: infra.minio.service.MinIOStorage,
-) -> schemas.ContentSelectionManifest:
+) -> content_selection.schemas.ContentSelectionManifest:
     current = await read_selection(book_id, agentic_run_id, storage = storage)
     if current is None:
         raise FileNotFoundError("the ingestion run has no content selection")
@@ -771,31 +772,36 @@ async def _apply_selection_overrides_unlocked(
         return manifest
 
     revision = updated.revision
-    key = domains.bd.ingestion.storage.keys.agentic_content_selection_key(
+    key = source.storage.keys.agentic_content_selection_key(
         book_id, agentic_run_id, revision,
     )
     # A crash after writing the immutable revision but before moving the
     # current pointer can leave an unreferenced object. Skip it on retry.
     while await storage.exists(key):
         revision += 1
-        key = domains.bd.ingestion.storage.keys.agentic_content_selection_key(
+        key = source.storage.keys.agentic_content_selection_key(
             book_id, agentic_run_id, revision,
         )
     if revision != updated.revision:
         updated = updated.model_copy(update = {"revision": revision})
 
+    ingestion_ai_run = await read_ingestion_ai_run(book_id, agentic_run_id, storage = storage)
+    if ingestion_ai_run is None:
+        raise FileNotFoundError(f"Agentic ingestion run {agentic_run_id!r} was not found")
+
     content = content_selection.domain.selection_json(updated)
     digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
     await storage.write(key, content, content_type = "application/json")
-    processed, processed_key, processed_sha256 = await domains.bd.ingestion.ai.processed_book.service.ensure_for_selection(
+    processed, processed_key, processed_sha256 = await processed_book.service.ensure_for_selection(
         book_id,
         agentic_run_id,
         updated,
         key,
         digest,
+        ingestion_ai_run = ingestion_ai_run,
         storage = storage,
     )
-    pointer_key = domains.bd.ingestion.storage.keys.agentic_current_content_selection_key(
+    pointer_key = source.storage.keys.agentic_current_content_selection_key(
         book_id, agentic_run_id,
     )
     await storage.write(
@@ -807,7 +813,7 @@ async def _apply_selection_overrides_unlocked(
         ),
         content_type = "application/json",
     )
-    await domains.bd.ingestion.ai.processed_book.service.write_current_pointer(
+    await processed_book.service.write_current_pointer(
         book_id,
         agentic_run_id,
         processed.selection_revision,
@@ -828,15 +834,15 @@ async def find_active_ingestion_ai_run(
     if storage is None:
         storage = infra.minio.service.get_storage()
     run_ids = await storage.list_subfolders(
-        domains.bd.ingestion.storage.keys.agentic_runs_prefix(book_id),
+        source.storage.keys.agentic_runs_prefix(book_id),
     )
     for run_id in run_ids:
-        if not _safe_segment(run_id) or run_id == exclude_run_id:
+        if not schemas.is_safe_segment(run_id) or run_id == exclude_run_id:
             continue
         manifest = await read_ingestion_ai_run(book_id, run_id, storage = storage)
         if manifest is not None and manifest["status"] in {
-            domains.bd.ingestion.ai.schemas.AgenticRunStatus.QUEUED.value,
-            domains.bd.ingestion.ai.schemas.AgenticRunStatus.RUNNING.value,
+            runs.schemas.AgenticRunStatus.QUEUED.value,
+            runs.schemas.AgenticRunStatus.RUNNING.value,
         }:
             return manifest
     return None
@@ -844,17 +850,17 @@ async def find_active_ingestion_ai_run(
 
 async def cancel_ingestion_ai_run(book_id: str, agentic_run_id: str) -> dict[str, Any]:
     """Request a cooperative stop at a page, node, or cancellable LLM-call boundary."""
-    if not _safe_segment(book_id) or not _safe_segment(agentic_run_id):
+    if not schemas.is_safe_segment(book_id) or not schemas.is_safe_segment(agentic_run_id):
         raise ValueError("book_id and agentic_run_id must be safe path segments")
     async with (
         infra.redis.service.client() as redis,
         redis.lock(
-            domains.bd.ingestion.ai.progress.keys.book_mutation_lock_key(book_id),
+            progress.keys.book_mutation_lock_key(book_id),
             timeout = 120,
             blocking_timeout = 30,
         ),
         redis.lock(
-            domains.bd.ingestion.ai.progress.keys.run_mutation_lock_key(book_id, agentic_run_id),
+            progress.keys.run_mutation_lock_key(book_id, agentic_run_id),
             timeout = 120,
             blocking_timeout = 30,
         ),
@@ -863,16 +869,16 @@ async def cancel_ingestion_ai_run(book_id: str, agentic_run_id: str) -> dict[str
         if manifest is None:
             raise FileNotFoundError(f"agentic run {agentic_run_id} was not found for book {book_id}")
         if manifest["status"] not in {
-            domains.bd.ingestion.ai.schemas.AgenticRunStatus.QUEUED.value,
-            domains.bd.ingestion.ai.schemas.AgenticRunStatus.RUNNING.value,
+            runs.schemas.AgenticRunStatus.QUEUED.value,
+            runs.schemas.AgenticRunStatus.RUNNING.value,
         }:
             return {
                 "book_id": book_id,
                 "agentic_run_id": agentic_run_id,
                 "status": manifest["status"],
             }
-        await domains.bd.ingestion.ai.progress.service.request_cancel(book_id, agentic_run_id)
-        await domains.bd.ingestion.ai.progress.service.emit(
+        await progress.service.request_cancel(book_id, agentic_run_id)
+        await progress.service.emit(
             book_id,
             agentic_run_id,
             "run_cancelling",
@@ -915,18 +921,18 @@ async def delete_ingestion_ai_checkpoints(
 
 async def wipe_ingestion_ai_run(book_id: str, agentic_run_id: str) -> dict[str, Any]:
     """Delete one terminal candidate and its AI-only artifacts, counters, replay, and checkpoints."""
-    if not _safe_segment(book_id) or not _safe_segment(agentic_run_id):
+    if not schemas.is_safe_segment(book_id) or not schemas.is_safe_segment(agentic_run_id):
         raise ValueError("book_id and agentic_run_id must be safe path segments")
     storage = infra.minio.service.get_storage()
     async with (
         infra.redis.service.client() as redis,
         redis.lock(
-            domains.bd.ingestion.ai.progress.keys.book_mutation_lock_key(book_id),
+            progress.keys.book_mutation_lock_key(book_id),
             timeout = 3600,
             blocking_timeout = 30,
         ),
         redis.lock(
-            domains.bd.ingestion.ai.progress.keys.run_mutation_lock_key(book_id, agentic_run_id),
+            progress.keys.run_mutation_lock_key(book_id, agentic_run_id),
             timeout = 3600,
             blocking_timeout = 30,
         ),
@@ -936,8 +942,8 @@ async def wipe_ingestion_ai_run(book_id: str, agentic_run_id: str) -> dict[str, 
             raise FileNotFoundError(f"agentic run {agentic_run_id} was not found for book {book_id}")
         await _ensure_ingestion_ai_worker_stopped(redis, book_id, agentic_run_id)
         if manifest["status"] in {
-            domains.bd.ingestion.ai.schemas.AgenticRunStatus.QUEUED.value,
-            domains.bd.ingestion.ai.schemas.AgenticRunStatus.RUNNING.value,
+            runs.schemas.AgenticRunStatus.QUEUED.value,
+            runs.schemas.AgenticRunStatus.RUNNING.value,
         }:
             raise ValueError("stop the Agentic AI run and wait for it to finish before wiping it")
         active_run = await find_active_ingestion_ai_run(
@@ -949,16 +955,16 @@ async def wipe_ingestion_ai_run(book_id: str, agentic_run_id: str) -> dict[str, 
             raise ValueError("stop the other active Agentic AI run before wiping this run")
         await delete_ingestion_ai_checkpoints([manifest])
         removed = await storage.delete_prefix(
-            domains.bd.ingestion.storage.keys.agentic_prefix(book_id, agentic_run_id),
+            source.storage.keys.agentic_prefix(book_id, agentic_run_id),
         )
-        await domains.settings.llm_counter.service.delete_run("bd", agentic_run_id)
+        await settings.llm_counter.service.delete_run("bd", agentic_run_id)
         await redis.delete(
-            domains.bd.ingestion.ai.progress.keys.cancel_key(book_id, agentic_run_id),
-            domains.bd.ingestion.ai.progress.keys.snapshot_key(book_id, agentic_run_id),
+            progress.keys.cancel_key(book_id, agentic_run_id),
+            progress.keys.snapshot_key(book_id, agentic_run_id),
         )
-        pointer_key = domains.bd.ingestion.storage.keys.current_agentic_run_key(book_id)
+        pointer_key = source.storage.keys.current_agentic_run_key(book_id)
         if await storage.exists(pointer_key):
-            pointer = domains.bd.ingestion.storage.domain.parse_json(
+            pointer = source.storage.domain.parse_json(
                 await storage.read_text(pointer_key),
                 {},
             )
@@ -989,17 +995,17 @@ async def queue_ingestion_ai_resume(
     *,
     storage: infra.minio.service.MinIOStorage | None = None,
 ) -> dict[str, Any]:
-    if not _safe_segment(book_id) or not _safe_segment(agentic_run_id):
+    if not schemas.is_safe_segment(book_id) or not schemas.is_safe_segment(agentic_run_id):
         raise ValueError("book_id and agentic_run_id must be safe path segments")
     async with (
         infra.redis.service.client() as redis,
         redis.lock(
-            domains.bd.ingestion.ai.progress.keys.book_mutation_lock_key(book_id),
+            progress.keys.book_mutation_lock_key(book_id),
             timeout = 120,
             blocking_timeout = 30,
         ),
         redis.lock(
-            domains.bd.ingestion.ai.progress.keys.run_mutation_lock_key(book_id, agentic_run_id),
+            progress.keys.run_mutation_lock_key(book_id, agentic_run_id),
             timeout = 120,
             blocking_timeout = 30,
         ),
@@ -1033,11 +1039,11 @@ async def _queue_ingestion_ai_resume_unlocked(
         storage = storage,
     )
     if manifest["status"] not in {
-        domains.bd.ingestion.ai.schemas.AgenticRunStatus.FAILED.value,
-        domains.bd.ingestion.ai.schemas.AgenticRunStatus.CANCELLED.value,
+        runs.schemas.AgenticRunStatus.FAILED.value,
+        runs.schemas.AgenticRunStatus.CANCELLED.value,
     }:
         raise ValueError("only failed or cancelled agentic runs can be resumed")
-    if manifest.get("workflow_version") != domains.bd.ingestion.ai.versions.WORKFLOW_VERSION:
+    if manifest.get("workflow_version") != versions.WORKFLOW_VERSION:
         raise ValueError(
             "This run uses an older ingestion graph. Start a fresh Agentic AI run to use the current graph."
         )
@@ -1053,13 +1059,13 @@ async def _queue_ingestion_ai_resume_unlocked(
     )
     if extraction_id != manifest["extraction_run_id"] or source_manifest_sha256 != manifest["source_manifest_sha256"]:
         raise ValueError("the failed agentic run no longer matches the current extraction")
-    await domains.bd.ingestion.ai.progress.service.clear_cancel(book_id, agentic_run_id)
-    await domains.bd.ingestion.ai.progress.service.clear_events(book_id, agentic_run_id)
-    manifest["status"] = domains.bd.ingestion.ai.schemas.AgenticRunStatus.QUEUED.value
+    await progress.service.clear_cancel(book_id, agentic_run_id)
+    await progress.service.clear_events(book_id, agentic_run_id)
+    manifest["status"] = runs.schemas.AgenticRunStatus.QUEUED.value
     manifest["updated_at"] = max(time.time(), manifest["created_at"])
     manifest["finished_at"] = None
     manifest["error"] = None
-    manifest_key = domains.bd.ingestion.storage.keys.agentic_manifest_key(
+    manifest_key = source.storage.keys.agentic_manifest_key(
         book_id, agentic_run_id,
     )
     await storage.write(
@@ -1084,19 +1090,19 @@ async def queue_ingestion_ai_node_replay(
     storage: infra.minio.service.MinIOStorage | None = None,
 ) -> dict[str, Any]:
     """Queue a terminal run from a saved checkpoint immediately before one graph node."""
-    if not _safe_segment(book_id) or not _safe_segment(agentic_run_id):
+    if not schemas.is_safe_segment(book_id) or not schemas.is_safe_segment(agentic_run_id):
         raise ValueError("book_id and agentic_run_id must be safe path segments")
-    if node_id not in domains.bd.ingestion.ai.params.GRAPH_NODES:
+    if node_id not in params.GRAPH_NODES:
         raise ValueError(f"unknown ingestion graph node {node_id!r}")
     async with (
         infra.redis.service.client() as redis,
         redis.lock(
-            domains.bd.ingestion.ai.progress.keys.book_mutation_lock_key(book_id),
+            progress.keys.book_mutation_lock_key(book_id),
             timeout = 120,
             blocking_timeout = 30,
         ),
         redis.lock(
-            domains.bd.ingestion.ai.progress.keys.run_mutation_lock_key(book_id, agentic_run_id),
+            progress.keys.run_mutation_lock_key(book_id, agentic_run_id),
             timeout = 120,
             blocking_timeout = 30,
         ),
@@ -1114,12 +1120,12 @@ async def queue_ingestion_ai_node_replay(
             storage = storage,
         )
         if manifest["status"] not in {
-            domains.bd.ingestion.ai.schemas.AgenticRunStatus.DONE.value,
-            domains.bd.ingestion.ai.schemas.AgenticRunStatus.FAILED.value,
-            domains.bd.ingestion.ai.schemas.AgenticRunStatus.CANCELLED.value,
+            runs.schemas.AgenticRunStatus.DONE.value,
+            runs.schemas.AgenticRunStatus.FAILED.value,
+            runs.schemas.AgenticRunStatus.CANCELLED.value,
         }:
             raise ValueError("stop the active Agentic AI run before replaying a node")
-        if manifest.get("workflow_version") != domains.bd.ingestion.ai.versions.WORKFLOW_VERSION:
+        if manifest.get("workflow_version") != versions.WORKFLOW_VERSION:
             raise ValueError(
                 "This run uses an older ingestion graph. Start a fresh Agentic AI run to use the current graph."
             )
@@ -1163,9 +1169,9 @@ async def queue_ingestion_ai_node_replay(
         node_status = (manifest.get("progress") or {}).get("node_status", {})
         incomplete_predecessors = [
             predecessor
-            for predecessor in domains.bd.ingestion.ai.params.REPLAY_PREREQUISITES[node_id]
+            for predecessor in params.REPLAY_PREREQUISITES[node_id]
             if node_status.get(predecessor)
-            != domains.bd.ingestion.ai.schemas.AgenticNodeStatus.DONE.value
+            != runs.schemas.AgenticNodeStatus.DONE.value
         ]
         if incomplete_predecessors:
             predecessor = incomplete_predecessors[0]
@@ -1176,58 +1182,58 @@ async def queue_ingestion_ai_node_replay(
         await _checkpoint_before_ingestion_node(graph, graph_config, node_id)
 
         if node_id == "reconcile_contents":
-            await domains.bd.ingestion.ai.processed_book.service.clear_manifest_for_replay(
+            await processed_book.service.clear_manifest_for_replay(
                 book_id,
                 agentic_run_id,
                 replay_state["processed_book_revision"],
                 storage,
             )
 
-        descendants = set(domains.bd.ingestion.ai.params.REPLAY_DESCENDANTS[node_id])
+        descendants = set(params.REPLAY_DESCENDANTS[node_id])
         rerun_nodes = set(descendants)
         if node_id in {"classify_content", "normalize_metadata"}:
             branch_nodes = {"classify_content", "plan_repairs", "repair_pages", "normalize_metadata"}
             rerun_nodes.update(
                 branch_node
                 for branch_node in branch_nodes - descendants
-                if node_status.get(branch_node) != domains.bd.ingestion.ai.schemas.AgenticNodeStatus.DONE.value
+                if node_status.get(branch_node) != runs.schemas.AgenticNodeStatus.DONE.value
             )
-        progress = manifest.get("progress") or _initial_progress()
+        progress_state = manifest.get("progress") or _initial_progress()
         for node in descendants:
-            progress.setdefault("node_status", {})[node] = (
-                domains.bd.ingestion.ai.schemas.AgenticNodeStatus.PENDING.value
+            progress_state.setdefault("node_status", {})[node] = (
+                runs.schemas.AgenticNodeStatus.PENDING.value
             )
-        progress["current_node"] = None
+        progress_state["current_node"] = None
         if "audit_batch" in descendants:
-            progress["audited_pages"] = []
-            progress["audit_warning_pages"] = []
+            progress_state["audited_pages"] = []
+            progress_state["audit_warning_pages"] = []
         if "classify_content" in descendants:
-            progress["classified_pages"] = []
-            progress["selected_page_count"] = 0
-            progress["excluded_page_count"] = 0
+            progress_state["classified_pages"] = []
+            progress_state["selected_page_count"] = 0
+            progress_state["excluded_page_count"] = 0
         if "repair_pages" in descendants:
-            progress["processed_pages"] = []
-            progress["repaired_pages"] = []
-        progress["active_audit_pages"] = []
-        progress["active_repair_pages"] = []
-        progress["active_classification_pages"] = []
+            progress_state["processed_pages"] = []
+            progress_state["repaired_pages"] = []
+        progress_state["active_audit_pages"] = []
+        progress_state["active_repair_pages"] = []
+        progress_state["active_classification_pages"] = []
         if "enrich_visuals" in descendants:
-            progress["visual_candidate_count"] = 0
-            progress["visual_completed_count"] = 0
-            progress["visual_converted_count"] = 0
-            progress["visual_failed_count"] = 0
-        node_page_progress = progress.setdefault("node_page_progress", {})
+            progress_state["visual_candidate_count"] = 0
+            progress_state["visual_completed_count"] = 0
+            progress_state["visual_converted_count"] = 0
+            progress_state["visual_failed_count"] = 0
+        node_page_progress = progress_state.setdefault("node_page_progress", {})
         if isinstance(node_page_progress, dict):
             for node in {node_id, *descendants}:
                 node_page_progress.pop(node, None)
-        manifest["progress"] = progress
-        manifest["status"] = domains.bd.ingestion.ai.schemas.AgenticRunStatus.QUEUED.value
+        manifest["progress"] = progress_state
+        manifest["status"] = runs.schemas.AgenticRunStatus.QUEUED.value
         manifest["updated_at"] = max(time.time(), manifest["created_at"])
         manifest["finished_at"] = None
         manifest["error"] = None
         manifest["replay_from_node"] = node_id
 
-        prefix = domains.bd.ingestion.storage.keys.agentic_prefix(book_id, agentic_run_id)
+        prefix = source.storage.keys.agentic_prefix(book_id, agentic_run_id)
         artifacts_by_node = {
             "audit_batch": ("pages/", "assessments/", "patch-proposals/", "book-metadata.json", "quality-report.json", "content-selection/", "visual-enrichment/pages/", "processed-book/"),
             "classify_content": ("pages/", "patch-proposals/", "quality-report.json", "content-selection/", "visual-enrichment/pages/", "processed-book/"),
@@ -1251,22 +1257,22 @@ async def queue_ingestion_ai_node_replay(
         retained_counter_nodes = {
             counter_node
             for graph_node, counter_nodes in (
-                domains.bd.ingestion.ai.params.REPLAY_LLM_COUNTER_NODES_BY_GRAPH_NODE.items()
+                params.REPLAY_LLM_COUNTER_NODES_BY_GRAPH_NODE.items()
             )
             if graph_node not in rerun_nodes
             for counter_node in counter_nodes
         }
-        await domains.settings.llm_counter.service.retain_nodes("bd", agentic_run_id, retained_counter_nodes)
+        await settings.llm_counter.service.retain_nodes("bd", agentic_run_id, retained_counter_nodes)
 
-        manifest_key = domains.bd.ingestion.storage.keys.agentic_manifest_key(book_id, agentic_run_id)
+        manifest_key = source.storage.keys.agentic_manifest_key(book_id, agentic_run_id)
         await storage.write(
             manifest_key,
             json.dumps(manifest, ensure_ascii = False, separators = (",", ":"), sort_keys = True),
             content_type = "application/json",
         )
         await _write_current_run_pointer(storage, book_id, agentic_run_id, extraction_id)
-        await domains.bd.ingestion.ai.progress.service.clear_cancel(book_id, agentic_run_id)
-        await domains.bd.ingestion.ai.progress.service.clear_events(book_id, agentic_run_id)
+        await progress.service.clear_cancel(book_id, agentic_run_id)
+        await progress.service.clear_events(book_id, agentic_run_id)
         return manifest
 
 
@@ -1301,38 +1307,38 @@ async def mark_ingestion_ai_run_failed(
     """Persist a task-level failure, including failures before the graph starts."""
     manifest = await read_ingestion_ai_run(book_id, agentic_run_id, storage = storage)
     if manifest is None or manifest["status"] in {
-        domains.bd.ingestion.ai.schemas.AgenticRunStatus.DONE.value,
-        domains.bd.ingestion.ai.schemas.AgenticRunStatus.FAILED.value,
-        domains.bd.ingestion.ai.schemas.AgenticRunStatus.CANCELLED.value,
+        runs.schemas.AgenticRunStatus.DONE.value,
+        runs.schemas.AgenticRunStatus.FAILED.value,
+        runs.schemas.AgenticRunStatus.CANCELLED.value,
     }:
         return
     if storage is None:
         storage = infra.minio.service.get_storage()
     finished_at = max(time.time(), manifest["created_at"])
     error_text = _safe_error_message(error)
-    manifest["status"] = domains.bd.ingestion.ai.schemas.AgenticRunStatus.FAILED.value
+    manifest["status"] = runs.schemas.AgenticRunStatus.FAILED.value
     manifest["updated_at"] = finished_at
     manifest["finished_at"] = finished_at
     manifest["error"] = error_text[:500]
-    progress = manifest.get("progress") or _initial_progress()
-    progress["active_audit_pages"] = []
-    progress["active_repair_pages"] = []
-    progress["active_classification_pages"] = []
-    _clear_node_page_activity(progress)
-    current_node = progress.get("current_node")
+    progress_state = manifest.get("progress") or _initial_progress()
+    progress_state["active_audit_pages"] = []
+    progress_state["active_repair_pages"] = []
+    progress_state["active_classification_pages"] = []
+    _clear_node_page_activity(progress_state)
+    current_node = progress_state.get("current_node")
     if not current_node:
         current_node = next(
             (
-                node for node in domains.bd.ingestion.ai.params.GRAPH_NODES
-                if progress.get("node_status", {}).get(node) != domains.bd.ingestion.ai.schemas.AgenticNodeStatus.DONE.value
+                node for node in params.GRAPH_NODES
+                if progress_state.get("node_status", {}).get(node) != runs.schemas.AgenticNodeStatus.DONE.value
             ),
             None,
         )
-    if current_node in progress.get("node_status", {}):
-        progress["node_status"][current_node] = domains.bd.ingestion.ai.schemas.AgenticNodeStatus.FAILED.value
-    progress["current_node"] = current_node
-    manifest["progress"] = progress
-    manifest_key = domains.bd.ingestion.storage.keys.agentic_manifest_key(
+    if current_node in progress_state.get("node_status", {}):
+        progress_state["node_status"][current_node] = runs.schemas.AgenticNodeStatus.FAILED.value
+    progress_state["current_node"] = current_node
+    manifest["progress"] = progress_state
+    manifest_key = source.storage.keys.agentic_manifest_key(
         book_id, agentic_run_id,
     )
     await storage.write(
@@ -1346,16 +1352,16 @@ def _extraction_request(
     book_id: str,
     manifest: dict,
     expected_extraction_id: str | None,
-) -> tuple[str, domains.bd.ingestion.ai.schemas.ExtractionRequest]:
+) -> tuple[str, schemas.ExtractionRequest]:
     if manifest.get("book_id") != book_id:
         raise ValueError("the manifest book_id does not match the requested book")
 
     extraction_id = manifest.get("extraction_id")
-    if not _safe_segment(extraction_id):
+    if not schemas.is_safe_segment(extraction_id):
         raise ValueError("the manifest has no safe extraction_id")
     if expected_extraction_id is not None and extraction_id != expected_extraction_id:
         raise ValueError("the requested extraction_id is no longer current")
-    if manifest.get("status") != domains.bd.ingestion.storage.params.STATUS_DONE:
+    if manifest.get("status") != source.storage.params.STATUS_DONE:
         raise ValueError("only completed extraction runs can be inventoried")
 
     page_count = manifest.get("n_pages")
@@ -1367,7 +1373,7 @@ def _extraction_request(
     if any(not isinstance(page, dict) for page in pages):
         raise ValueError("every manifest page entry must be an object")
 
-    request = domains.bd.ingestion.ai.schemas.ExtractionRequest(
+    request = schemas.ExtractionRequest(
         book_id = book_id,
         extraction_run_id = extraction_id,
         extraction_status = manifest["status"],
@@ -1399,16 +1405,16 @@ async def run_page_audit(
 
     It calls the same `audit_page` as the full-book audit, so the auditor evaluation measures the real path. Pass
     `finding_verifier` to include the second reader."""
-    if not _safe_segment(book_id):
+    if not schemas.is_safe_segment(book_id):
         raise ValueError("book_id must be a safe path segment")
-    if expected_extraction_id is not None and not _safe_segment(expected_extraction_id):
+    if expected_extraction_id is not None and not schemas.is_safe_segment(expected_extraction_id):
         raise ValueError("expected_extraction_id must be a safe path segment")
     if type(page_number) is not int or page_number <= 0:
         raise ValueError("page_number must be a positive integer")
     if storage is None:
         storage = infra.minio.service.get_storage()
 
-    manifest = await domains.bd.ingestion.storage.service.read_manifest(storage, book_id)
+    manifest = await source.storage.service.read_manifest(storage, book_id)
     if manifest is None:
         raise FileNotFoundError(f"book {book_id} has no ingestion manifest")
 
@@ -1425,7 +1431,7 @@ async def run_page_audit(
         page_ref,
         markdown,
         auditor,
-        run_id = domains.bd.ingestion.ai.params.PAGE_AUDIT_EVALUATION_RUN_ID,
+        run_id = params.PAGE_AUDIT_EVALUATION_RUN_ID,
         verifier = finding_verifier,
     )
     return {
@@ -1459,28 +1465,28 @@ async def run_ingestion_ai(
 
     A caller that supplies its own auditor owns the whole agent set, so the second-reader verifier is built only for the
     default agents or when passed in."""
-    if not _safe_segment(book_id):
+    if not schemas.is_safe_segment(book_id):
         raise ValueError("book_id must be a safe path segment")
-    if expected_extraction_id is not None and not _safe_segment(expected_extraction_id):
+    if expected_extraction_id is not None and not schemas.is_safe_segment(expected_extraction_id):
         raise ValueError("expected_extraction_id must be a safe path segment")
     if agentic_run_id is None:
         agentic_run_id = uuid.uuid4().hex
-    if not _safe_segment(agentic_run_id):
+    if not schemas.is_safe_segment(agentic_run_id):
         raise ValueError("agentic_run_id must be a safe path segment")
     if storage is None:
         storage = infra.minio.service.get_storage()
 
-    domains.settings.chat.service.refresh_endpoint(force = True)
+    settings.chat.service.refresh_endpoint(force = True)
 
     (
         source_manifest, extraction_id, source_manifest_key, source_manifest_sha256, source_page_refs,
     ) = await _load_run_source(book_id, expected_extraction_id, storage)
-    output_manifest_key = domains.bd.ingestion.storage.keys.agentic_manifest_key(
+    output_manifest_key = source.storage.keys.agentic_manifest_key(
         book_id, agentic_run_id,
     )
     existing_manifest = None
     if await storage.exists(output_manifest_key):
-        existing_manifest = domains.bd.ingestion.ai.schemas.IngestionAIRunManifest.model_validate_json(
+        existing_manifest = runs.schemas.IngestionAIRunManifest.model_validate_json(
             await storage.read_text(output_manifest_key),
         )
         if existing_manifest.book_id != book_id or existing_manifest.agentic_run_id != agentic_run_id:
@@ -1490,16 +1496,16 @@ async def run_ingestion_ai(
         if existing_manifest.source_manifest_sha256 != source_manifest_sha256:
             raise ValueError("the source manifest changed since this agentic run was queued")
         resumable_statuses = {
-            domains.bd.ingestion.ai.schemas.AgenticRunStatus.QUEUED,
-            domains.bd.ingestion.ai.schemas.AgenticRunStatus.RUNNING,
-            domains.bd.ingestion.ai.schemas.AgenticRunStatus.FAILED,
-            domains.bd.ingestion.ai.schemas.AgenticRunStatus.CANCELLED,
+            runs.schemas.AgenticRunStatus.QUEUED,
+            runs.schemas.AgenticRunStatus.RUNNING,
+            runs.schemas.AgenticRunStatus.FAILED,
+            runs.schemas.AgenticRunStatus.CANCELLED,
         }
-        if existing_manifest.status == domains.bd.ingestion.ai.schemas.AgenticRunStatus.DONE:
+        if existing_manifest.status == runs.schemas.AgenticRunStatus.DONE:
             raise ValueError("completed agentic run IDs are immutable")
         if existing_manifest.status not in resumable_statuses:
             raise ValueError("only queued, running, failed, or cancelled agentic runs can be resumed")
-        if existing_manifest.status != domains.bd.ingestion.ai.schemas.AgenticRunStatus.QUEUED and not resume:
+        if existing_manifest.status != runs.schemas.AgenticRunStatus.QUEUED and not resume:
             raise ValueError("agentic_run_id already exists; set resume=True to continue this run")
         now = existing_manifest.created_at
         manifest_fields = existing_manifest.model_dump(
@@ -1519,7 +1525,7 @@ async def run_ingestion_ai(
             now,
         )
 
-    progress_state = domains.bd.ingestion.ai.schemas.AgenticRunProgress.model_validate(
+    progress_state = runs.schemas.AgenticRunProgress.model_validate(
         manifest_fields.get("progress") or _initial_progress(),
     ).model_dump(mode = "json")
     progress_state["active_audit_pages"] = []
@@ -1540,7 +1546,7 @@ async def run_ingestion_ai(
         if execution_check is not None:
             await execution_check()
         current_time = max(time.time(), now)
-        record = domains.bd.ingestion.ai.schemas.IngestionAIRunManifest(
+        record = runs.schemas.IngestionAIRunManifest(
             **manifest_fields,
             status = status,
             updated_at = current_time,
@@ -1689,19 +1695,19 @@ async def run_ingestion_ai(
                         or completed - previous_completed >= 10
                         or completed >= total
                     )
-            progress_state = domains.bd.ingestion.ai.schemas.AgenticRunProgress.model_validate(
+            progress_state = runs.schemas.AgenticRunProgress.model_validate(
                 progress_state,
             ).model_dump(mode = "json")
             manifest_fields["progress"] = progress_state
             if should_persist:
                 try:
-                    await persist_manifest(domains.bd.ingestion.ai.schemas.AgenticRunStatus.RUNNING)
+                    await persist_manifest(runs.schemas.AgenticRunStatus.RUNNING)
                 except Exception as error:
                     logger.warning(
                         f"[bd-agentic-progress] manifest update failed for {agentic_run_id}: "
                         f"{type(error).__name__}: {error}"
                     )
-            await domains.bd.ingestion.ai.progress.service.emit(
+            await progress.service.emit(
                 book_id,
                 agentic_run_id,
                 kind if isinstance(kind, str) else "progress",
@@ -1710,8 +1716,8 @@ async def run_ingestion_ai(
             )
 
     if existing_manifest is None:
-        await persist_manifest(domains.bd.ingestion.ai.schemas.AgenticRunStatus.QUEUED)
-    await persist_manifest(domains.bd.ingestion.ai.schemas.AgenticRunStatus.RUNNING)
+        await persist_manifest(runs.schemas.AgenticRunStatus.QUEUED)
+    await persist_manifest(runs.schemas.AgenticRunStatus.RUNNING)
 
     source_page_images = None
     default_text_repair = text_repair is None
@@ -1743,9 +1749,10 @@ async def run_ingestion_ai(
             try:
                 visual_extractor = ai.bd.agents.ingestion.visual_extractor.agent.visual_extractor()
 
-                async def read_source_figure(name: str) -> bytes:
-                    key = domains.bd.ingestion.storage.keys.figure_key(book_id, name, extraction_id)
+                async def load_source_figure(name: str) -> bytes:
+                    key = source.storage.keys.figure_key(book_id, name, extraction_id)
                     return await storage.read_bytes(key)
+                read_source_figure = load_source_figure
             except Exception as error:
                 logger.warning(
                     "[bd-visual-enrichment] extractor unavailable for %s/%s: %s",
@@ -1761,8 +1768,8 @@ async def run_ingestion_ai(
             if key == output_manifest_key:
                 value = json.loads(content)
                 value["progress"] = progress_state
-                if value.get("status") == domains.bd.ingestion.ai.schemas.AgenticRunStatus.DONE.value:
-                    await domains.settings.llm_counter.service.snapshot("bd", agentic_run_id)
+                if value.get("status") == runs.schemas.AgenticRunStatus.DONE.value:
+                    await settings.llm_counter.service.snapshot("bd", agentic_run_id)
                 content = json.dumps(
                     value, ensure_ascii = False, separators = (",", ":"), sort_keys = True,
                 )
@@ -1779,14 +1786,12 @@ async def run_ingestion_ai(
             and source_manifest.get("source_format", "pdf") == "pdf"
             and (
                 type(source_manifest.get("size_bytes")) is not int
-                or source_manifest["size_bytes"] <= domains.bd.ingestion.ai.params.SOURCE_PDF_VERIFY_MAX_BYTES
+                or source_manifest["size_bytes"] <= params.SOURCE_PDF_VERIFY_MAX_BYTES
             )
         ):
             try:
-                from .source_pages import service as source_page_service
-
-                source_page_images = source_page_service.PdfPageImageReader(
-                    lambda: domains.bd.ingestion.storage.service.read_source(storage, book_id, "pdf"),
+                source_page_images = source_pages.service.PdfPageImageReader(
+                    lambda: source.storage.service.read_source(storage, book_id, "pdf"),
                     source_size_bytes = source_manifest.get("size_bytes"),
                     expected_page_count = len(source_page_refs),
                 )
@@ -1800,7 +1805,7 @@ async def run_ingestion_ai(
             "book_id": book_id,
             "extraction_run_id": extraction_id,
             "agentic_run_id": agentic_run_id,
-            "workflow_version": domains.bd.ingestion.ai.versions.WORKFLOW_VERSION,
+            "workflow_version": versions.WORKFLOW_VERSION,
             "source_manifest_key": source_manifest_key,
             "source_manifest_sha256": source_manifest_sha256,
             "run_created_at": now,
@@ -1839,10 +1844,10 @@ async def run_ingestion_ai(
         else:
             snapshot = await graph.aget_state(config)
             if replay_from_node is not None:
-                if replay_from_node not in domains.bd.ingestion.ai.params.GRAPH_NODES:
+                if replay_from_node not in params.GRAPH_NODES:
                     raise ValueError(f"unknown saved ingestion replay node {replay_from_node!r}")
                 replay_config, _ = await _checkpoint_before_ingestion_node(graph, config, replay_from_node)
-                descendants = set(domains.bd.ingestion.ai.params.REPLAY_DESCENDANTS[replay_from_node])
+                descendants = set(params.REPLAY_DESCENDANTS[replay_from_node])
                 reset_state: dict[str, Any] = {}
                 if "audit_batch" in descendants:
                     reset_state.update(page_refs = [], page_audits = [])
@@ -1882,7 +1887,7 @@ async def run_ingestion_ai(
                         "classify_content", "plan_repairs", "repair_pages", "normalize_metadata",
                     )
                     if replay_node not in descendants
-                    and node_status.get(replay_node) == domains.bd.ingestion.ai.schemas.AgenticNodeStatus.DONE.value
+                    and node_status.get(replay_node) == runs.schemas.AgenticNodeStatus.DONE.value
                 ]
                 reset_state["replay_skip_nodes"] = replay_skip_nodes
                 replay_state_fields = {
@@ -1919,7 +1924,7 @@ async def run_ingestion_ai(
                 )
                 graph_input = None
             elif snapshot.next:
-                if manifest_fields.get("workflow_version") != domains.bd.ingestion.ai.versions.WORKFLOW_VERSION:
+                if manifest_fields.get("workflow_version") != versions.WORKFLOW_VERSION:
                     raise ValueError(
                         "This run uses an older ingestion graph checkpoint. Wipe this run and start a new "
                         "Agentic AI run to use the current graph structure."
@@ -1938,7 +1943,7 @@ async def run_ingestion_ai(
                         f"pending nodes {pending_nodes!r} for run {agentic_run_id}; checkpoint is authoritative"
                     )
             else:
-                manifest_fields["workflow_version"] = domains.bd.ingestion.ai.versions.WORKFLOW_VERSION
+                manifest_fields["workflow_version"] = versions.WORKFLOW_VERSION
                 graph_input = graph_state
                 logger.info(
                     f"[bd-agentic] starting graph from entry for book_id={book_id} "
@@ -1954,7 +1959,7 @@ async def run_ingestion_ai(
             )
         final_manifest = json.loads(await storage.read_text(output_manifest_key))
         final_manifest["replay_from_node"] = None
-        final_manifest["progress"] = domains.bd.ingestion.ai.schemas.AgenticRunProgress.model_validate(
+        final_manifest["progress"] = runs.schemas.AgenticRunProgress.model_validate(
             progress_state,
         ).model_dump(mode = "json")
         if execution_check is not None:
@@ -1964,15 +1969,15 @@ async def run_ingestion_ai(
             json.dumps(final_manifest, ensure_ascii = False, separators = (",", ":"), sort_keys = True),
             content_type = "application/json",
         )
-        await domains.bd.ingestion.ai.progress.service.emit(
+        await progress.service.emit(
             book_id,
             agentic_run_id,
             "run_done",
-            status = domains.bd.ingestion.ai.schemas.AgenticRunStatus.DONE.value,
+            status = runs.schemas.AgenticRunStatus.DONE.value,
             progress = progress_state,
         )
         return result
-    except domains.bd.ingestion.ai.progress.service.RunExecutionLeaseLostError:
+    except progress.service.RunExecutionLeaseLostError:
         async with progress_lock:
             progress_closed = True
         raise
@@ -1992,30 +1997,30 @@ async def run_ingestion_ai(
             progress_state["current_node"] = None
             progress_state["node_status"] = {
                 node: (
-                    domains.bd.ingestion.ai.schemas.AgenticNodeStatus.PENDING.value
-                    if status == domains.bd.ingestion.ai.schemas.AgenticNodeStatus.RUNNING.value
+                    runs.schemas.AgenticNodeStatus.PENDING.value
+                    if status == runs.schemas.AgenticNodeStatus.RUNNING.value
                     else status
                 )
                 for node, status in progress_state["node_status"].items()
             }
             manifest_fields["progress"] = progress_state
-        await domains.settings.llm_counter.service.snapshot("bd", agentic_run_id)
+        await settings.llm_counter.service.snapshot("bd", agentic_run_id)
         await persist_manifest(
-            domains.bd.ingestion.ai.schemas.AgenticRunStatus.CANCELLED,
+            runs.schemas.AgenticRunStatus.CANCELLED,
             finished_at = cancelled_at,
         )
-        await domains.bd.ingestion.ai.progress.service.emit(
+        await progress.service.emit(
             book_id,
             agentic_run_id,
             "run_cancelled",
-            status = domains.bd.ingestion.ai.schemas.AgenticRunStatus.CANCELLED.value,
+            status = runs.schemas.AgenticRunStatus.CANCELLED.value,
             progress = progress_state,
         )
         return {
             "book_id": book_id,
             "extraction_run_id": extraction_id,
             "agentic_run_id": agentic_run_id,
-            "status": domains.bd.ingestion.ai.schemas.AgenticRunStatus.CANCELLED.value,
+            "status": runs.schemas.AgenticRunStatus.CANCELLED.value,
             "progress": progress_state,
         }
     except Exception as error:
@@ -2030,29 +2035,29 @@ async def run_ingestion_ai(
             if not current_node:
                 current_node = next(
                     (
-                        node for node in domains.bd.ingestion.ai.params.GRAPH_NODES
+                        node for node in params.GRAPH_NODES
                         if progress_state.get("node_status", {}).get(node)
-                        != domains.bd.ingestion.ai.schemas.AgenticNodeStatus.DONE.value
+                        != runs.schemas.AgenticNodeStatus.DONE.value
                     ),
                     None,
                 )
             if current_node in progress_state.get("node_status", {}):
-                progress_state["node_status"][current_node] = domains.bd.ingestion.ai.schemas.AgenticNodeStatus.FAILED.value
+                progress_state["node_status"][current_node] = runs.schemas.AgenticNodeStatus.FAILED.value
             progress_state["current_node"] = current_node
             manifest_fields["progress"] = progress_state
         error_message = _safe_error_message(error)
         try:
-            await domains.settings.llm_counter.service.snapshot("bd", agentic_run_id)
+            await settings.llm_counter.service.snapshot("bd", agentic_run_id)
             await persist_manifest(
-                domains.bd.ingestion.ai.schemas.AgenticRunStatus.FAILED,
+                runs.schemas.AgenticRunStatus.FAILED,
                 finished_at = failed_at,
                 error = error_message,
             )
-            await domains.bd.ingestion.ai.progress.service.emit(
+            await progress.service.emit(
                 book_id,
                 agentic_run_id,
                 "run_failed",
-                status = domains.bd.ingestion.ai.schemas.AgenticRunStatus.FAILED.value,
+                status = runs.schemas.AgenticRunStatus.FAILED.value,
                 error = error_message,
                 progress = progress_state,
             )

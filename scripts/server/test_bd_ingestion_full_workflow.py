@@ -33,7 +33,7 @@ from domains.bd.ingestion.ai.service import (
     read_page_quality,
     run_ingestion_ai,
 )
-from domains.bd.ingestion.storage import keys
+from domains.bd.ingestion.source.storage import keys
 
 
 async def no_progress(*_args, **_kwargs):

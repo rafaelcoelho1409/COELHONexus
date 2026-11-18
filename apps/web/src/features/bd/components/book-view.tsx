@@ -809,13 +809,6 @@ function BookDetail({
               </span>
             </p>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
-            {status === "cancelled" || status === "failed" ? (
-              <ActionButton onClick={start} disabled={runBook.isPending}>
-                {runBook.isPending ? "Starting…" : "Resume"}
-              </ActionButton>
-            ) : null}
-          </div>
         </header>
       ) : null}
 

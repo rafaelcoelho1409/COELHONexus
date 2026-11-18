@@ -1,31 +1,34 @@
-"""AI workflow integration for Book Distiller ingestion."""
+"""Domain contracts and services for Book Distiller's agentic ingestion workflow."""
 from . import (
+    content_selection,
     entities,
     inventory,
     params,
+    patterns,
+    processed_book,
     progress,
     publication,
-    retrieval_index,
     repair_planning,
+    runs,
     schemas,
-    processed_book,
-    content_selection,
     service,
+    source_pages,
     versions,
 )
-
 
 __all__ = [
     "content_selection",
     "entities",
     "inventory",
     "params",
+    "patterns",
     "processed_book",
     "progress",
     "publication",
-    "retrieval_index",
     "repair_planning",
+    "runs",
     "schemas",
     "service",
+    "source_pages",
     "versions",
 ]

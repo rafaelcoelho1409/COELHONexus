@@ -1,7 +1,8 @@
 """Celery entry point for resumable Book Distiller agentic ingestion runs."""
 from __future__ import annotations
-import domains, infra.celery
-from . import progress, service
+import infra.celery
+from . import params, progress, runs, service
+from .... import settings
 
 import asyncio
 import contextlib
@@ -13,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 
 @infra.celery.service.app.task(
-    name = domains.bd.ingestion.ai.params.TASK_NAME,
+    name = params.TASK_NAME,
     bind = True,
     acks_late = True,
     reject_on_worker_lost = True,
@@ -31,7 +32,7 @@ def run_ingestion_ai(self, book_id: str, extraction_run_id: str, agentic_run_id:
         owner = f"{self.request.id or agentic_run_id}:{uuid.uuid4().hex}"
         async with infra.redis.service.client() as redis:
             async with redis.lock(
-                domains.bd.ingestion.ai.progress.keys.run_mutation_lock_key(book_id, agentic_run_id),
+                progress.keys.run_mutation_lock_key(book_id, agentic_run_id),
                 timeout = 120,
                 blocking_timeout = 30,
             ):
@@ -67,8 +68,8 @@ def run_ingestion_ai(self, book_id: str, extraction_run_id: str, agentic_run_id:
                     )
                     raise FileNotFoundError(f"agentic run {agentic_run_id} was not found for book {book_id}")
                 active_statuses = {
-                    domains.bd.ingestion.ai.schemas.AgenticRunStatus.QUEUED.value,
-                    domains.bd.ingestion.ai.schemas.AgenticRunStatus.RUNNING.value,
+                    runs.schemas.AgenticRunStatus.QUEUED.value,
+                    runs.schemas.AgenticRunStatus.RUNNING.value,
                 }
                 if manifest["status"] not in active_statuses:
                     await progress.service.release_run_execution_lock(
@@ -94,7 +95,7 @@ def run_ingestion_ai(self, book_id: str, extraction_run_id: str, agentic_run_id:
             async def renew_execution_lease() -> None:
                 while True:
                     await asyncio.sleep(
-                        domains.bd.ingestion.ai.progress.params.RUN_EXECUTION_LOCK_RENEW_S,
+                        progress.params.RUN_EXECUTION_LOCK_RENEW_S,
                     )
                     try:
                         renewed = await progress.service.renew_run_execution_lock(
@@ -182,7 +183,7 @@ def run_ingestion_ai(self, book_id: str, extraction_run_id: str, agentic_run_id:
                                 "The ingestion worker lost its exclusive execution lease. "
                                 "Resume the run to continue from its saved checkpoint."
                             )
-                            await domains.settings.llm_counter.service.snapshot("bd", agentic_run_id)
+                            await settings.llm_counter.service.snapshot("bd", agentic_run_id)
                             await service.mark_ingestion_ai_run_failed(
                                 book_id,
                                 agentic_run_id,
@@ -190,13 +191,13 @@ def run_ingestion_ai(self, book_id: str, extraction_run_id: str, agentic_run_id:
                             )
                             failed = await service.read_ingestion_ai_run(book_id, agentic_run_id)
                             if failed is not None and failed["status"] == (
-                                domains.bd.ingestion.ai.schemas.AgenticRunStatus.FAILED.value
+                                runs.schemas.AgenticRunStatus.FAILED.value
                             ):
                                 await progress.service.emit(
                                     book_id,
                                     agentic_run_id,
                                     "run_failed",
-                                    status = domains.bd.ingestion.ai.schemas.AgenticRunStatus.FAILED.value,
+                                    status = runs.schemas.AgenticRunStatus.FAILED.value,
                                     error = failed["error"],
                                     progress = failed["progress"],
                                 )
@@ -216,24 +217,24 @@ def run_ingestion_ai(self, book_id: str, extraction_run_id: str, agentic_run_id:
                         failed = await service.read_ingestion_ai_run(book_id, agentic_run_id)
                         needs_terminal_event = False
                         if failed is not None and failed["status"] not in {
-                            domains.bd.ingestion.ai.schemas.AgenticRunStatus.DONE.value,
-                            domains.bd.ingestion.ai.schemas.AgenticRunStatus.FAILED.value,
-                            domains.bd.ingestion.ai.schemas.AgenticRunStatus.CANCELLED.value,
+                            runs.schemas.AgenticRunStatus.DONE.value,
+                            runs.schemas.AgenticRunStatus.FAILED.value,
+                            runs.schemas.AgenticRunStatus.CANCELLED.value,
                         }:
-                            await domains.settings.llm_counter.service.snapshot("bd", agentic_run_id)
+                            await settings.llm_counter.service.snapshot("bd", agentic_run_id)
                             await service.mark_ingestion_ai_run_failed(book_id, agentic_run_id, error)
                             failed = await service.read_ingestion_ai_run(book_id, agentic_run_id)
                             needs_terminal_event = True
                         if (
                             needs_terminal_event
                             and failed is not None
-                            and failed["status"] == domains.bd.ingestion.ai.schemas.AgenticRunStatus.FAILED.value
+                            and failed["status"] == runs.schemas.AgenticRunStatus.FAILED.value
                         ):
                             await progress.service.emit(
                                 book_id,
                                 agentic_run_id,
                                 "run_failed",
-                                status = domains.bd.ingestion.ai.schemas.AgenticRunStatus.FAILED.value,
+                                status = runs.schemas.AgenticRunStatus.FAILED.value,
                                 error = failed["error"],
                                 progress = failed["progress"],
                             )
@@ -257,7 +258,7 @@ def run_ingestion_ai(self, book_id: str, extraction_run_id: str, agentic_run_id:
     result = asyncio.run(execute())
     if result.get("execution_lock_busy"):
         raise self.retry(
-            countdown = domains.bd.ingestion.ai.progress.params.RUN_EXECUTION_LOCK_RETRY_S,
+            countdown = progress.params.RUN_EXECUTION_LOCK_RETRY_S,
             max_retries = None,
         )
     return result

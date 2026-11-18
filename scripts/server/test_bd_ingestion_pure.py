@@ -18,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "server"))
 
 import domains
 
-ingestion = domains.bd.ingestion
+ingestion = domains.bd.ingestion.source
 outline = ingestion.outline.domain
 Entry = ingestion.outline.entities.OutlineEntry
 extract = ingestion.extract.domain
@@ -172,7 +172,7 @@ check("EPUB headings become the shared outline and chapter navigation", outline.
       [{"level": 1, "title": "Part I", "page": 1}, {"level": 2, "title": "Chapter 1", "page": 1},
        {"level": 1, "title": "Part II", "page": 2}])
 sys.modules["pypdfium2"] = ModuleType("pypdfium2")
-outline_service = importlib.import_module("domains.bd.ingestion.outline.service")
+outline_service = importlib.import_module("domains.bd.ingestion.source.outline.service")
 
 class PdfFixture:
     def __init__(self, bookmarks):

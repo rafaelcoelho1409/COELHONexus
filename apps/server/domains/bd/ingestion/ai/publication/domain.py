@@ -1,9 +1,8 @@
 """Pure validation and summary rules for ingestion publication."""
 from __future__ import annotations
+from . import params
 
 import hashlib
-
-from . import params
 
 
 def alphanumeric_count(text: str) -> int:

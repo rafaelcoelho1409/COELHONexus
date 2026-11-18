@@ -16,7 +16,7 @@ async def publish_retrieval_index(
     return await graphs.rag.service.run_index_node(
         context,
         "publish_retrieval_index",
-        lambda: domains.bd.ingestion.ai.retrieval_index.publish_retrieval_index.service.publish_index(
+        lambda: domains.bd.rag.publish_retrieval_index.service.publish_index(
             state,
             context.storage,
         ),

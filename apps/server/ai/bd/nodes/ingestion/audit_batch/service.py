@@ -231,13 +231,13 @@ async def audit_pages(
                 "page": page_number,
                 "source_key": page_ref["key"],
                 "source_sha256": source_sha256,
-                "normalized_key": domains.bd.ingestion.storage.keys.agentic_page_key(
+                "normalized_key": domains.bd.ingestion.source.storage.keys.agentic_page_key(
                     book_id, state["agentic_run_id"], page_number,
                 ),
-                "assessment_key": domains.bd.ingestion.storage.keys.agentic_assessment_key(
+                "assessment_key": domains.bd.ingestion.source.storage.keys.agentic_assessment_key(
                     book_id, state["agentic_run_id"], page_number,
                 ),
-                "patch_proposals_key": domains.bd.ingestion.storage.keys.agentic_patch_proposals_key(
+                "patch_proposals_key": domains.bd.ingestion.source.storage.keys.agentic_patch_proposals_key(
                     book_id, state["agentic_run_id"], page_number,
                 ),
                 "pictures": page_ref["pictures"],

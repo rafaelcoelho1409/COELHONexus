@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "server"))
 
 from ai.bd.agents import schemas
 from domains.bd.ingestion.ai.service import run_page_audit
-from domains.bd.ingestion.storage.keys import manifest_key, page_key
+from domains.bd.ingestion.source.storage.keys import manifest_key, page_key
 
 
 class FakeStorage:

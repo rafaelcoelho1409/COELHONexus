@@ -10,8 +10,8 @@ async def index_book_graph(
     graph_state: graphs.rag.states.ProcessedBookIndexState,
     context: graphs.rag.entities.ProcessedBookIndexDependencies,
 ) -> dict[str, Any]:
-    rows = await domains.bd.ingestion.ai.retrieval_index.service.read_sources(graph_state, context.storage)
-    batches = domains.bd.ingestion.ai.retrieval_index.neo4j_index.domain.graph_batches(rows)
+    rows = await domains.bd.rag.service.read_sources(graph_state, context.storage)
+    batches = domains.bd.rag.neo4j_index.domain.graph_batches(rows)
     extractions = []
     all_pages = {row["processed_page_number"] for row in rows}
     chunks_remaining_by_page: dict[int, int] = {}
@@ -43,14 +43,14 @@ async def index_book_graph(
             raise RuntimeError("processed-book retrieval indexing was cancelled")
         with domains.settings.llm_counter.service.llm_context(
             ns = "bd",
-            run_id = domains.bd.ingestion.ai.retrieval_index.keys.usage_run_id(
+            run_id = domains.bd.rag.keys.usage_run_id(
                 graph_state["book_id"],
                 graph_state["agentic_run_id"],
             ),
             node_id = "neo4j",
             stage = "agentic_rag",
         ):
-            extraction = await domains.bd.ingestion.ai.retrieval_index.neo4j_index.service.extract_graph_facts(
+            extraction = await domains.bd.rag.neo4j_index.service.extract_graph_facts(
                 context.graph_transformer,
                 batch_rows,
                 section_title = section_title,
@@ -90,7 +90,7 @@ async def index_book_graph(
             "neo4j_pages_completed": pages_completed,
         },
     )
-    nodes, edges = domains.bd.ingestion.ai.retrieval_index.neo4j_index.domain.build_graph(
+    nodes, edges = domains.bd.rag.neo4j_index.domain.build_graph(
         rows,
         extractions,
         book_id = graph_state["book_id"],
@@ -117,7 +117,7 @@ async def index_book_graph(
             "neo4j_stage_total": 1,
         },
     )
-    await domains.bd.ingestion.ai.retrieval_index.neo4j_index.service.delete_graph(
+    await domains.bd.rag.neo4j_index.service.delete_graph(
         graph_state["book_id"],
         graph_state["agentic_run_id"],
         graph_state["processed_book_revision"],
@@ -156,7 +156,7 @@ async def index_book_graph(
             )
         await context.progress_callback("neo4j", "running", details)
 
-    node_count, relationship_count = await domains.bd.ingestion.ai.retrieval_index.neo4j_index.service.write_graph(
+    node_count, relationship_count = await domains.bd.rag.neo4j_index.service.write_graph(
         nodes,
         edges,
         book_id = graph_state["book_id"],

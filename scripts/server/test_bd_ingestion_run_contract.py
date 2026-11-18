@@ -10,7 +10,7 @@ from pydantic import ValidationError
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "server"))
 
 from domains.bd.ingestion.ai import schemas
-from domains.bd.ingestion.storage import keys
+from domains.bd.ingestion.source.storage import keys
 
 
 BOOK_ID = "book-123"

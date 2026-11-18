@@ -18,7 +18,7 @@ EXT = "c94a1d6883c04bb0a9b9d339f85348f4"
 
 async def main() -> None:
     storage = infra.minio.service.get_storage()
-    keys = domains.bd.ingestion.storage.keys
+    keys = domains.bd.ingestion.source.storage.keys
     proposal_keys = await storage.list(keys.agentic_prefix(BOOK, RUN) + "patch-proposals/")
     pages = []
     for key in sorted(proposal_keys):

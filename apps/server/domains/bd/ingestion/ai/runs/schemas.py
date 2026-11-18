@@ -1,0 +1,226 @@
+"""Validated contracts for persisted ingestion AI runs."""
+from __future__ import annotations
+from .. import schemas, versions
+
+from enum import StrEnum
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+
+class AgenticRunStatus(StrEnum):
+    QUEUED = "queued"
+    RUNNING = "running"
+    DONE = "done"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+class AgenticPageStatus(StrEnum):
+    PENDING = "pending"
+    DONE = "done"
+    REVIEW_REQUIRED = "review_required"
+    FAILED = "failed"
+
+class AgenticNodeStatus(StrEnum):
+    PENDING = "pending"
+    RUNNING = "running"
+    DONE = "done"
+    FAILED = "failed"
+
+class AgenticNodePageProgress(BaseModel):
+    """Page work completed by one graph node, plus its current in-flight count."""
+
+    completed_count: int = Field(default = 0, ge = 0, strict = True)
+    total_count: int = Field(default = 0, ge = 0, strict = True)
+    active_count: int = Field(default = 0, ge = 0, strict = True)
+
+class AgenticRunProgress(BaseModel):
+    """Small, durable progress snapshot for the live Ingestion view."""
+
+    current_node: str | None = None
+    node_status: dict[str, AgenticNodeStatus] = Field(default_factory = dict)
+    audited_pages: list[int] = Field(default_factory = list)
+    audit_warning_pages: list[int] = Field(default_factory = list)
+    processed_pages: list[int] = Field(default_factory = list)
+    repaired_pages: list[int] = Field(default_factory = list)
+    active_audit_pages: list[int] = Field(default_factory = list)
+    active_repair_pages: list[int] = Field(default_factory = list)
+    classified_pages: list[int] = Field(default_factory = list)
+    active_classification_pages: list[int] = Field(default_factory = list)
+    visual_candidate_count: int = Field(default = 0, ge = 0, strict = True)
+    visual_completed_count: int = Field(default = 0, ge = 0, strict = True)
+    visual_converted_count: int = Field(default = 0, ge = 0, strict = True)
+    visual_failed_count: int = Field(default = 0, ge = 0, strict = True)
+    node_page_progress: dict[str, AgenticNodePageProgress] = Field(default_factory = dict)
+    selected_page_count: int = Field(default = 0, ge = 0, strict = True)
+    excluded_page_count: int = Field(default = 0, ge = 0, strict = True)
+
+class IngestionPageArtifact(BaseModel):
+    """Source identity and versioned output references for one physical page."""
+
+    model_config = ConfigDict(extra = "forbid")
+
+    page_number: int = Field(gt = 0, strict = True)
+    source_key: schemas.ObjectKey
+    source_sha256: schemas.Sha256Hex
+    normalized_key: schemas.ObjectKey
+    enriched_key: schemas.ObjectKey | None = None
+    assessment_key: schemas.ObjectKey
+    patch_proposals_key: schemas.ObjectKey
+    normalized_sha256: schemas.Sha256Hex | None = None
+    enriched_sha256: schemas.Sha256Hex | None = None
+    visual_artifacts_key: schemas.ObjectKey | None = None
+    visual_artifacts_sha256: schemas.Sha256Hex | None = None
+    converted_figures: list[schemas.NonEmptyText] = Field(default_factory = list)
+    assessment_sha256: schemas.Sha256Hex | None = None
+    patch_proposals_sha256: schemas.Sha256Hex | None = None
+    status: AgenticPageStatus = AgenticPageStatus.PENDING
+    delivery_disposition: Literal["include", "discarded_blank", "image_only"] = "include"
+
+    @model_validator(mode = "after")
+    def _validate_completed_artifacts(self) -> IngestionPageArtifact:
+        if (self.enriched_key is None) != (self.enriched_sha256 is None):
+            raise ValueError("enriched page references must include their hash")
+        if (self.visual_artifacts_key is None) != (self.visual_artifacts_sha256 is None):
+            raise ValueError("visual provenance references must include their hash")
+        if len(self.converted_figures) != len(set(self.converted_figures)):
+            raise ValueError("converted figure names must be unique per page")
+        if self.converted_figures and (self.enriched_key is None or self.visual_artifacts_key is None):
+            raise ValueError("converted figures must include their page and provenance artifacts")
+        if (
+            self.status in {AgenticPageStatus.DONE, AgenticPageStatus.REVIEW_REQUIRED}
+            and any(value is None for value in (
+                self.normalized_sha256,
+                self.assessment_sha256,
+                self.patch_proposals_sha256,
+            ))
+        ):
+            raise ValueError("completed pages must include hashes for every output artifact")
+        return self
+
+class IngestionAIRunManifest(BaseModel):
+    """Versioned manifest pinning AI outputs to a specific Docling extraction."""
+
+    model_config = ConfigDict(extra = "forbid")
+
+    schema_version: Literal["1.0", "1.1", "1.2", "1.3", "1.4", "1.5"] = versions.MANIFEST_SCHEMA_VERSION
+    workflow_version: schemas.NonEmptyText = versions.WORKFLOW_VERSION
+    agentic_run_id: schemas.SafeSegment
+    book_id: schemas.SafeSegment
+    extraction_run_id: schemas.SafeSegment
+    source_manifest_key: schemas.ObjectKey
+    source_manifest_sha256: schemas.Sha256Hex
+    status: AgenticRunStatus = AgenticRunStatus.QUEUED
+    expected_page_count: int = Field(gt = 0, strict = True)
+    progress: AgenticRunProgress = Field(default_factory = AgenticRunProgress)
+    pages: list[IngestionPageArtifact] = Field(default_factory = list)
+    book_metadata_key: schemas.ObjectKey
+    book_metadata_sha256: schemas.Sha256Hex | None = None
+    quality_report_key: schemas.ObjectKey
+    quality_report_sha256: schemas.Sha256Hex | None = None
+    quality_status: Literal["complete", "complete_with_review"] | None = None
+    delivered_page_count: int = Field(default = 0, ge = 0, strict = True)
+    discarded_blank_page_count: int = Field(default = 0, ge = 0, strict = True)
+    review_page_count: int = Field(default = 0, ge = 0, strict = True)
+    unverified_page_count: int = Field(default = 0, ge = 0, strict = True)
+    unverified_pages: list[int] = Field(default_factory = list)
+    content_selection_key: schemas.ObjectKey | None = None
+    content_selection_sha256: schemas.Sha256Hex | None = None
+    content_selection_revision: int | None = Field(default = None, ge = 1, strict = True)
+    selected_page_count: int | None = Field(default = None, ge = 0, strict = True)
+    excluded_page_count: int | None = Field(default = None, ge = 0, strict = True)
+    processed_book_key: schemas.ObjectKey | None = None
+    processed_book_sha256: schemas.Sha256Hex | None = None
+    processed_book_revision: int | None = Field(default = None, ge = 1, strict = True)
+    processed_page_count: int | None = Field(default = None, ge = 1, strict = True)
+    contents_status: Literal["complete", "needs_review", "unavailable"] | None = None
+    replay_from_node: str | None = None
+    created_at: float = Field(gt = 0, allow_inf_nan = False)
+    updated_at: float = Field(gt = 0, allow_inf_nan = False)
+    finished_at: float | None = Field(default = None, gt = 0, allow_inf_nan = False)
+    error: str | None = None
+
+    @model_validator(mode = "after")
+    def _validate_run_manifest(self) -> IngestionAIRunManifest:
+        page_numbers = [page.page_number for page in self.pages]
+        if len(page_numbers) != len(set(page_numbers)):
+            raise ValueError("manifest page numbers must be unique")
+        if any(page_number > self.expected_page_count for page_number in page_numbers):
+            raise ValueError("manifest page numbers cannot exceed expected_page_count")
+        if page_numbers != sorted(page_numbers):
+            raise ValueError("manifest pages must be stored in physical page order")
+        if self.updated_at < self.created_at:
+            raise ValueError("updated_at cannot precede created_at")
+
+        terminal = self.status in {
+            AgenticRunStatus.DONE,
+            AgenticRunStatus.FAILED,
+            AgenticRunStatus.CANCELLED,
+        }
+        if terminal != (self.finished_at is not None):
+            raise ValueError("finished_at must be set exactly for terminal run statuses")
+        if self.finished_at is not None and self.finished_at < self.created_at:
+            raise ValueError("finished_at cannot precede created_at")
+        if self.finished_at is not None and self.updated_at < self.finished_at:
+            raise ValueError("updated_at cannot precede finished_at")
+        if self.status == AgenticRunStatus.FAILED and not self.error:
+            raise ValueError("failed runs must include an error")
+        if self.status != AgenticRunStatus.FAILED and self.error is not None:
+            raise ValueError("error is only valid for failed runs")
+
+        if self.status == AgenticRunStatus.DONE:
+            expected_pages = list(range(1, self.expected_page_count + 1))
+            if page_numbers != expected_pages:
+                raise ValueError("completed runs must reference every physical page in order")
+            if any(page.status not in {
+                AgenticPageStatus.DONE,
+                AgenticPageStatus.REVIEW_REQUIRED,
+            } for page in self.pages):
+                raise ValueError("completed runs may contain only completed or review-required pages")
+            if self.book_metadata_sha256 is None or self.quality_report_sha256 is None:
+                raise ValueError("completed runs must include hashes for book metadata and quality report")
+            if self.schema_version in {"1.1", "1.2", "1.3", "1.4", "1.5"}:
+                if self.quality_status is None:
+                    raise ValueError("completed 1.1 runs must include a quality status")
+                if self.delivered_page_count != sum(
+                    page.delivery_disposition != "discarded_blank" for page in self.pages
+                ):
+                    raise ValueError("delivered_page_count must match non-blank page dispositions")
+                if self.discarded_blank_page_count != sum(
+                    page.delivery_disposition == "discarded_blank" for page in self.pages
+                ):
+                    raise ValueError("discarded_blank_page_count must match page dispositions")
+                if self.review_page_count != sum(
+                    page.status == AgenticPageStatus.REVIEW_REQUIRED for page in self.pages
+                ):
+                    raise ValueError("review_page_count must match page review statuses")
+            if self.schema_version in {"1.2", "1.3", "1.4", "1.5"}:
+                if len(self.unverified_pages) != self.unverified_page_count:
+                    raise ValueError("unverified_page_count must match unverified_pages")
+                if len(self.unverified_pages) != len(set(self.unverified_pages)):
+                    raise ValueError("unverified_pages must contain unique page numbers")
+                if any(page_number < 1 or page_number > self.expected_page_count for page_number in self.unverified_pages):
+                    raise ValueError("unverified_pages must be within the expected page range")
+            if self.schema_version in {"1.3", "1.4", "1.5"}:
+                if any(value is None for value in (
+                    self.content_selection_key,
+                    self.content_selection_sha256,
+                    self.content_selection_revision,
+                    self.selected_page_count,
+                    self.excluded_page_count,
+                )):
+                    raise ValueError("completed 1.3 runs must pin a complete content-selection revision")
+                if self.selected_page_count + self.excluded_page_count != self.expected_page_count:
+                    raise ValueError("content-selection counts must cover every physical page")
+            if self.schema_version in {"1.4", "1.5"} and any(value is None for value in (
+                self.processed_book_key,
+                self.processed_book_sha256,
+                self.processed_book_revision,
+                self.processed_page_count,
+                self.contents_status,
+            )):
+                raise ValueError("completed 1.4+ runs must pin the processed-book manifest")
+
+        return self
+
+__all__ = ["AgenticNodePageProgress", "AgenticNodeStatus", "AgenticPageStatus", "AgenticRunProgress", "AgenticRunStatus", "IngestionAIRunManifest", "IngestionPageArtifact"]

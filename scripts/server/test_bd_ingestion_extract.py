@@ -24,10 +24,10 @@ if not PDF or not Path(PDF).is_file():
 import pypdfium2 as pdfium
 
 import domains
-import domains.bd.ingestion.extract.service
-import domains.bd.ingestion.outline.service
+import domains.bd.ingestion.source.extract.service
+import domains.bd.ingestion.source.outline.service
 
-ingestion = domains.bd.ingestion
+ingestion = domains.bd.ingestion.source
 PAGES = int(os.environ.get("BD_TEST_PAGES", "8"))
 HALF = PAGES // 2
 

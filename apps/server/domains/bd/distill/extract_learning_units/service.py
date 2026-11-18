@@ -1,20 +1,20 @@
 """Prepare source-linked Distill learning-unit inputs from the pinned book artifacts."""
 from __future__ import annotations
 
-import domains
-
 import hashlib
 import json
 from collections.abc import Awaitable, Callable
 from typing import Any
+
+import domains
 
 
 async def prepare_units(
     storage: Any,
     state: dict[str, Any],
 ) -> dict[str, Any]:
-    source_manifest = await domains.bd.ingestion.storage.service.read_manifest(storage, state["book_id"])
-    if source_manifest is None or source_manifest.get("status") != domains.bd.ingestion.storage.params.STATUS_DONE:
+    source_manifest = await domains.bd.ingestion.source.storage.service.read_manifest(storage, state["book_id"])
+    if source_manifest is None or source_manifest.get("status") != domains.bd.ingestion.source.storage.params.STATUS_DONE:
         raise ValueError("Distill requires a completed extraction")
     if source_manifest.get("extraction_id") != state["extraction_run_id"]:
         raise ValueError("the book's current extraction no longer matches this Distill run")
@@ -26,8 +26,8 @@ async def prepare_units(
     qa_content = await storage.read_text(qa_key)
     if hashlib.sha256(qa_content.encode("utf-8")).hexdigest() != state["ingestion_ai_manifest_sha256"]:
         raise ValueError("the ingestion QA manifest changed after this Distill run was queued")
-    qa_manifest = domains.bd.ingestion.ai.schemas.IngestionAIRunManifest.model_validate_json(qa_content)
-    if qa_manifest.status != domains.bd.ingestion.ai.schemas.AgenticRunStatus.DONE:
+    qa_manifest = domains.bd.ingestion.ai.runs.schemas.IngestionAIRunManifest.model_validate_json(qa_content)
+    if qa_manifest.status != domains.bd.ingestion.ai.runs.schemas.AgenticRunStatus.DONE:
         raise ValueError("Distill requires a completed ingestion QA run")
     if qa_manifest.quality_status not in {"complete", "complete_with_review"}:
         raise ValueError("the selected ingestion QA run has no publishable quality result")
@@ -42,7 +42,7 @@ async def prepare_units(
         selection_content = await storage.read_text(state["content_selection_key"])
         if hashlib.sha256(selection_content.encode("utf-8")).hexdigest() != state["content_selection_sha256"]:
             raise ValueError("the pinned content-selection revision failed its integrity check")
-        selection = domains.bd.ingestion.ai.schemas.ContentSelectionManifest.model_validate_json(selection_content)
+        selection = domains.bd.ingestion.ai.content_selection.schemas.ContentSelectionManifest.model_validate_json(selection_content)
         if (
             selection.book_id != state["book_id"]
             or selection.extraction_run_id != state["extraction_run_id"]
@@ -57,7 +57,7 @@ async def prepare_units(
         processed_content = await storage.read_text(state["processed_book_key"])
         if hashlib.sha256(processed_content.encode("utf-8")).hexdigest() != state["processed_book_sha256"]:
             raise ValueError("the pinned processed-book manifest failed its integrity check")
-        processed_book = domains.bd.ingestion.ai.schemas.ProcessedBookManifest.model_validate_json(
+        processed_book = domains.bd.ingestion.ai.processed_book.schemas.ProcessedBookManifest.model_validate_json(
             processed_content,
         )
         if (
@@ -126,7 +126,7 @@ async def prepare_units(
             "source_sha256": qa_page.normalized_sha256,
             "section_path": section_path,
             "disposition": qa_page.delivery_disposition,
-            "review_required": qa_page.status == domains.bd.ingestion.ai.schemas.AgenticPageStatus.REVIEW_REQUIRED,
+            "review_required": qa_page.status == domains.bd.ingestion.ai.runs.schemas.AgenticPageStatus.REVIEW_REQUIRED,
             "content_role": content_page.role if content_page is not None else "unknown",
         }
         source_pages.append(source_page)

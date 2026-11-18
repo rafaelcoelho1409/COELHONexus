@@ -1,5 +1,9 @@
 """Persist and validate the canonical, selection-versioned processed book projection."""
 from __future__ import annotations
+import infra
+from . import domain, params, schemas
+from .. import content_selection, runs, versions
+from ... import source
 
 import asyncio
 import hashlib
@@ -8,11 +12,6 @@ import json
 import time
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
-
-import domains
-import infra
-
-from . import domain, schemas
 
 
 PageReader = Callable[[str], str | None | Awaitable[str | None]]
@@ -66,7 +65,7 @@ async def materialize_processed_book(
     extraction_run_id = state.get("extraction_run_id")
     if not all(isinstance(value, str) for value in (book_id, agentic_run_id, extraction_run_id)):
         raise ValueError("processed-book materialization requires complete run identities")
-    candidate_key = domains.bd.ingestion.storage.keys.agentic_processed_book_candidate_key(
+    candidate_key = source.storage.keys.agentic_processed_book_candidate_key(
         book_id,
         agentic_run_id,
         selection_revision,
@@ -93,7 +92,7 @@ async def materialize_processed_book(
     selection_content = await _read_callback(read_page, selection_key)
     if _digest(selection_content) != selection_sha256:
         raise ValueError("the content-selection artifact failed its integrity check")
-    selection = domains.bd.ingestion.ai.schemas.ContentSelectionManifest.model_validate_json(selection_content)
+    selection = content_selection.schemas.ContentSelectionManifest.model_validate_json(selection_content)
     if selection.revision != selection_revision:
         raise ValueError("the content-selection revision does not match the graph state")
 
@@ -147,7 +146,7 @@ async def _candidate_headings(
     if candidate.heading_candidates_built:
         return [item.model_dump(mode="json") for item in candidate.heading_candidates]
 
-    semaphore = asyncio.Semaphore(domains.bd.ingestion.ai.params.PROCESSED_BOOK_READ_CONCURRENCY)
+    semaphore = asyncio.Semaphore(params.PAGE_READ_CONCURRENCY)
     total = len(candidate.pages)
     completed = 0
     active = 0
@@ -230,7 +229,7 @@ async def reconcile_contents(
         candidate,
         contents,
         contents_status,
-        domains.bd.ingestion.ai.versions.CONTENTS_RECONCILER_VERSION,
+        versions.CONTENTS_RECONCILER_VERSION,
         _CallbackWriter(read_page, write_artifact, artifact_exists),
     )
     return {
@@ -276,7 +275,7 @@ class _CallbackWriter(_CallbackReader):
 
 async def make_candidate(
     source_manifest: dict[str, Any],
-    selection: domains.bd.ingestion.ai.schemas.ContentSelectionManifest,
+    selection: content_selection.schemas.ContentSelectionManifest,
     selection_key: str,
     selection_sha256: str,
     qa_pages: list[Any],
@@ -332,14 +331,14 @@ async def make_candidate(
     if progress_callback is not None:
         await progress_callback(0, total, 0)
 
-    semaphore = asyncio.Semaphore(domains.bd.ingestion.ai.params.PROCESSED_BOOK_READ_CONCURRENCY)
+    semaphore = asyncio.Semaphore(params.PAGE_READ_CONCURRENCY)
 
     async def build_page(processed_number: int, selected_page: Any) -> tuple[dict[str, Any], dict[str, Any]]:
         qa_page = qa_by_page[selected_page.page_number]
         status = _page_value(qa_page, "status")
         if status not in {
-            domains.bd.ingestion.ai.schemas.AgenticPageStatus.DONE,
-            domains.bd.ingestion.ai.schemas.AgenticPageStatus.REVIEW_REQUIRED,
+            runs.schemas.AgenticPageStatus.DONE,
+            runs.schemas.AgenticPageStatus.REVIEW_REQUIRED,
             "done",
             "review_required",
         }:
@@ -419,8 +418,11 @@ def candidate_json(candidate: schemas.ProcessedBookCandidate) -> str:
     return _json(candidate.model_dump(mode = "json"))
 
 
-async def write_candidate(candidate: schemas.ProcessedBookCandidate, storage: infra.minio.service.MinIOStorage) -> str:
-    key = domains.bd.ingestion.storage.keys.agentic_processed_book_candidate_key(
+async def write_candidate(
+    candidate: schemas.ProcessedBookCandidate,
+    storage: infra.minio.service.MinIOStorage,
+) -> str:
+    key = source.storage.keys.agentic_processed_book_candidate_key(
         candidate.book_id, candidate.agentic_run_id, candidate.selection_revision,
     )
     content = candidate_json(candidate)
@@ -440,7 +442,7 @@ async def write_current_pointer(
     digest: str,
     storage: infra.minio.service.MinIOStorage,
 ) -> None:
-    pointer_key = domains.bd.ingestion.storage.keys.agentic_processed_book_current_key(book_id, agentic_run_id)
+    pointer_key = source.storage.keys.agentic_processed_book_current_key(book_id, agentic_run_id)
     await storage.write(
         pointer_key,
         _json({"revision": revision, "key": key, "sha256": digest}),
@@ -458,12 +460,12 @@ async def clear_manifest_for_replay(
     if type(revision) is not int or revision < 1:
         raise ValueError("processed-book revision must be a positive integer")
 
-    manifest_key = domains.bd.ingestion.storage.keys.agentic_processed_book_manifest_key(
+    manifest_key = source.storage.keys.agentic_processed_book_manifest_key(
         book_id,
         agentic_run_id,
         revision,
     )
-    pointer_key = domains.bd.ingestion.storage.keys.agentic_processed_book_current_key(
+    pointer_key = source.storage.keys.agentic_processed_book_current_key(
         book_id,
         agentic_run_id,
     )
@@ -484,9 +486,9 @@ async def publish_manifest(
     storage: infra.minio.service.MinIOStorage,
     *,
     move_pointer: bool = True,
-) -> tuple[domains.bd.ingestion.ai.schemas.ProcessedBookManifest, str, str]:
+) -> tuple[schemas.ProcessedBookManifest, str, str]:
     """Write the immutable processed-book manifest, then optionally move its current pointer."""
-    manifest = domains.bd.ingestion.ai.schemas.ProcessedBookManifest(
+    manifest = schemas.ProcessedBookManifest(
         book_id = candidate.book_id,
         extraction_run_id = candidate.extraction_run_id,
         agentic_run_id = candidate.agentic_run_id,
@@ -503,12 +505,12 @@ async def publish_manifest(
     )
     content = _json(manifest.model_dump(mode = "json"))
     digest = _digest(content)
-    key = domains.bd.ingestion.storage.keys.agentic_processed_book_manifest_key(
+    key = source.storage.keys.agentic_processed_book_manifest_key(
         candidate.book_id, candidate.agentic_run_id, candidate.selection_revision,
     )
     if await storage.exists(key):
         saved_content = await storage.read_text(key)
-        saved = domains.bd.ingestion.ai.schemas.ProcessedBookManifest.model_validate_json(saved_content)
+        saved = schemas.ProcessedBookManifest.model_validate_json(saved_content)
         expected_pages = [page.model_dump(mode = "json") for page in candidate.pages]
         if (
             saved.selection_key != candidate.selection_key
@@ -535,11 +537,11 @@ async def read_current(
     agentic_run_id: str,
     *,
     storage: infra.minio.service.MinIOStorage | None = None,
-) -> tuple[domains.bd.ingestion.ai.schemas.ProcessedBookManifest, str, str] | None:
+) -> tuple[schemas.ProcessedBookManifest, str, str] | None:
     """Read the current processed-book revision and verify its pointer and artifact."""
     if storage is None:
         storage = infra.minio.service.get_storage()
-    pointer_key = domains.bd.ingestion.storage.keys.agentic_processed_book_current_key(book_id, agentic_run_id)
+    pointer_key = source.storage.keys.agentic_processed_book_current_key(book_id, agentic_run_id)
     if not await storage.exists(pointer_key):
         return None
     pointer = json.loads(await storage.read_text(pointer_key))
@@ -547,7 +549,7 @@ async def read_current(
     key = pointer.get("key") if isinstance(pointer, dict) else None
     digest = pointer.get("sha256") if isinstance(pointer, dict) else None
     expected_key = (
-        domains.bd.ingestion.storage.keys.agentic_processed_book_manifest_key(book_id, agentic_run_id, revision)
+        source.storage.keys.agentic_processed_book_manifest_key(book_id, agentic_run_id, revision)
         if type(revision) is int and revision > 0 else None
     )
     if key != expected_key or not isinstance(digest, str):
@@ -555,7 +557,7 @@ async def read_current(
     content = await storage.read_text(key)
     if _digest(content) != digest:
         raise ValueError("the processed-book manifest failed its integrity check")
-    manifest = domains.bd.ingestion.ai.schemas.ProcessedBookManifest.model_validate_json(content)
+    manifest = schemas.ProcessedBookManifest.model_validate_json(content)
     if manifest.book_id != book_id or manifest.agentic_run_id != agentic_run_id or manifest.selection_revision != revision:
         raise ValueError("the processed-book manifest does not match its pointer")
     return manifest, key, digest
@@ -564,12 +566,13 @@ async def read_current(
 async def ensure_for_selection(
     book_id: str,
     agentic_run_id: str,
-    selection: domains.bd.ingestion.ai.schemas.ContentSelectionManifest,
+    selection: content_selection.schemas.ContentSelectionManifest,
     selection_key: str,
     selection_sha256: str,
     *,
+    ingestion_ai_run: dict[str, Any],
     storage: infra.minio.service.MinIOStorage | None = None,
-) -> tuple[domains.bd.ingestion.ai.schemas.ProcessedBookManifest, str, str]:
+) -> tuple[schemas.ProcessedBookManifest, str, str]:
     """Ensure a reviewed selection has a matching dense map and remapped prior contents."""
     if storage is None:
         storage = infra.minio.service.get_storage()
@@ -578,13 +581,17 @@ async def ensure_for_selection(
         if current[0].selection_sha256 != selection_sha256:
             raise ValueError("processed-book selection hash does not match the requested selection")
         return current
-    qa_data = await domains.bd.ingestion.ai.service.read_ingestion_ai_run(book_id, agentic_run_id, storage = storage)
-    if qa_data is None or qa_data.get("status") != "done":
+    if (
+        ingestion_ai_run.get("book_id") != book_id
+        or ingestion_ai_run.get("agentic_run_id") != agentic_run_id
+    ):
+        raise ValueError("the ingestion run does not match the requested processed book")
+    if ingestion_ai_run.get("status") != "done":
         raise ValueError("a completed ingestion run is required to build the processed book")
-    source_manifest = await domains.bd.ingestion.storage.service.read_manifest(storage, book_id)
+    source_manifest = await source.storage.service.read_manifest(storage, book_id)
     if source_manifest is None or source_manifest.get("extraction_id") != selection.extraction_run_id:
         raise ValueError("the source extraction does not match the processed-book selection")
-    qa_manifest = domains.bd.ingestion.ai.schemas.IngestionAIRunManifest.model_validate(qa_data)
+    qa_manifest = runs.schemas.IngestionAIRunManifest.model_validate(ingestion_ai_run)
     candidate = await make_candidate(
         source_manifest,
         selection,
@@ -601,7 +608,7 @@ async def ensure_for_selection(
         candidate,
         canonical_contents,
         contents_status,
-        domains.bd.ingestion.ai.versions.CONTENTS_RECONCILER_VERSION,
+        versions.CONTENTS_RECONCILER_VERSION,
         storage,
         move_pointer = False,
     )

@@ -22,7 +22,7 @@ async def pin_sources(
                 {"pin_sources_pages_completed": completed},
             )
 
-        return await domains.bd.ingestion.ai.retrieval_index.pin_sources.service.pin_sources(
+        return await domains.bd.rag.pin_sources.service.pin_sources(
             state,
             context.storage,
             progress_callback = report_pages,

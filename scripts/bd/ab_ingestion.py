@@ -246,14 +246,14 @@ def command_docling(args) -> None:
     import dataclasses
 
     import domains
-    import domains.bd.ingestion.extract.service as extract
+    import domains.bd.ingestion.source.extract.service as extract
 
     out = Path(args.out)
     for item in load_sample(out):
         if read_result(out, "docling", item["id"]):
             continue
         scan = item["stratum"] == "scan"
-        domains.bd.ingestion.extract.config.DOCLING = dataclasses.replace(domains.bd.ingestion.extract.config.DOCLING, ocr = scan)
+        domains.bd.ingestion.source.extract.config.DOCLING = dataclasses.replace(domains.bd.ingestion.source.extract.config.DOCLING, ocr = scan)
         extract.converter.cache_clear()
         source, page_no = (str(out / "scans" / f"{item['id']}.pdf"), 1) if scan else (item["book"], item["page"])
         started = time.time()

@@ -22,9 +22,9 @@ Q_BD = domain.scoped_queue("bd", params.ENVIRONMENT)
 
 # qdrant_task / neo4j_task names dodge qdrant_client / neo4j package collisions
 TASK_INCLUDE = [
-    "domains.bd.ingestion.task",
+    "domains.bd.ingestion.source.task",
     "domains.bd.ingestion.ai.task",
-    "domains.bd.ingestion.ai.retrieval_index.task",
+    "domains.bd.rag.task",
     "domains.bd.distill.task",
     "domains.dd.pages.task",
     "domains.dd.pipeline.ai.task",
@@ -38,8 +38,11 @@ TASK_INCLUDE = [
 
 # per-module queue isolation: planner CPU / synth LLM / YCS embed each separated
 TASK_ROUTES = {
+    # The source module moved, while its explicitly registered task ID stays stable for queued deliveries.
     "domains.bd.ingestion.task.*": {"queue": Q_BD},
     "domains.bd.ingestion.ai.task.*": {"queue": Q_BD},
+    "domains.bd.rag.task.*": {"queue": Q_BD},
+    # The independent RAG task retains its existing ID for queued deliveries and manifests.
     "domains.bd.ingestion.ai.retrieval_index.task.*": {"queue": Q_BD},
     "domains.bd.distill.task.*": {"queue": Q_BD},
     "domains.dd.pages.task.*": {"queue": Q_CRAWLER},

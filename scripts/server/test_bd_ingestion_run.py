@@ -39,7 +39,7 @@ import domains.bd.ingestion.ai  # the API router loads this; the start gate's pe
 import infra
 
 R = infra.redis.service
-ingestion = domains.bd.ingestion
+ingestion = domains.bd.ingestion.source
 dispatch = ingestion.runtime.dispatch
 progress = ingestion.runtime.progress
 cancel = ingestion.runtime.cancel
