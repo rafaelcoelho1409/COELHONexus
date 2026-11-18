@@ -26,9 +26,9 @@ from langchain_core.embeddings import Embeddings
 logger = logging.getLogger(__name__)
 
 
-# Elasticsearch — full-text retriever (Phase 1)
+# Elasticsearch — lexical passage retriever
 class ElasticsearchRetriever:
-    """Full-text search over the YCS transcripts index. Same
+    """BM25 search over YCS transcript passages. Same
     `retrieve(query, channel_ids)` interface as the other three
     retrievers so the SmartRetriever can fan out uniformly."""
 
@@ -69,15 +69,20 @@ class ElasticsearchRetriever:
             }
 
         with domains.ycs.ask.observability.service.es_search_span(
-            index                = infra.elasticsearch.keys.INDEX_TRANSCRIPTIONS,
+            index                = infra.elasticsearch.keys.INDEX_YCS_RAG_PASSAGES,
             top_k                = self.top_k,
             channel_filter_count = len(channel_ids) if channel_ids else 0,
         ):
             results = await self.es.search(
-                index = infra.elasticsearch.keys.INDEX_TRANSCRIPTIONS,
+                index = infra.elasticsearch.keys.INDEX_YCS_RAG_PASSAGES,
                 query = es_query,
                 size = self.top_k,
-                _source = ["video_id", "lang", "content", "channel_id"],
+                _source = [
+                    "video_id", "transcript_id", "parent_video_id", "lang", "content", "channel_id",
+                    "chunk_index", "total_chunks", "source_char_start", "source_char_end",
+                    "part_index", "part_total", "chunking_policy_version",
+                    "chunk_size_chars", "chunk_overlap_chars", "index_profile_fingerprint",
+                ],
             )
         hits = results["hits"]["hits"]
         if not hits:
@@ -95,12 +100,23 @@ class ElasticsearchRetriever:
                 page_content = src.get("content", ""),
                 metadata = {
                     "video_id":    video_id,
+                    "parent_video_id": src.get("parent_video_id", video_id),
                     "lang":        src.get("lang", "en"),
                     "title":       meta.get("title", ""),
                     "channel":     meta.get("channel", ""),
                     "channel_id":  src.get("channel_id", ""),
                     "upload_date": meta.get("upload_date", ""),
                     "webpage_url": meta.get("webpage_url", ""),
+                    "chunk_index": src.get("chunk_index"),
+                    "total_chunks": src.get("total_chunks"),
+                    "source_char_start": src.get("source_char_start"),
+                    "source_char_end": src.get("source_char_end"),
+                    "part_index": src.get("part_index"),
+                    "part_total": src.get("part_total"),
+                    "chunking_policy_version": src.get("chunking_policy_version"),
+                    "chunk_size_chars": src.get("chunk_size_chars"),
+                    "chunk_overlap_chars": src.get("chunk_overlap_chars"),
+                    "index_profile_fingerprint": src.get("index_profile_fingerprint"),
                     "score":       hit["_score"],
                     "source":      "elasticsearch",
                 },
@@ -108,8 +124,8 @@ class ElasticsearchRetriever:
         return documents
 
     async def _fetch_metadata(self, video_ids: list[str]) -> dict:
-        """Secondary fetch from the metadata index — the transcripts
-        index only carries video_id (denormalized) + lang + content +
+        """Secondary fetch from the metadata index — the passage
+        index carries video_id (denormalized) + lang + content +
         channel_id, so titles / channels / upload_date / urls live in
         the separate metadata index.
 

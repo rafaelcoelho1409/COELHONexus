@@ -1,8 +1,12 @@
 """Operational limits and identifiers for the processed-book retrieval index."""
 from __future__ import annotations
 
-CHUNK_SIZE = 1800
-CHUNK_OVERLAP = 240
+# Qdrant chunking values are character counts, aligned with YCS defaults.
+CHUNK_SIZE = 2000
+CHUNK_OVERLAP = 0
+QDRANT_INDEX_PROFILE_VERSION = "1"
+QDRANT_CHUNKING_VERSION = "recursive_character_v1"
+QDRANT_CHUNK_SEPARATORS = ("\n\n", "\n", " ", "")
 PAGE_PROGRESS_INTERVAL = 25
 EMBED_BATCH_SIZE = 50
 GRAPH_BATCH_CHARS = 18000
@@ -10,6 +14,7 @@ GRAPH_WRITE_BATCH_SIZE = 500
 GRAPH_TRANSFORMER_TIMEOUT_S = 650.0
 GRAPH_ROTATOR_TASK = "bd_ingestion_agentic_rag_neo4j"
 SPARSE_MODEL_NAME = "Qdrant/bm25"
+QDRANT_COLLECTION_PREFIX = "coelhonexus-bd-rag"
 RUN_LOCK_LEASE_S = 180
 RUN_LOCK_RENEW_S = 45
 RUN_LOCK_RETRY_S = 10

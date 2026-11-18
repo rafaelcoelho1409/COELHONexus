@@ -9,6 +9,7 @@ import domains
 import infra
 
 from . import keys, params, schemas, versions
+from .qdrant_index import domain as qdrant_domain
 
 
 def _json(value: Any) -> str:
@@ -33,6 +34,7 @@ async def write_manifest(
 ) -> dict[str, Any]:
     if storage is None:
         storage = infra.minio.service.get_storage()
+    manifest["schema_version"] = versions.SCHEMA_VERSION
     manifest["updated_at"] = max(time.time(), manifest["created_at"])
     parsed = schemas.RetrievalIndexManifest.model_validate(manifest)
     await storage.write(
@@ -59,7 +61,12 @@ async def read_index(
     key = domains.bd.ingestion.ai.retrieval_index.keys.manifest_key(book_id, agentic_run_id)
     if not await storage.exists(key):
         return None
-    manifest = schemas.RetrievalIndexManifest.model_validate_json(await storage.read_text(key))
+    document = json.loads(await storage.read_text(key))
+    if not isinstance(document, dict):
+        raise ValueError("the retrieval-index manifest is malformed")
+    if "qdrant_index_profile_fingerprint" not in document:
+        document["qdrant_index_profile_fingerprint"] = ""
+    manifest = schemas.RetrievalIndexManifest.model_validate(document)
     if manifest.book_id != book_id or manifest.agentic_run_id != agentic_run_id:
         raise ValueError("the retrieval-index manifest does not match the requested Ingestion run")
     result = manifest.model_dump(mode = "json")
@@ -178,13 +185,19 @@ async def queue_index(book_id: str, agentic_run_id: str) -> dict[str, Any]:
             now = time.time()
             if existing is not None and existing.get("status") in {"queued", "running"}:
                 return existing
-            same_revision = existing is not None and (
+            same_inputs = existing is not None and (
                 existing.get("workflow_version") == versions.WORKFLOW_VERSION
                 and existing.get("processed_book_revision") == processed.selection_revision
                 and existing.get("processed_book_sha256") == processed_sha256
             )
+            same_revision = same_inputs and (
+                existing.get("qdrant_index_profile_fingerprint")
+                == qdrant_domain.index_profile_fingerprint()
+            )
             if same_revision:
-                return existing
+                configured_model = domains.settings.embeddings.service.get_configured_model()
+                if configured_model.casefold() == "auto" or existing.get("embedding_model") == configured_model:
+                    return existing
             manifest = initial_manifest(
                 book_id,
                 run["extraction_run_id"],
@@ -196,6 +209,34 @@ async def queue_index(book_id: str, agentic_run_id: str) -> dict[str, Any]:
                 attempt = existing["attempt"] + 1 if existing is not None else 1,
                 created_at = existing["created_at"] if existing is not None else now,
             )
+            if same_inputs and existing is not None:
+                manifest["checkpoint_generation"] = existing["attempt"] + 1
+            manifest["qdrant_index_profile_fingerprint"] = qdrant_domain.index_profile_fingerprint()
+            pointer_key = domains.bd.ingestion.storage.keys.current_retrieval_index_key(book_id)
+            if await storage.exists(pointer_key):
+                try:
+                    previous_pointer = json.loads(await storage.read_text(pointer_key))
+                except (TypeError, ValueError):
+                    previous_pointer = {}
+                if not isinstance(previous_pointer, dict):
+                    previous_pointer = {}
+                previous_run_id = previous_pointer.get("agentic_run_id")
+                previous_revision = previous_pointer.get("processed_book_revision")
+                if (
+                    _safe_segment(previous_run_id)
+                    and isinstance(previous_revision, int)
+                    and not isinstance(previous_revision, bool)
+                    and previous_revision > 0
+                ):
+                    previous_collection = previous_pointer.get("qdrant_collection")
+                    manifest.update(
+                        previous_qdrant_collection = previous_collection if isinstance(previous_collection, str) else None,
+                        previous_agentic_run_id = previous_run_id,
+                        previous_processed_book_revision = previous_revision,
+                        previous_qdrant_index_profile_fingerprint = previous_pointer.get(
+                            "qdrant_index_profile_fingerprint",
+                        ),
+                    )
             manifest = await write_manifest(manifest, storage = storage)
             from . import task
             try:
@@ -298,29 +339,24 @@ async def _delete_replay_outputs(
 
     if "elasticsearch" in descendants:
         es_index = manifest.get("elasticsearch_index") or infra.elasticsearch.keys.INDEX_BD_INGESTION
-        index_domain = domains.bd.ingestion.ai.retrieval_index.elasticsearch_index.domain
         es = infra.elasticsearch.service.new_es()
         try:
-            if es_index == infra.elasticsearch.keys.INDEX_BD_INGESTION and await es.indices.exists(index = es_index):
-                result = await es.delete_by_query(
-                    index = es_index,
-                    query = {
-                        "bool": {
-                            "filter": [
-                                {"term": {"book_id": book_id}},
-                                {"term": {"book_fingerprint": index_domain.book_fingerprint(book_id)}},
-                                {"term": {"agentic_run_id": agentic_run_id}},
-                                {"term": {"processed_book_revision": revision}},
-                            ],
-                        },
-                    },
-                    conflicts = "proceed",
-                    refresh = True,
+            if es_index == infra.elasticsearch.keys.INDEX_BD_INGESTION:
+                await domains.bd.ingestion.ai.retrieval_index.elasticsearch_index.service.delete_book_revision(
+                    es,
+                    book_id = book_id,
+                    agentic_run_id = agentic_run_id,
+                    revision = revision,
                 )
-                if result.get("timed_out") or result.get("failures") or result.get("version_conflicts", 0):
-                    raise RuntimeError("Elasticsearch could not fully clear the replayed book revision")
-            elif es_index != infra.elasticsearch.keys.INDEX_BD_INGESTION:
+            else:
                 await es.indices.delete(index = es_index, ignore_unavailable = True)
+                await domains.bd.ingestion.ai.retrieval_index.elasticsearch_index.service.delete_book_revision(
+                    es,
+                    book_id = book_id,
+                    agentic_run_id = agentic_run_id,
+                    revision = revision,
+                    indexes = (infra.elasticsearch.keys.INDEX_BD_RAG_PASSAGES,),
+                )
         finally:
             await es.close()
 
@@ -370,7 +406,15 @@ async def replay_index_node(book_id: str, agentic_run_id: str, node_id: str) -> 
             manifest = await read_index(book_id, agentic_run_id, storage = storage)
             if manifest is None:
                 raise FileNotFoundError("retrieval-index run not found")
-            if manifest["workflow_version"] != versions.WORKFLOW_VERSION:
+            replay_compatible_legacy_graph = (
+                node_id == "neo4j"
+                and manifest["workflow_version"]
+                in versions.NEO4J_REPLAY_COMPATIBLE_WORKFLOW_VERSIONS
+            )
+            if (
+                manifest["workflow_version"] != versions.WORKFLOW_VERSION
+                and not replay_compatible_legacy_graph
+            ):
                 raise ValueError("this retrieval-index run uses an older graph; start a fresh Agentic RAG run")
             if manifest["status"] in {"queued", "running"}:
                 age = time.time() - manifest["updated_at"]
@@ -426,6 +470,8 @@ async def replay_index_node(book_id: str, agentic_run_id: str, node_id: str) -> 
                 agentic_run_id,
                 manifest["workflow_version"],
                 manifest["processed_book_revision"],
+                manifest.get("qdrant_index_profile_fingerprint"),
+                manifest.get("checkpoint_generation", 0),
             )}}
             await _checkpoint_for_replay(graph, config, node_id)
             await _delete_replay_outputs(manifest, node_id, storage)
@@ -529,32 +575,22 @@ async def wipe_index(book_id: str, agentic_run_id: str) -> dict[str, Any]:
             es = infra.elasticsearch.service.new_es()
             try:
                 if es_index == infra.elasticsearch.keys.INDEX_BD_INGESTION:
-                    if await es.indices.exists(index = es_index):
-                        index_domain = domains.bd.ingestion.ai.retrieval_index.elasticsearch_index.domain
-                        result = await es.delete_by_query(
-                            index = es_index,
-                            query = {
-                                "bool": {
-                                    "filter": [
-                                        {"term": {"book_id": book_id}},
-                                        {"term": {"book_fingerprint": index_domain.book_fingerprint(book_id)}},
-                                        {"term": {"agentic_run_id": agentic_run_id}},
-                                        {"term": {"processed_book_revision": revision}},
-                                    ],
-                                },
-                            },
-                            conflicts = "proceed",
-                            refresh = True,
-                        )
-                        if (
-                            result.get("timed_out")
-                            or result.get("failures")
-                            or result.get("version_conflicts", 0)
-                        ):
-                            raise RuntimeError("Elasticsearch could not fully wipe this book revision")
+                    await domains.bd.ingestion.ai.retrieval_index.elasticsearch_index.service.delete_book_revision(
+                        es,
+                        book_id = book_id,
+                        agentic_run_id = manifest["agentic_run_id"],
+                        revision = revision,
+                    )
                 else:
                     # Previously published manifests may still point to an isolated per-book index.
                     await es.indices.delete(index = es_index, ignore_unavailable = True)
+                    await domains.bd.ingestion.ai.retrieval_index.elasticsearch_index.service.delete_book_revision(
+                        es,
+                        book_id = book_id,
+                        agentic_run_id = manifest["agentic_run_id"],
+                        revision = revision,
+                        indexes = (infra.elasticsearch.keys.INDEX_BD_RAG_PASSAGES,),
+                    )
             finally:
                 await es.close()
 
@@ -599,6 +635,8 @@ async def wipe_index(book_id: str, agentic_run_id: str) -> dict[str, Any]:
                     agentic_run_id,
                     manifest["workflow_version"],
                     revision,
+                    manifest.get("qdrant_index_profile_fingerprint"),
+                    manifest.get("checkpoint_generation", 0),
                 )
             )
 
@@ -664,6 +702,18 @@ def initial_manifest(
         "pin_sources_pages_completed": 0,
         "elasticsearch_pages_completed": 0,
         "qdrant_pages_completed": 0,
+        "qdrant_index_profile_version": params.QDRANT_INDEX_PROFILE_VERSION,
+        "qdrant_chunking_version": params.QDRANT_CHUNKING_VERSION,
+        "qdrant_chunk_size_chars": params.CHUNK_SIZE,
+        "qdrant_chunk_overlap_chars": params.CHUNK_OVERLAP,
+        "qdrant_chunk_separators": list(params.QDRANT_CHUNK_SEPARATORS),
+        "qdrant_sparse_model": params.SPARSE_MODEL_NAME,
+        "qdrant_index_profile_fingerprint": qdrant_domain.index_profile_fingerprint(),
+        "previous_qdrant_collection": None,
+        "previous_agentic_run_id": None,
+        "previous_processed_book_revision": None,
+        "previous_qdrant_index_profile_fingerprint": None,
+        "checkpoint_generation": 0,
         "neo4j_pages_completed": 0,
         "graph_batches_completed": 0,
         "graph_batches_total": 0,

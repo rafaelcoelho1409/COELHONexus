@@ -49,17 +49,26 @@ async def _retrieve_ingestion_vectors(
     vectors, model = await domains.settings.embeddings.service.embed_texts_async([query])
     if model != expected_model or not vectors or len(vectors[0]) != dimensions:
         raise ValueError("The configured embedding model does not match this book's retrieval index")
-    sparse = infra.qdrant.service.FastEmbedSparse(model_name = params.SPARSE_MODEL_NAME)
+    sparse = infra.qdrant.service.FastEmbedSparse(
+        model_name = index.get("qdrant_sparse_model") or params.SPARSE_MODEL_NAME,
+    )
     sparse_vector = sparse.embed_query(query)
     models = infra.qdrant.service.models
-    scope = models.Filter(must = [
+    scope_conditions = [
         models.FieldCondition(key = "book_id", match = models.MatchValue(value = book_id)),
         models.FieldCondition(key = "agentic_run_id", match = models.MatchValue(value = index["agentic_run_id"])),
         models.FieldCondition(
             key = "processed_book_revision",
             match = models.MatchValue(value = index["processed_book_revision"]),
         ),
-    ])
+    ]
+    profile_fingerprint = index.get("qdrant_index_profile_fingerprint")
+    if isinstance(profile_fingerprint, str) and profile_fingerprint:
+        scope_conditions.append(models.FieldCondition(
+            key = "index_profile_fingerprint",
+            match = models.MatchValue(value = profile_fingerprint),
+        ))
+    scope = models.Filter(must = scope_conditions)
     prefetch = [models.Prefetch(query = vectors[0], using = "dense", limit = params.TOP_K * 2, filter = scope)]
     if sparse_vector is not None:
         prefetch.append(models.Prefetch(
@@ -89,7 +98,7 @@ async def _retrieve_ingestion_vectors(
 
 
 async def _retrieve_ingestion_full_text(book_id: str, query: str, index: dict[str, Any]) -> list[dict[str, Any]]:
-    index_name = index.get("elasticsearch_index") or infra.elasticsearch.keys.INDEX_BD_INGESTION
+    index_name = index.get("elasticsearch_passage_index") or infra.elasticsearch.keys.INDEX_BD_RAG_PASSAGES
     if not index_name:
         return []
     filters = [
@@ -97,9 +106,11 @@ async def _retrieve_ingestion_full_text(book_id: str, query: str, index: dict[st
         {"term": {"agentic_run_id": index["agentic_run_id"]}},
         {"term": {"processed_book_revision": index["processed_book_revision"]}},
     ]
-    if index_name == infra.elasticsearch.keys.INDEX_BD_INGESTION:
-        index_domain = domains.bd.ingestion.ai.retrieval_index.elasticsearch_index.domain
-        filters.append({"term": {"book_fingerprint": index_domain.book_fingerprint(book_id)}})
+    profile_fingerprint = index.get("qdrant_index_profile_fingerprint")
+    if profile_fingerprint:
+        filters.append({"term": {"index_profile_fingerprint": profile_fingerprint}})
+    index_domain = domains.bd.ingestion.ai.retrieval_index.elasticsearch_index.domain
+    filters.append({"term": {"book_fingerprint": index_domain.book_fingerprint(book_id)}})
     client = infra.elasticsearch.service.new_es()
     try:
         result = await client.search(
@@ -110,7 +121,7 @@ async def _retrieve_ingestion_full_text(book_id: str, query: str, index: dict[st
                     "must": [{
                         "multi_match": {
                             "query": query,
-                            "fields": ["content^2", "section_path"],
+                            "fields": ["content^2", "section_path.text"],
                             "type": "best_fields",
                         },
                     }],
@@ -146,20 +157,56 @@ async def _retrieve_ingestion_graph(
     if not terms:
         return []
     cypher = """
-        MATCH (node:COELHONexus:BD:BDNode)
+        MATCH (node:COELHONexus:BD)
         WHERE node.book_id = $book_id
           AND node.agentic_run_id = $agentic_run_id
           AND node.processed_book_revision = $revision
-          AND node.kind = 'entity'
+          AND node:Entity
           AND any(term IN $terms WHERE toLower(coalesce(node.name, '')) CONTAINS term)
-        OPTIONAL MATCH (node)-[relationship:BD_RELATES]-(related:COELHONexus:BD:BDNode {
+        OPTIONAL MATCH (node)-[relationship]-(related:COELHONexus:BD:Entity {
             book_id: $book_id, agentic_run_id: $agentic_run_id,
             processed_book_revision: $revision
         })
+        WHERE relationship IS NULL
+           OR (relationship.book_id = $book_id
+               AND relationship.agentic_run_id = $agentic_run_id
+               AND relationship.processed_book_revision = $revision)
+        WITH node,
+             collect(DISTINCT CASE WHEN relationship IS NULL THEN null ELSE {
+                 type: type(relationship), kind: relationship.kind,
+                 source: startNode(relationship).name, target: endNode(relationship).name,
+                 citations: relationship.citations, evidence: relationship.evidence,
+                 page_numbers: relationship.processed_page_numbers
+             } END)[..4] AS relationships
+        OPTIONAL MATCH (evidence_source:COELHONexus:BD:Entity)-[:BD_HAS_EVIDENCE]->
+                       (graph_evidence:COELHONexus:BD:GraphEvidence)-[:BD_EVIDENCE_TARGET]->
+                       (evidence_target:COELHONexus:BD:Entity)
+        WHERE node.id IN [evidence_source.id, evidence_target.id]
+          AND evidence_source.book_id = $book_id
+          AND evidence_source.agentic_run_id = $agentic_run_id
+          AND evidence_source.processed_book_revision = $revision
+          AND evidence_target.book_id = $book_id
+          AND evidence_target.agentic_run_id = $agentic_run_id
+          AND evidence_target.processed_book_revision = $revision
+          AND graph_evidence.book_id = $book_id
+          AND graph_evidence.agentic_run_id = $agentic_run_id
+          AND graph_evidence.processed_book_revision = $revision
+        OPTIONAL MATCH (graph_evidence)-[:BD_SUPPORTED_BY]->
+                       (evidence_page:COELHONexus:BD:ProcessedPage {
+                           book_id: $book_id, agentic_run_id: $agentic_run_id,
+                           processed_book_revision: $revision
+                       })
         RETURN node.id AS id, node.kind AS kind, node.name AS name,
                node.entity_type AS entity_type, node.page_numbers AS page_numbers,
                node.citations AS citations,
-               collect(DISTINCT {kind: relationship.kind, target: related.name})[..4] AS relationships
+               relationships,
+               collect(DISTINCT CASE WHEN graph_evidence IS NULL THEN null ELSE {
+                   id: graph_evidence.id, source: evidence_source.name,
+                   relation: graph_evidence.relation_kind, target: evidence_target.name,
+                   quote: graph_evidence.quote,
+                   processed_page_number: graph_evidence.processed_page_number,
+                   source_page_number: graph_evidence.source_page_number
+               } END)[..6] AS graph_evidence
         LIMIT $limit
     """
     async with infra.neo4j.service.session(default_access_mode = "READ") as session:
@@ -175,11 +222,50 @@ async def _retrieve_ingestion_graph(
     evidence = []
     for row in rows:
         relationships = row.get("relationships") or []
+        graph_evidence = row.get("graph_evidence") or []
         details = [str(row.get("name") or ""), str(row.get("entity_type") or "")]
         details.extend(
-            f"{item.get('kind') or 'related to'} {item.get('target') or ''}"
+            f"{item.get('source') or ''} {item.get('kind') or item.get('type') or 'related to'} "
+            f"{item.get('target') or ''}"
             for item in relationships if isinstance(item, dict) and item.get("target")
         )
+        relation_evidence: list[str] = []
+        relation_citations: list[dict[str, Any]] = []
+        for item in graph_evidence:
+            if not isinstance(item, dict):
+                continue
+            source_name = str(item.get("source") or "")
+            relation_name = str(item.get("relation") or "related to")
+            target_name = str(item.get("target") or "")
+            if source_name or target_name:
+                details.append(f"{source_name} {relation_name} {target_name}".strip())
+            quote_value = str(item.get("quote") or "").strip()
+            if quote_value:
+                relation_evidence.append(quote_value)
+            relation_citations.append({
+                "processed_page_number": item.get("processed_page_number"),
+                "source_page_number": item.get("source_page_number"),
+                "quote": quote_value,
+            })
+        for relationship in relationships:
+            if not isinstance(relationship, dict):
+                continue
+            evidence_values = relationship.get("evidence") or []
+            if isinstance(evidence_values, str):
+                evidence_values = [evidence_values]
+            relation_evidence.extend(
+                str(value) for value in evidence_values
+                if isinstance(value, str) and value.strip()
+            )
+            try:
+                citations_value = json.loads(relationship.get("citations") or "[]")
+            except (json.JSONDecodeError, TypeError):
+                citations_value = []
+            if isinstance(citations_value, list):
+                relation_citations.extend(
+                    item for item in citations_value if isinstance(item, dict)
+                )
+        details.extend(f"Evidence: {item}" for item in dict.fromkeys(relation_evidence))
         try:
             pages = json.loads(row.get("page_numbers") or "[]")
         except json.JSONDecodeError:
@@ -188,8 +274,21 @@ async def _retrieve_ingestion_graph(
             citations = json.loads(row.get("citations") or "[]")
         except json.JSONDecodeError:
             citations = []
-        page = next((item for item in pages if type(item) is int and item > 0), None) if isinstance(pages, list) else None
-        quote = next((str(item.get("quote")) for item in citations if isinstance(item, dict) and item.get("quote")), "") if isinstance(citations, list) else ""
+        page = next((
+            item.get("processed_page_number") for item in relation_citations
+            if type(item.get("processed_page_number")) is int
+            and item["processed_page_number"] > 0
+        ), None)
+        if not page and isinstance(pages, list):
+            page = next((item for item in pages if type(item) is int and item > 0), None)
+        quote = next((
+            str(item.get("quote")) for item in relation_citations if item.get("quote")
+        ), "")
+        if not quote and isinstance(citations, list):
+            quote = next((
+                str(item.get("quote")) for item in citations
+                if isinstance(item, dict) and item.get("quote")
+            ), "")
         citation = {
             "title": str(row.get("name") or "Book graph evidence"),
             "url": "",

@@ -5,7 +5,9 @@ reads them at startup and creates the indexes if missing. They live here
 (per the §2 schemas.py trigger) because they ARE the ES boundary shapes:
 they define what the datastore accepts, not how we call it.
 
-DO NOT add fields without bumping a schema version and writing a reindex job — ES doesn't allow mapping changes on existing fields."""
+Each logical index name is a stable alias over a versioned physical index.
+Mapping changes should create a new physical index and switch the alias after
+reindexing/validation."""
 from __future__ import annotations
 
 
@@ -123,9 +125,73 @@ BD_INGESTION_MAPPING: dict = {
             "processed_book_revision": {"type": "integer"},
             "processed_page_number":   {"type": "integer"},
             "source_page_number":      {"type": "integer"},
-            "section_path":            {"type": "keyword"},
+            "section_path": {
+                "type": "keyword",
+                "fields": {"text": {"type": "text", "analyzer": "standard"}},
+            },
             "content_role":            {"type": "keyword"},
             "content_sha256":          {"type": "keyword"},
+            "content":                 {"type": "text", "analyzer": "standard"},
+        },
+    },
+    "settings": {
+        "number_of_shards":   1,
+        "number_of_replicas": 0,
+    },
+}
+
+
+YCS_RAG_PASSAGES_MAPPING: dict = {
+    "mappings": {
+        "properties": {
+            "video_id":        {"type": "keyword"},
+            "transcript_id":   {"type": "keyword"},
+            "parent_video_id": {"type": "keyword"},
+            "lang":            {"type": "keyword"},
+            "channel_id":      {"type": "keyword"},
+            "playlist_id":     {"type": "keyword"},
+            "part_index":      {"type": "integer"},
+            "part_total":      {"type": "integer"},
+            "chunk_index":     {"type": "integer"},
+            "total_chunks":    {"type": "integer"},
+            "source_char_start": {"type": "integer"},
+            "source_char_end":   {"type": "integer"},
+            "content_hash":    {"type": "keyword"},
+            "chunking_policy_version": {"type": "keyword"},
+            "chunk_size_chars":        {"type": "integer"},
+            "chunk_overlap_chars":     {"type": "integer"},
+            "index_profile_fingerprint": {"type": "keyword"},
+            "content":         {"type": "text", "analyzer": "standard"},
+        },
+    },
+    "settings": {
+        "number_of_shards":   1,
+        "number_of_replicas": 0,
+    },
+}
+
+
+BD_RAG_PASSAGES_MAPPING: dict = {
+    "mappings": {
+        "properties": {
+            "book_id":                 {"type": "keyword"},
+            "book_fingerprint":        {"type": "keyword"},
+            "extraction_run_id":       {"type": "keyword"},
+            "agentic_run_id":          {"type": "keyword"},
+            "processed_book_revision": {"type": "integer"},
+            "processed_page_number":   {"type": "integer"},
+            "source_page_number":      {"type": "integer"},
+            "section_path": {
+                "type": "keyword",
+                "fields": {"text": {"type": "text", "analyzer": "standard"}},
+            },
+            "content_role":            {"type": "keyword"},
+            "content_sha256":          {"type": "keyword"},
+            "index_profile_fingerprint": {"type": "keyword"},
+            "chunk_index":             {"type": "integer"},
+            "total_chunks":            {"type": "integer"},
+            "source_char_start":       {"type": "integer"},
+            "source_char_end":         {"type": "integer"},
             "content":                 {"type": "text", "analyzer": "standard"},
         },
     },

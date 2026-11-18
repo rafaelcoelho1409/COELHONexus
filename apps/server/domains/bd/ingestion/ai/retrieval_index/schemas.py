@@ -26,7 +26,7 @@ Neo4jStage = Literal[
 class RetrievalIndexManifest(BaseModel):
     model_config = ConfigDict(extra = "forbid")
 
-    schema_version: Literal["1.0"] = versions.SCHEMA_VERSION
+    schema_version: Literal["1.0", "1.1", "1.2"] = versions.SCHEMA_VERSION
     workflow_version: str = versions.WORKFLOW_VERSION
     book_id: SafeSegment
     extraction_run_id: SafeSegment
@@ -41,16 +41,30 @@ class RetrievalIndexManifest(BaseModel):
     current_node: str | None = None
     node_status: dict[str, NodeStatus]
     attempt: int = Field(ge = 1, strict = True)
+    checkpoint_generation: int = Field(default = 0, ge = 0, strict = True)
     source_artifact_key: ObjectKey | None = None
     pin_sources_pages_completed: int = Field(default = 0, ge = 0, strict = True)
     elasticsearch_index: str | None = None
     elasticsearch_document_count: int = Field(default = 0, ge = 0, strict = True)
+    elasticsearch_passage_index: str | None = None
+    elasticsearch_passage_count: int = Field(default = 0, ge = 0, strict = True)
     elasticsearch_pages_completed: int = Field(default = 0, ge = 0, strict = True)
     qdrant_collection: str | None = None
     embedding_model: str | None = None
     embedding_dimensions: int | None = Field(default = None, ge = 1, strict = True)
+    qdrant_index_profile_version: str = params.QDRANT_INDEX_PROFILE_VERSION
+    qdrant_chunking_version: str = params.QDRANT_CHUNKING_VERSION
+    qdrant_chunk_size_chars: int = Field(default = params.CHUNK_SIZE, ge = 1, strict = True)
+    qdrant_chunk_overlap_chars: int = Field(default = params.CHUNK_OVERLAP, ge = 0, strict = True)
+    qdrant_chunk_separators: list[str] = Field(default_factory = lambda: list(params.QDRANT_CHUNK_SEPARATORS))
+    qdrant_sparse_model: str = params.SPARSE_MODEL_NAME
+    qdrant_index_profile_fingerprint: str = ""
     qdrant_point_count: int = Field(default = 0, ge = 0, strict = True)
     qdrant_pages_completed: int = Field(default = 0, ge = 0, strict = True)
+    previous_qdrant_collection: str | None = None
+    previous_agentic_run_id: SafeSegment | None = None
+    previous_processed_book_revision: int | None = Field(default = None, ge = 1, strict = True)
+    previous_qdrant_index_profile_fingerprint: str | None = None
     neo4j_node_count: int = Field(default = 0, ge = 0, strict = True)
     neo4j_relationship_count: int = Field(default = 0, ge = 0, strict = True)
     graph_batches_completed: int = Field(default = 0, ge = 0, strict = True)

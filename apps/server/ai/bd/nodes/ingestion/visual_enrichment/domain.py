@@ -1,7 +1,7 @@
 """Deterministic Markdown serializers for validated figure transcriptions."""
 from __future__ import annotations
-from .... import agents
 from . import params, patterns
+from .... import agents
 
 import json
 

@@ -105,6 +105,8 @@ def index_processed_book(self, book_id: str, agentic_run_id: str) -> dict:
                     agentic_run_id,
                     manifest["workflow_version"],
                     manifest["processed_book_revision"],
+                    manifest.get("qdrant_index_profile_fingerprint"),
+                    manifest.get("checkpoint_generation", 0),
                 )}}
                 initial_state = {
                     "book_id": book_id,
@@ -118,6 +120,8 @@ def index_processed_book(self, book_id: str, agentic_run_id: str) -> dict:
                     "pin_sources_pages_completed": manifest.get("pin_sources_pages_completed", 0),
                     "elasticsearch_index": manifest.get("elasticsearch_index", ""),
                     "elasticsearch_document_count": manifest.get("elasticsearch_document_count", 0),
+                    "elasticsearch_passage_index": manifest.get("elasticsearch_passage_index", ""),
+                    "elasticsearch_passage_count": manifest.get("elasticsearch_passage_count", 0),
                     "elasticsearch_pages_completed": manifest.get("elasticsearch_pages_completed", 0),
                     "qdrant_collection": manifest.get("qdrant_collection", ""),
                     "embedding_model": manifest.get("embedding_model", ""),
@@ -204,6 +208,8 @@ def index_processed_book(self, book_id: str, agentic_run_id: str) -> dict:
                                 "pin_sources_pages_completed",
                                 "elasticsearch_index",
                                 "elasticsearch_document_count",
+                                "elasticsearch_passage_index",
+                                "elasticsearch_passage_count",
                                 "elasticsearch_pages_completed",
                                 "qdrant_collection",
                                 "embedding_model",
@@ -265,6 +271,31 @@ def index_processed_book(self, book_id: str, agentic_run_id: str) -> dict:
                     error = None,
                 )
                 completed = await service.write_manifest(completed, storage = storage)
+                if completed.get("qdrant_collection"):
+                    try:
+                        removed_points = await domains.bd.ingestion.ai.retrieval_index.qdrant_index.service.prune_stale_book_points(
+                            collection = completed["qdrant_collection"],
+                            book_id = book_id,
+                            current_agentic_run_id = agentic_run_id,
+                            current_revision = completed["processed_book_revision"],
+                            previous_collection = completed.get("previous_qdrant_collection"),
+                            previous_agentic_run_id = completed.get("previous_agentic_run_id"),
+                            previous_revision = completed.get("previous_processed_book_revision"),
+                            current_profile_fingerprint = completed.get("qdrant_index_profile_fingerprint"),
+                            previous_profile_fingerprint = completed.get(
+                                "previous_qdrant_index_profile_fingerprint",
+                            ),
+                        )
+                        logger.info(
+                            "[bd-retrieval-index] pruned %s stale Qdrant points for book %s",
+                            removed_points,
+                            book_id,
+                        )
+                    except Exception:
+                        logger.exception(
+                            "[bd-retrieval-index] stale-point cleanup failed after successful publish for %s",
+                            book_id,
+                        )
                 await domains.settings.llm_counter.service.snapshot(
                     "bd",
                     keys.usage_run_id(book_id, agentic_run_id),

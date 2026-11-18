@@ -105,16 +105,9 @@ async def _compute_video_statuses(
                 size  = min(10000, max(200, len(video_ids) * 10)),
                 query = {"bool": {"should": [
                     {"terms": {"video_id": video_ids}},
-                    # `.keyword`, not the bare field — `parent_video_id` is
-                    # mapped `text` (analyzed) with a `.keyword` sub-field;
-                    # a `terms` query against the bare name tokenizes and
-                    # silently matches nothing. This clause has been dead
-                    # since it was first added (2026-09-14) until fixed
-                    # live (2026-09-15) — every split video's status was
-                    # computed as if it had no transcript at all, since its
-                    # transcript docs (keyed by partition id) were never
-                    # found when this ran with the PARENT id.
-                    {"terms": {"parent_video_id.keyword": video_ids}},
+                    # Current versioned mappings store this exact-match field
+                    # as keyword, so no `.keyword` subfield is needed.
+                    {"terms": {"parent_video_id": video_ids}},
                 ]}},
                 _source = ["video_id", "parent_video_id", "part_total", "lang", "content"],
             )

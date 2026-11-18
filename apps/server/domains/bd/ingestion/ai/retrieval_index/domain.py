@@ -11,6 +11,8 @@ NODE_OUTPUT_DEFAULTS: dict[str, dict[str, Any]] = {
     "elasticsearch": {
         "elasticsearch_index": "",
         "elasticsearch_document_count": 0,
+        "elasticsearch_passage_index": "",
+        "elasticsearch_passage_count": 0,
         "elasticsearch_pages_completed": 0,
     },
     "qdrant": {

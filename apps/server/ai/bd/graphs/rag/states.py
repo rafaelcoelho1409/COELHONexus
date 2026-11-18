@@ -19,6 +19,8 @@ class ProcessedBookIndexState(TypedDict, total = False):
     pin_sources_pages_completed: int
     elasticsearch_index: str
     elasticsearch_document_count: int
+    elasticsearch_passage_index: str
+    elasticsearch_passage_count: int
     elasticsearch_pages_completed: int
     qdrant_collection: str
     embedding_model: str

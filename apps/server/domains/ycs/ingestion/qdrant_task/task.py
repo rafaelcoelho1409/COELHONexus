@@ -2,6 +2,7 @@
 from __future__ import annotations
 import domains, infra
 import infra.celery
+from .. import params
 from . import service
 
 import asyncio
@@ -17,18 +18,18 @@ logger = infra.celery.service.get_task_logger(__name__)
 def ingest_to_qdrant(
     self,
     video_ids:       list[str] | None = None,
-    chunk_size:      int              = 2000,
-    chunk_overlap:   int              = 200,
+    chunk_size:      int              = params.DEFAULT_CHUNK_SIZE,
+    chunk_overlap:   int              = params.DEFAULT_CHUNK_OVERLAP,
     collection_name: str | None       = None,
 ) -> dict[str, Any]:
     """Stream ES transcripts → chunk → embed → Qdrant upsert.
 
     `collection_name` (2026-09-15) — override for
     `domains.ycs.ingestion.embedding_migration`'s re-embed job, which targets a
-    fresh versioned staging collection instead of the live one; `None`
-    (every other caller) keeps the default from `ingestion.service
-    .ingest_to_qdrant`'s own signature (the live `QDRANT_COLLECTION`
-    alias)."""
+    fresh versioned staging collection instead of the live one. `None`
+    (every other caller) creates or uses the physical collection for the
+    configured embedding model and dimensions, while maintaining the stable
+    `QDRANT_COLLECTION` alias for retrieval."""
     logger.info(
         f"[ingest_to_qdrant] Starting: video_ids={video_ids}, "
         f"chunk_size={chunk_size}",
@@ -121,8 +122,8 @@ def stream_video_to_qdrant(
     self,
     video_id:      str,
     extract_id:    str,
-    chunk_size:    int = 2000,
-    chunk_overlap: int = 200,
+    chunk_size:    int = params.DEFAULT_CHUNK_SIZE,
+    chunk_overlap: int = params.DEFAULT_CHUNK_OVERLAP,
 ) -> dict[str, Any]:
     """Celery adapter for the reusable streaming Qdrant worker."""
     result = asyncio.run(service.stream_video_to_qdrant_async(

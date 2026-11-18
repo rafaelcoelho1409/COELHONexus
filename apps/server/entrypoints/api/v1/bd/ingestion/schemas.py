@@ -124,6 +124,8 @@ class RetrievalIndexStatus(BaseModel):
     attempt: int
     elasticsearch_index: str | None = None
     elasticsearch_document_count: int = 0
+    elasticsearch_passage_index: str | None = None
+    elasticsearch_passage_count: int = 0
     pin_sources_pages_completed: int = 0
     elasticsearch_pages_completed: int = 0
     qdrant_collection: str | None = None

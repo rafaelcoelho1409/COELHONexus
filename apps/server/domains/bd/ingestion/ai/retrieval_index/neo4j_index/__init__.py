@@ -1,4 +1,4 @@
 """Evidence-linked knowledge graph projection for processed-book pages."""
-from . import domain, patterns, service
+from . import domain, params, patterns, prompts, service
 
-__all__ = ["domain", "patterns", "service"]
+__all__ = ["domain", "params", "patterns", "prompts", "service"]

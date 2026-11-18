@@ -13,10 +13,11 @@ def basic_auth(username: str, password: str | None) -> tuple[str, str] | None:
 
 
 def index_pairs() -> tuple[tuple[str, dict], ...]:
-    """`(index name, mapping)` pairs `ensure_indexes` iterates — single
-    source for which indexes exist, so bootstrap and readers can't drift."""
+    """`(stable alias, mapping)` pairs `ensure_indexes` provisions."""
     return (
         (keys.INDEX_METADATA, schemas.METADATA_MAPPING),
         (keys.INDEX_TRANSCRIPTIONS, schemas.TRANSCRIPTIONS_MAPPING),
         (keys.INDEX_BD_INGESTION, schemas.BD_INGESTION_MAPPING),
+        (keys.INDEX_YCS_RAG_PASSAGES, schemas.YCS_RAG_PASSAGES_MAPPING),
+        (keys.INDEX_BD_RAG_PASSAGES, schemas.BD_RAG_PASSAGES_MAPPING),
     )

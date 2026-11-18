@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import domains, infra
+from .. import params
 
 import logging
 from typing import Any
@@ -13,8 +14,8 @@ logger = logging.getLogger(__name__)
 async def stream_video_to_qdrant_async(
     video_id: str,
     extract_id: str,
-    chunk_size: int = 2000,
-    chunk_overlap: int = 200,
+    chunk_size: int = params.DEFAULT_CHUNK_SIZE,
+    chunk_overlap: int = params.DEFAULT_CHUNK_OVERLAP,
 ) -> dict[str, Any]:
     """Chunk one indexed transcript, write Qdrant, and report its outcome."""
     es = infra.elasticsearch.service.new_es()

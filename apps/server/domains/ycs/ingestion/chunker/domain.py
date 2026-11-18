@@ -24,6 +24,7 @@ def create_chunker(
         chunk_overlap = chunk_overlap,
         separators = list(params.SEPARATORS),
         length_function = len,
+        add_start_index = True,
     )
 
 
@@ -38,16 +39,18 @@ def chunk_transcript(
     fields (title, channel, channel_id, upload_date, webpage_url, …)."""
     if not content or not content.strip():
         return []
-    texts = chunker.split_text(content)
+    documents = chunker.create_documents([content])
     return [
         Document(
-            page_content = text,
+            page_content = document.page_content,
             metadata = {
                 "video_id":     video_id,
                 "chunk_index":  i,
-                "total_chunks": len(texts),
+                "total_chunks": len(documents),
+                "source_char_start": int(document.metadata.get("start_index", 0)),
+                "source_char_end": int(document.metadata.get("start_index", 0)) + len(document.page_content),
                 **metadata,
             },
         )
-        for i, text in enumerate(texts)
+        for i, document in enumerate(documents)
     ]

@@ -24,9 +24,9 @@ def _snippet(text: str | None) -> str:
     return text[:params.SNIPPET_CHARS].rstrip() + "…"
 
 
-# Elasticsearch — YCS only (metadata + transcriptions). The two indexes
-# have different shapes so we route by the `_index` ES echoes back on
-# every hit. Names live in `infra.elasticsearch.keys` (single truth).
+# Elasticsearch — YCS metadata + canonical transcriptions. Elasticsearch
+# returns the physical index name for alias searches, so normalize it
+# before routing hits or exposing the index name to callers.
 
 
 def project_es_hit(hit: dict[str, Any], app: str = params.APP_YCS) -> dict[str, Any]:
@@ -37,7 +37,11 @@ def project_es_hit(hit: dict[str, Any], app: str = params.APP_YCS) -> dict[str, 
     `content` + a `video_id` foreign key. Title falls back to the
     video_id so transcript hits don't render with an empty title."""
     src   = hit.get("_source", {}) or {}
-    index = hit.get("_index", "")
+    physical_index = hit.get("_index", "")
+    index = infra.elasticsearch.keys.ALIAS_BY_PHYSICAL_INDEX.get(
+        physical_index,
+        physical_index,
+    )
     hit_id = str(hit.get("_id", ""))
     score = hit.get("_score")
 
@@ -67,7 +71,7 @@ def project_es_hit(hit: dict[str, Any], app: str = params.APP_YCS) -> dict[str, 
     }
 
 
-# Qdrant — YCS (`youtube-transcripts`).
+# Qdrant — YCS (`coelhonexus-ycs-rag` alias).
 def project_qdrant_point(point: Any, app: str) -> dict[str, Any]:
     """Qdrant point (ScoredPoint or Record) → `QueryHit` dict.
 
@@ -76,7 +80,7 @@ def project_qdrant_point(point: Any, app: str) -> dict[str, Any]:
     pid     = str(getattr(point, "id", "") if not isinstance(point, dict) else point.get("id", ""))
     score   = getattr(point, "score", None) if not isinstance(point, dict) else point.get("score")
 
-    # YCS — youtube-transcripts collection
+    # YCS — coelhonexus-ycs-rag collection alias
     video_id = payload.get("video_id") or ""
     chunk    = payload.get("chunk_index")
     title    = payload.get("title") or video_id

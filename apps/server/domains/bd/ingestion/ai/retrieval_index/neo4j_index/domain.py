@@ -4,13 +4,14 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import unicodedata
 from dataclasses import dataclass
 from typing import Any
 
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from .. import params
-from . import patterns
+from . import params as neo4j_params, patterns
 
 
 @dataclass(frozen = True, slots = True)
@@ -27,6 +28,8 @@ class GraphEdge:
     source_id: str
     target_id: str
     kind: str
+    properties: dict[str, Any]
+    semantic: bool = False
 
 
 def graph_batches(rows: list[dict[str, Any]]) -> list[tuple[str, list[dict[str, Any]]]]:
@@ -79,7 +82,7 @@ def source_material(rows: list[dict[str, Any]]) -> str:
     )
 
 
-def graph_facts(candidate: Any) -> dict[str, list[dict[str, str]]]:
+def graph_facts(candidate: Any) -> dict[str, list[dict[str, Any]]]:
     """Convert LangChain's GraphDocument into plain facts for the storage layer."""
     entities: list[dict[str, str]] = []
     for node in _value(candidate, "nodes", []) or []:
@@ -88,17 +91,26 @@ def graph_facts(candidate: Any) -> dict[str, list[dict[str, str]]]:
         if name:
             entities.append({"id": name, "type": entity_type})
 
-    relationships: list[dict[str, str]] = []
+    relationships: list[dict[str, Any]] = []
     for relationship in _value(candidate, "relationships", []) or []:
         source_id = _string_value(_value(_value(relationship, "source"), "id"))
         target_id = _string_value(_value(_value(relationship, "target"), "id"))
         relation_type = _string_value(_value(relationship, "type"))
         if source_id and target_id and relation_type:
-            relationships.append({
+            relationship_properties = _value(relationship, "properties", {})
+            fact = {
                 "source_id": source_id,
                 "target_id": target_id,
                 "type": relation_type,
-            })
+                "properties": relationship_properties if isinstance(relationship_properties, dict) else {},
+            }
+            source_type = _string_value(_value(_value(relationship, "source"), "type"))
+            target_type = _string_value(_value(_value(relationship, "target"), "type"))
+            if source_type:
+                fact["source_type"] = source_type
+            if target_type:
+                fact["target_type"] = target_type
+            relationships.append(fact)
     return {"entities": entities, "relationships": relationships}
 
 
@@ -114,6 +126,63 @@ def _string_value(value: Any) -> str:
 
 def _normalized(value: str) -> str:
     return patterns.SPACE_RE.sub(" ", value).strip().casefold()
+
+
+def _normalized_entity_type(value: str) -> str:
+    return _normalized(value) or "entity"
+
+
+def _resolve_entity_id(
+    name: str,
+    entity_type: str,
+    entity_ids: dict[tuple[str, str], str],
+    entity_ids_by_name: dict[str, set[tuple[str, str]]],
+) -> str | None:
+    normalized_name = _normalized(name)
+    if not normalized_name:
+        return None
+    if entity_type:
+        return entity_ids.get((normalized_name, _normalized_entity_type(entity_type)))
+    candidates = entity_ids_by_name.get(normalized_name, set())
+    if len(candidates) != 1:
+        return None
+    return entity_ids.get(next(iter(candidates)))
+
+
+def _normalized_relation_kind(value: str) -> str:
+    """Normalize an open-vocabulary predicate into a safe Neo4j token."""
+    decomposed = unicodedata.normalize("NFKD", str(value or ""))
+    ascii_value = "".join(
+        character
+        for character in decomposed
+        if unicodedata.category(character) != "Mn" and character.isascii()
+    )
+    return re.sub(r"[^A-Z0-9]+", "_", ascii_value.upper()).strip("_")
+
+
+def neo4j_relationship_type(kind: str, *, semantic: bool = True) -> str:
+    """Return a stable structural type or a sanitized semantic type.
+
+    Semantic predicates are intentionally open-vocabulary: retaining a
+    meaningful model-extracted relation is preferable to mapping it to a
+    generic edge. Normalization keeps the dynamic Cypher token safe.
+    """
+    if not semantic:
+        return neo4j_params.GRAPH_STRUCTURAL_RELATIONSHIP_TYPES_BY_KIND.get(
+            kind,
+            neo4j_params.GRAPH_FALLBACK_RELATIONSHIP_TYPE,
+        )
+    semantic_kind = _normalized_relation_kind(kind)
+    semantic_prefix = "BD_REL_"
+    max_semantic_length = (
+        neo4j_params.GRAPH_MAX_SEMANTIC_RELATIONSHIP_TYPE_LENGTH - len(semantic_prefix)
+    )
+    if len(semantic_kind) > max_semantic_length:
+        digest = hashlib.sha256(semantic_kind.encode("utf-8")).hexdigest()[:12]
+        semantic_kind = f"{semantic_kind[:max_semantic_length - len(digest) - 1]}_{digest}"
+    if semantic_kind:
+        return f"{semantic_prefix}{semantic_kind}"
+    return f"{semantic_prefix}RELATES"
 
 
 def _name_pattern(name: str) -> re.Pattern[str] | None:
@@ -139,6 +208,64 @@ def _source_excerpt(name: str, content: str) -> str:
     return content[start:end].strip()
 
 
+def _relationship_sentence(source_name: str, target_name: str, content: str) -> str:
+    """Return an exact sentence that mentions both relation endpoints."""
+    for match in patterns.SENTENCE_RE.finditer(content):
+        sentence = match.group().strip()
+        if _contains_name(source_name, sentence) and _contains_name(target_name, sentence):
+            return sentence
+    return ""
+
+
+def _relationship_citation(
+    source_name: str,
+    target_name: str,
+    row: dict[str, Any],
+    supplied_evidence: str,
+) -> dict[str, Any] | None:
+    content = str(row.get("content") or "")
+    sentence = _relationship_sentence(source_name, target_name, content)
+    if not sentence:
+        return None
+    quote = sentence
+    if supplied_evidence:
+        if (
+            supplied_evidence.strip() in sentence
+            and _contains_name(source_name, supplied_evidence)
+            and _contains_name(target_name, supplied_evidence)
+        ):
+            quote = supplied_evidence.strip()
+    return {
+        "processed_page_number": row.get("processed_page_number"),
+        "source_page_number": row.get("source_page_number"),
+        "quote": quote,
+    } if quote else None
+
+
+def _merge_edge_properties(previous: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(previous)
+    for field in ("processed_page_numbers", "source_page_numbers"):
+        values = set(merged.get(field, [])) | set(incoming.get(field, []))
+        merged[field] = sorted(value for value in values if type(value) is int)
+    citations = {
+        (item.get("processed_page_number"), item.get("source_page_number")): item
+        for item in [*merged.get("citations", []), *incoming.get("citations", [])]
+        if isinstance(item, dict)
+    }
+    merged["citations"] = list(citations.values())
+    evidence = list(dict.fromkeys([
+        *merged.get("evidence", []),
+        *incoming.get("evidence", []),
+    ]))
+    merged["evidence"] = [item for item in evidence if isinstance(item, str) and item.strip()]
+    evidence_ids = list(dict.fromkeys([
+        *merged.get("evidence_ids", []),
+        *incoming.get("evidence_ids", []),
+    ]))
+    merged["evidence_ids"] = [item for item in evidence_ids if isinstance(item, str) and item.strip()]
+    return merged
+
+
 def _stable_id(book_id: str, run_id: str, revision: int, kind: str, source_id: str) -> str:
     raw = f"bd:{book_id}:{run_id}:{revision}:{kind}:{source_id}".encode("utf-8")
     return hashlib.sha256(raw).hexdigest()
@@ -153,11 +280,24 @@ def _edge(
     source_id: str,
     target_id: str,
     kind: str,
+    properties: dict[str, Any] | None = None,
+    semantic: bool = False,
 ) -> None:
     edge_id = hashlib.sha256(
         f"bd:{book_id}:{run_id}:{revision}:{source_id}:{kind}:{target_id}".encode(),
     ).hexdigest()
-    edges[edge_id] = GraphEdge(edge_id, source_id, target_id, kind)
+    edge_properties = properties or {}
+    existing = edges.get(edge_id)
+    if existing is not None:
+        edge_properties = _merge_edge_properties(existing.properties, edge_properties)
+    edges[edge_id] = GraphEdge(
+        id = edge_id,
+        source_id = source_id,
+        target_id = target_id,
+        kind = kind,
+        properties = edge_properties,
+        semantic = semantic,
+    )
 
 
 def build_graph(
@@ -252,7 +392,9 @@ def build_graph(
             kind = "contains_page",
         )
 
-    entity_ids: dict[str, str] = {}
+    entity_ids: dict[tuple[str, str], str] = {}
+    entity_ids_by_name: dict[str, set[tuple[str, str]]] = {}
+    entity_names: dict[str, str] = {}
     for batch in extractions:
         section_title = batch["section_title"]
         source_rows = batch["rows"]
@@ -265,7 +407,8 @@ def build_graph(
             normalized_name = _normalized(name)
             if not normalized_name:
                 continue
-            entity_id = entity_ids.get(normalized_name)
+            entity_key = (normalized_name, _normalized_entity_type(entity_type))
+            entity_id = entity_ids.get(entity_key)
             if entity_id is None:
                 entity_id = _stable_id(
                     book_id,
@@ -274,7 +417,9 @@ def build_graph(
                     "entity",
                     f"{entity_type}:{normalized_name}",
                 )
-                entity_ids[normalized_name] = entity_id
+                entity_ids[entity_key] = entity_id
+                entity_ids_by_name.setdefault(normalized_name, set()).add(entity_key)
+                entity_names[entity_id] = name
 
             matches = [row for row in source_rows if _contains_name(name, row["content"])]
             page_numbers = sorted({row["processed_page_number"] for row in matches})
@@ -332,15 +477,123 @@ def build_graph(
                         source_id = entity_id,
                         target_id = page_node_id,
                         kind = "supported_by",
+                        properties = {
+                            "processed_page_numbers": [row["processed_page_number"]],
+                            "source_page_numbers": [row["source_page_number"]],
+                            "citations": [{
+                                "processed_page_number": row["processed_page_number"],
+                                "source_page_number": row["source_page_number"],
+                                "quote": _source_excerpt(name, row["content"]),
+                            }],
+                            "evidence": [],
+                        },
                     )
 
     for batch in extractions:
         for relationship in batch["extraction"]["relationships"]:
-            source_key = _normalized(relationship["source_id"])
-            target_key = _normalized(relationship["target_id"])
-            source_id = entity_ids.get(source_key)
-            target_id = entity_ids.get(target_key)
+            source_id = _resolve_entity_id(
+                relationship["source_id"],
+                str(relationship.get("source_type") or ""),
+                entity_ids,
+                entity_ids_by_name,
+            )
+            target_id = _resolve_entity_id(
+                relationship["target_id"],
+                str(relationship.get("target_type") or ""),
+                entity_ids,
+                entity_ids_by_name,
+            )
             if source_id is not None and target_id is not None:
+                raw_properties = relationship.get("properties", {})
+                supplied_evidence = _string_value(
+                    raw_properties.get("evidence") or raw_properties.get("quote")
+                ) if isinstance(raw_properties, dict) else ""
+                citations = [
+                    citation
+                    for row in batch["rows"]
+                    if (citation := _relationship_citation(
+                        entity_names.get(source_id, relationship["source_id"]),
+                        entity_names.get(target_id, relationship["target_id"]),
+                        row,
+                        supplied_evidence,
+                    )) is not None
+                ]
+                if not citations:
+                    continue
+                relation_kind = relationship["type"]
+                evidence_ids: list[str] = []
+                for citation in citations:
+                    page_number = citation.get("processed_page_number")
+                    source_page_number = citation.get("source_page_number")
+                    quote = str(citation.get("quote") or "")
+                    if type(page_number) is not int or not quote:
+                        continue
+                    evidence_id = _stable_id(
+                        book_id,
+                        agentic_run_id,
+                        revision,
+                        "relationship_evidence",
+                        ":".join((
+                            source_id,
+                            relation_kind,
+                            target_id,
+                            str(page_number),
+                            str(source_page_number),
+                            hashlib.sha256(quote.encode("utf-8")).hexdigest(),
+                        )),
+                    )
+                    evidence_ids.append(evidence_id)
+                    nodes[evidence_id] = GraphNode(
+                        id = evidence_id,
+                        kind = "relationship_evidence",
+                        name = f"{entity_names.get(source_id, relationship['source_id'])} {relation_kind} {entity_names.get(target_id, relationship['target_id'])}",
+                        properties = {
+                            "book_id": book_id,
+                            "agentic_run_id": agentic_run_id,
+                            "processed_book_revision": revision,
+                            "relation_kind": relation_kind,
+                            "source_entity_id": source_id,
+                            "target_entity_id": target_id,
+                            "processed_page_number": page_number,
+                            "source_page_number": source_page_number,
+                            "quote": quote,
+                        },
+                    )
+                    _edge(
+                        edges,
+                        book_id = book_id,
+                        run_id = agentic_run_id,
+                        revision = revision,
+                        source_id = source_id,
+                        target_id = evidence_id,
+                        kind = "has_evidence",
+                    )
+                    _edge(
+                        edges,
+                        book_id = book_id,
+                        run_id = agentic_run_id,
+                        revision = revision,
+                        source_id = evidence_id,
+                        target_id = target_id,
+                        kind = "evidence_target",
+                    )
+                    page_node_id = page_nodes.get(page_number)
+                    if page_node_id is not None:
+                        _edge(
+                            edges,
+                            book_id = book_id,
+                            run_id = agentic_run_id,
+                            revision = revision,
+                            source_id = evidence_id,
+                            target_id = page_node_id,
+                            kind = "supported_by",
+                            properties = {
+                                "processed_page_numbers": [page_number],
+                                "source_page_numbers": [source_page_number],
+                                "citations": [citation],
+                                "evidence": [quote],
+                            },
+                        )
                 _edge(
                     edges,
                     book_id = book_id,
@@ -348,6 +601,28 @@ def build_graph(
                     revision = revision,
                     source_id = source_id,
                     target_id = target_id,
-                    kind = relationship["type"],
+                    kind = relation_kind,
+                    semantic = True,
+                    properties = {
+                        "processed_page_numbers": sorted({
+                            item["processed_page_number"]
+                            for item in citations
+                            if type(item.get("processed_page_number")) is int
+                        }),
+                        "source_page_numbers": sorted({
+                            item["source_page_number"]
+                            for item in citations
+                            if type(item.get("source_page_number")) is int
+                        }),
+                        "citations": citations,
+                        "evidence_ids": evidence_ids,
+                        "evidence": list(dict.fromkeys(
+                            item["quote"] for item in citations if item.get("quote")
+                        )),
+                        "model_properties": json.dumps(
+                            raw_properties if isinstance(raw_properties, dict) else {},
+                            ensure_ascii = False,
+                        ),
+                    },
                 )
     return list(nodes.values()), list(edges.values())

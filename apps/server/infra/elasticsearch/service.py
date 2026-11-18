@@ -1,4 +1,4 @@
-"""Async Elasticsearch client factory + index bootstrap.
+"""Async Elasticsearch client factory + alias/index bootstrap.
 
 Lives at the infra layer (mirror of `infra/qdrant/`) so multiple domains
 can share a single cluster client. YCS uses metadata and transcriptions
@@ -7,7 +7,8 @@ indexes; BD Ingestion uses its processed-page index.
 The only module that imports the `elasticsearch` library or reads
 `ELASTICSEARCH_*` env vars: the FastAPI process uses the `get_es()`
 singleton, Celery tasks open their own client with `new_es()`, and the
-`AsyncElasticsearch` type is reached dotted through here.
+`AsyncElasticsearch` type is reached dotted through here. Each stable alias
+points to one configured versioned physical index.
 
 Index names are defined in `keys.py`; their mappings are in `schemas.py`."""
 from __future__ import annotations
@@ -61,7 +62,7 @@ async def close_es() -> None:
 
 
 async def ensure_indexes() -> dict:
-    """Idempotently create the configured YCS and BD indexes.
+    """Idempotently create the configured YCS and BD indexes and aliases.
 
     Returns per-index status. Failures don't raise; they're best-effort
     with structured error reporting so the rest of the lifespan keeps going."""
@@ -82,22 +83,61 @@ async def ensure_indexes() -> dict:
 
 
 async def ensure_index(es: AsyncElasticsearch, index: str, mapping: dict) -> dict:
-    """Create one configured index on the supplied client when it is missing."""
+    """Create a versioned physical index and attach its stable alias.
+
+    Existing aliases are accepted only when they target the configured physical
+    version. A concrete index occupying the alias name is reported explicitly;
+    it must be migrated before the alias can be created.
+    """
+    physical_index = domain.keys.PHYSICAL_INDEX_BY_ALIAS.get(index)
+    if not physical_index:
+        raise ValueError(f"Elasticsearch alias {index!r} has no configured physical index")
+
+    if await es.indices.exists_alias(name = index):
+        aliases = await es.indices.get_alias(name = index)
+        if set(aliases) != {physical_index}:
+            raise RuntimeError(
+                f"Elasticsearch alias {index!r} targets {sorted(aliases)!r}; "
+                f"expected only {physical_index!r}"
+            )
+        alias_config = aliases[physical_index].get("aliases", {}).get(index, {})
+        if alias_config.get("is_write_index") is not True:
+            await es.indices.put_alias(
+                index = physical_index,
+                name = index,
+                is_write_index = True,
+            )
+        return {"created": False, "reason": "alias exists", "physical_index": physical_index}
+
     if await es.indices.exists(index = index):
-        return {"created": False, "reason": "exists"}
-    try:
-        await es.indices.create(
-            index = index,
-            mappings = mapping["mappings"],
-            settings = mapping["settings"],
+        raise RuntimeError(
+            f"Elasticsearch name {index!r} is an existing concrete index; migrate it before alias creation"
         )
+
+    created = False
+    if not await es.indices.exists(index = physical_index):
+        try:
+            await es.indices.create(
+                index = physical_index,
+                mappings = mapping["mappings"],
+                settings = mapping["settings"],
+            )
+            created = True
+        except Exception:
+            if not await es.indices.exists(index = physical_index):
+                raise
+
+    try:
+        await es.indices.put_alias(index = physical_index, name = index, is_write_index = True)
     except Exception:
-        # Concurrent book runs can race while creating the shared BD index.
-        if not await es.indices.exists(index = index):
+        # Concurrent application/worker startup can race to attach the same alias.
+        if not await es.indices.exists_alias(name = index):
             raise
-        return {"created": False, "reason": "exists"}
-    logger.info(f"[elasticsearch] created index {index!r}")
-    return {"created": True}
+    logger.info(
+        f"[elasticsearch] {'created' if created else 'attached'} alias {index!r} "
+        f"to physical index {physical_index!r}"
+    )
+    return {"created": created, "physical_index": physical_index}
 
 
 def span(operation: str, **attrs):

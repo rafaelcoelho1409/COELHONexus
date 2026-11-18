@@ -43,6 +43,7 @@ async def index_documents(
     indexed_ids: list[str] = []
     index_failed_ids: list[str] = []
     indexed_transcripts = 0
+    indexed_passages = 0
     failed_transcripts = 0
     for video_id, documents in docs_by_parent.items():
         result = await domains.ycs.ingestion.es_index.service.index_transcriptions_to_elasticsearch(
@@ -58,6 +59,7 @@ async def index_documents(
         if succeeded:
             indexed_ids.extend(str(document["video_id"]) for document in documents if document.get("video_id"))
             indexed_transcripts += 1
+            indexed_passages += int(result.get("passages_indexed", 0) or 0)
             context.reporter.elasticsearch_finished(video_id, success = True)
         else:
             failed_transcripts += max(1, int(result.get("failed", 0) or 0))
@@ -72,6 +74,7 @@ async def index_documents(
 
     transcription_result = {
         "indexed": indexed_transcripts,
+        "passages_indexed": indexed_passages,
         "failed": failed_transcripts,
         "cached": len(cached_ids),
     }

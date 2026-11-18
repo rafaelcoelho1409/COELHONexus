@@ -1531,7 +1531,7 @@ async def fetch_transcriptions_batch(
     `on_video_done` reports a video's terminal, successful outcome —
     this is the hook the per-video streaming fan-out needs (Neo4j/
     Qdrant can't safely start on a video until its transcript is
-    actually committed to ES). `BULK_REFRESH=True` on the underlying
+    actually committed to ES). `BULK_REFRESH="wait_for"` on the underlying
     bulk-index call means each single-doc write blocks until
     searchable, so `on_video_indexed(video_id)` firing is a real
     guarantee, not a best-effort signal. The single-doc ES calls run as

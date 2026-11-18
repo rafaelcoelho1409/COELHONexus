@@ -24,7 +24,7 @@ async def index_pages(
                 {"elasticsearch_pages_completed": completed},
             )
 
-        index, count = await domains.bd.ingestion.ai.retrieval_index.elasticsearch_index.service.index_pages(
+        index, count, passage_index, passage_count = await domains.bd.ingestion.ai.retrieval_index.elasticsearch_index.service.index_pages(
             rows,
             book_id = state["book_id"],
             agentic_run_id = state["agentic_run_id"],
@@ -35,6 +35,8 @@ async def index_pages(
         return {
             "elasticsearch_index": index,
             "elasticsearch_document_count": count,
+            "elasticsearch_passage_index": passage_index,
+            "elasticsearch_passage_count": passage_count,
             "elasticsearch_pages_completed": count,
         }
 

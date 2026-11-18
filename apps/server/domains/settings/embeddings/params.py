@@ -9,6 +9,14 @@ ENDPOINT_RESOLVE_TTL_S: float = 10.0
 # name; `COELHO_EMBEDDING_*` is the legacy name, still honored.
 URL_ENVS: tuple[str, ...] = ("EMBEDDING_ENDPOINT_URL", "COELHO_EMBEDDING_URL")
 MODEL_ENVS: tuple[str, ...] = ("EMBEDDING_MODEL", "COELHO_EMBEDDING_MODEL")
+MAX_INPUT_TOKENS_ENVS: tuple[str, ...] = (
+    "EMBEDDING_MAX_INPUT_TOKENS",
+    "COELHO_EMBEDDING_MAX_INPUT_TOKENS",
+)
+TOKENIZER_ENCODING_ENVS: tuple[str, ...] = (
+    "EMBEDDING_TOKENIZER_ENCODING",
+    "COELHO_EMBEDDING_TOKENIZER_ENCODING",
+)
 DEFAULT_MODEL: str = "auto"
 
 # Settings-page "Test" button probe (embed_probe_async) defaults.

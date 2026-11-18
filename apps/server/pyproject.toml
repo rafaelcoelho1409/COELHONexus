@@ -74,6 +74,7 @@ dependencies = [
     "jinja2>=3.1,<4.0",
     "langchain>=1.3,<2.0",
     "openai>=2.24,<3.0",
+    "tiktoken>=0.12,<1.0",           # configured tokenizer for embedding endpoint input limits
 ]
 
 [tool.deptry.per_rule_ignores]

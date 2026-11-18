@@ -260,6 +260,10 @@ export function RetrievalIndexPanel({ bookId, run, index }: Props) {
                 label="Elasticsearch documents"
                 value={(index?.elasticsearch_document_count ?? 0).toLocaleString()}
               />
+              <Metric
+                label="Elasticsearch passages"
+                value={(index?.elasticsearch_passage_count ?? 0).toLocaleString()}
+              />
               <Metric label="Qdrant points" value={(index?.qdrant_point_count ?? 0).toLocaleString()} />
               <Metric
                 label="Neo4j nodes / relationships"
@@ -507,7 +511,10 @@ function nodeKpi(
 ): string | null {
   if (!index || status !== "done") return null;
   if (nodeId === "pin_sources") return `${index.processed_page_count.toLocaleString()} pages`;
-  if (nodeId === "elasticsearch") return `${index.elasticsearch_document_count.toLocaleString()} documents`;
+  if (nodeId === "elasticsearch") {
+    return `${index.elasticsearch_document_count.toLocaleString()} pages · ` +
+      `${index.elasticsearch_passage_count.toLocaleString()} passages`;
+  }
   if (nodeId === "qdrant") return `${index.qdrant_point_count.toLocaleString()} points`;
   if (nodeId === "neo4j") {
     return `${index.neo4j_node_count.toLocaleString()} nodes · ${index.neo4j_relationship_count.toLocaleString()} links`;

@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 async def ensure_collection(
     qdrant: infra.qdrant.service.AsyncQdrantClient, dense_dimensions: int, embedding_model: str = "",
-    collection_name: str = params.QDRANT_COLLECTION,
+    *, collection_name: str,
 ) -> bool:
     """Idempotent collection create. Returns True only on first
     creation (False on a no-op).
@@ -55,24 +55,20 @@ async def ensure_collection(
     function ever sees a mismatch in normal operation — reaching that
     state here means the gate was bypassed, so this raises instead of
     silently mixing incomparable vectors in one cosine space OR
-    silently deleting data. `collection_name` defaults to the module
-    constant (the stable alias — see that module's docstring) but the
-    migration job passes its own staging collection name, which is
-    always fresh/empty and never hits this branch.
+    silently deleting data. Callers pass a physical collection name. The
+    stable alias is managed separately by `ensure_active_collection`;
+    migration jobs pass their staging collection name and do not change
+    the active alias.
 
     Dimension/schema mismatches (missing slot, wrong vector size) are
     UNCHANGED — still auto-recreated, since a collection that fails
     those checks has no valid data of ANY model to lose (wrong schema
     entirely, not "different model").
 
-    2026-09-15: existence check switched from `get_collections()`
-    (list of REAL collection names only — live-confirmed Qdrant never
-    includes aliases in that listing) to `collection_exists()`, which
-    resolves through an alias transparently. `params.QDRANT_COLLECTION` is a
-    real collection today but becomes an alias the first time
-    `embedding_migration` cuts one over — the old list-membership check
-    would have silently stopped seeing it as existing at that point and
-    tried (and failed) to create a real collection over the alias."""
+    Collection checks target physical names. The app-facing
+    `params.QDRANT_COLLECTION` is a stable alias and is never passed here
+    by normal ingestion; migration staging writes also target physical
+    collection names directly."""
     exists = await qdrant.collection_exists(collection_name)
     created = False
     if exists:
@@ -183,6 +179,90 @@ async def ensure_collection(
     return created
 
 
+async def _ensure_active_collection_alias(
+    qdrant: infra.qdrant.service.AsyncQdrantClient,
+    physical_collection: str,
+) -> None:
+    """Create the stable YCS alias on first ingest without silently
+    redirecting it away from an existing embedding collection.
+
+    Embedding changes must go through the consent-gated migration flow,
+    which performs the alias cutover after re-embedding succeeds.
+    """
+    alias = params.QDRANT_COLLECTION
+    aliases = await qdrant.get_aliases()
+    active = next(
+        (item.collection_name for item in aliases.aliases if item.alias_name == alias),
+        None,
+    )
+    if active == physical_collection:
+        return
+    if active:
+        raise RuntimeError(
+            f"[ycs:ingestion] alias {alias!r} targets {active!r}, but the "
+            f"configured embedding space resolves to {physical_collection!r}; "
+            "run the embedding migration before ingesting."
+        )
+
+    real_names = {item.name for item in (await qdrant.get_collections()).collections}
+    if alias in real_names:
+        raise RuntimeError(
+            f"[ycs:ingestion] stable alias {alias!r} conflicts with an existing "
+            "physical collection; resolve that collection before creating the alias."
+        )
+
+    try:
+        with domains.ycs.ask.observability.service.qdrant_admin_span(
+            operation = "create_collection_alias",
+            collection = alias,
+        ):
+            await qdrant.update_collection_aliases(
+                change_aliases_operations = [
+                    infra.qdrant.service.models.CreateAliasOperation(
+                        create_alias = infra.qdrant.service.models.CreateAlias(
+                            collection_name = physical_collection,
+                            alias_name = alias,
+                        ),
+                    ),
+                ],
+            )
+    except Exception:
+        # Concurrent first-ingest tasks can race to create the same alias.
+        # Treat the race as success only when it created the exact target.
+        refreshed = await qdrant.get_aliases()
+        active = next(
+            (item.collection_name for item in refreshed.aliases if item.alias_name == alias),
+            None,
+        )
+        if active != physical_collection:
+            raise
+
+
+async def ensure_active_collection(
+    qdrant: infra.qdrant.service.AsyncQdrantClient,
+    dense_dimensions: int,
+    embedding_model: str,
+) -> tuple[str, bool]:
+    """Ensure the model-specific physical collection and stable alias.
+
+    Returns the physical collection name and whether it was just created.
+    Writers use the physical name; retrieval continues through the alias.
+    """
+    physical_collection = domain.physical_collection_name(
+        params.QDRANT_COLLECTION,
+        embedding_model,
+        dense_dimensions,
+    )
+    created = await ensure_collection(
+        qdrant,
+        dense_dimensions,
+        embedding_model,
+        collection_name = physical_collection,
+    )
+    await _ensure_active_collection_alias(qdrant, physical_collection)
+    return physical_collection, created
+
+
 async def _scroll_transcripts(
     es: infra.elasticsearch.service.AsyncElasticsearch,
     video_ids: list[str] | None = None,
@@ -290,7 +370,7 @@ async def ingest_to_qdrant(
     chunk_size: int = params.DEFAULT_CHUNK_SIZE,
     chunk_overlap: int = params.DEFAULT_CHUNK_OVERLAP,
     progress_cb: Callable[[dict[str, Any]], None] | None = None,
-    collection_name: str = params.QDRANT_COLLECTION,
+    collection_name: str | None = None,
 ) -> dict:
     """Streaming pipeline: chunk → embed (dense NIM + sparse BM25) →
     upsert. Memory stays flat regardless of corpus size.
@@ -321,9 +401,19 @@ async def ingest_to_qdrant(
     sparse_embeddings = domains.ycs.ingestion.embeddings.service.create_sparse_embeddings()
     dimensions, embedding_model = await domains.ycs.ingestion.embeddings.service.get_embedding_info()
 
-    collection_created = await ensure_collection(
-        qdrant, dimensions, embedding_model, collection_name = collection_name,
-    )
+    if collection_name is None:
+        collection_name, collection_created = await ensure_active_collection(
+            qdrant,
+            dimensions,
+            embedding_model,
+        )
+    else:
+        collection_created = await ensure_collection(
+            qdrant,
+            dimensions,
+            embedding_model,
+            collection_name = collection_name,
+        )
 
     # Two-phase: enumerate transcripts first (fast — text only, ~5s
     # for 359 transcripts), THEN embed (slow — API calls). Separating
@@ -339,9 +429,8 @@ async def ingest_to_qdrant(
     all_ids = list({t["video_id"] for t in all_transcripts})
     metadata_cache = await fetch_metadata_from_es(es, all_ids)
 
-    # Hash pre-pass — fetch ONE stored point per video (payload-only,
-    # indexed filter) and compare content hashes. `not collection_
-    # created` guard skips the N lookups on a fresh collection.
+    # Profile pre-pass — skip only when content, embedding identity, and
+    # chunking/sparse configuration all match the stored point.
     skip_vids: set[str] = set()
     hashes = {
         t["video_id"]: domain.content_hash(t.get("content") or "")
@@ -358,14 +447,21 @@ async def ingest_to_qdrant(
                         ),
                     ]),
                     limit = 1,
-                    with_payload = ["content_hash"],
+                    with_payload = ["content_hash", "index_profile_fingerprint", "embedding_model", "embedding_dimensions"],
                     with_vectors = False,
                 )
             except Exception:
                 break  # collection-level trouble — fall back to full ingest
-            if points and (points[0].payload or {}).get(
-                "content_hash",
-            ) == hashes[vid]:
+            stored_payload = (points[0].payload or {}) if points else {}
+            if points and all(
+                stored_payload.get(key) == expected
+                for key, expected in {
+                    "content_hash": hashes[vid],
+                    "index_profile_fingerprint": domain.index_profile_fingerprint(chunk_size, chunk_overlap),
+                    "embedding_model": embedding_model,
+                    "embedding_dimensions": dimensions,
+                }.items()
+            ):
                 skip_vids.add(vid)
     if skip_vids:
         logger.info(
@@ -430,6 +526,8 @@ async def ingest_to_qdrant(
         # next run (see that function's docstring) — sampled from the
         # SAME real calls above, not re-derived.
         model_used = dense_embeddings.last_model or ""
+        if model_used != embedding_model or any(len(vector) != dimensions for vector in dense_vectors):
+            raise ValueError("the configured embedding model changed during YCS retrieval indexing")
         points = [
             infra.qdrant.service.models.PointStruct(
                 id = keys.point_id(
@@ -443,7 +541,11 @@ async def ingest_to_qdrant(
                         values =  sparse_vectors[i].values,
                     ),
                 },
-                payload = {**domain.build_payload(doc), "embedding_model": model_used},
+                payload = {
+                    **domain.build_payload(doc),
+                    "embedding_model": model_used,
+                    "embedding_dimensions": dimensions,
+                },
             )
             for i, doc in enumerate(buffer)
         ]
@@ -485,6 +587,8 @@ async def ingest_to_qdrant(
                 upload_date =  meta.get("upload_date", ""),
                 webpage_url =  meta.get("webpage_url", ""),
                 content_hash = hashes[vid],
+                chunk_size_chars = chunk_size,
+                chunk_overlap_chars = chunk_overlap,
             ),
             chunker = chunker,
         )
@@ -563,13 +667,9 @@ async def expand_with_partition_ids(
             resp = await es.search(
                 index = infra.elasticsearch.keys.INDEX_TRANSCRIPTIONS,
                 size  = min(10000, max(200, len(video_ids) * 10)),
-                # `.keyword`, not the bare field — `parent_video_id` is
-                # mapped `text` (analyzed) with a `.keyword` sub-field for
-                # exact matching (unlike `video_id`, which is pure
-                # `keyword`); a `terms` query against the bare name
-                # tokenizes and silently matches nothing. Verified live
-                # against real partition data (2026-09-15).
-                query = {"terms": {"parent_video_id.keyword": list(video_ids)}},
+                # `parent_video_id` is a keyword in the current versioned
+                # mapping, so exact partition matching uses the field directly.
+                query = {"terms": {"parent_video_id": list(video_ids)}},
                 _source = ["video_id"],
             )
         partition_ids = {
@@ -703,7 +803,10 @@ async def delete_points_for_videos(
 
 
 async def _already_current(
-    qdrant: infra.qdrant.service.AsyncQdrantClient, video_id: str, content_hash: str,
+    qdrant: infra.qdrant.service.AsyncQdrantClient,
+    video_id: str,
+    content_hash: str,
+    index_profile: str,
 ) -> bool:
     """Same content-hash skip as the bulk path's pre-pass — a Rerun
     over an unchanged video shouldn't re-embed it. Best-effort: any
@@ -716,13 +819,16 @@ async def _already_current(
                 infra.qdrant.service.models.FieldCondition(key = "video_id", match = infra.qdrant.service.models.MatchAny(any = [video_id])),
             ]),
             limit = 1,
-            with_payload = ["content_hash"],
+            with_payload = ["content_hash", "index_profile_fingerprint"],
             with_vectors = False,
         )
     except Exception:
         return False
+    payload = (points[0].payload or {}) if points else {}
     return bool(
-        points and (points[0].payload or {}).get("content_hash") == content_hash,
+        points
+        and payload.get("content_hash") == content_hash
+        and payload.get("index_profile_fingerprint") == index_profile
     )
 
 
@@ -804,7 +910,11 @@ async def _flush_buffer(
             dense_embeddings = domains.ycs.ingestion.embeddings.service.create_dense_embeddings()
             sparse_embeddings = domains.ycs.ingestion.embeddings.service.create_sparse_embeddings()
             dimensions, embedding_model = await domains.ycs.ingestion.embeddings.service.get_embedding_info()
-            await ensure_collection(qdrant, dimensions, embedding_model)
+            collection_name, _ = await ensure_active_collection(
+                qdrant,
+                dimensions,
+                embedding_model,
+            )
         except Exception as setup_err:
             # Probe/collection failure happens AFTER the pop — without
             # a re-queue these chunks are lost (observed live:
@@ -835,6 +945,9 @@ async def _flush_buffer(
             raise last_err
         sparse_vectors = list(sparse_embeddings.embed_documents(texts))
         model_used = dense_embeddings.last_model or ""
+        if model_used != embedding_model or any(len(vector) != dimensions for vector in dense_vectors):
+            await _requeue("embedding model changed during the request")
+            raise ValueError("the configured embedding model changed during YCS retrieval indexing")
         points = [
             infra.qdrant.service.models.PointStruct(
                 id = keys.point_id(doc.metadata["video_id"], doc.metadata["chunk_index"]),
@@ -845,15 +958,19 @@ async def _flush_buffer(
                         values =  sparse_vectors[i].values,
                     ),
                 },
-                payload = {**domain.build_payload(doc), "embedding_model": model_used},
+                payload = {
+                    **domain.build_payload(doc),
+                    "embedding_model": model_used,
+                    "embedding_dimensions": dimensions,
+                },
             )
             for i, doc in enumerate(docs)
         ]
         try:
             with domains.ycs.ask.observability.service.qdrant_upsert_span(
-                collection = params.QDRANT_COLLECTION, point_count = len(points),
+                collection = collection_name, point_count = len(points),
             ):
-                await qdrant.upsert(collection_name = params.QDRANT_COLLECTION, points = points)
+                await qdrant.upsert(collection_name = collection_name, points = points)
         except Exception:
             # An upsert failure must not lose already-popped chunks.
             await _requeue("upsert failure")
@@ -914,7 +1031,12 @@ async def stream_video_to_qdrant(
     content = transcript.get("content") or ""
     content_hash = domain.content_hash(content)
 
-    if await _already_current(qdrant, video_id, content_hash):
+    if await _already_current(
+        qdrant,
+        video_id,
+        content_hash,
+        domain.index_profile_fingerprint(chunk_size, chunk_overlap),
+    ):
         logger.info(f"[ycs:ingestion:streaming] {video_id}: unchanged, skipping re-embed")
         return {"video_id": video_id, "chunks": 0, "skipped": True, **part_group}
 
@@ -930,6 +1052,8 @@ async def stream_video_to_qdrant(
             upload_date =  meta.get("upload_date", ""),
             webpage_url =  meta.get("webpage_url", ""),
             content_hash = content_hash,
+            chunk_size_chars = chunk_size,
+            chunk_overlap_chars = chunk_overlap,
         ),
         chunker = chunker,
     )

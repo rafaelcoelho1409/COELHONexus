@@ -31,8 +31,8 @@ class IngestRequest(BaseModel):
     """Request to ingest transcripts from ES into Qdrant.
     If `video_ids` is None, ingests ALL transcripts in ES."""
     video_ids:     list[domains.ycs.source.content.schemas.NonEmptyStr] | None = None
-    chunk_size:    int                      = 2000
-    chunk_overlap: int                      = 200
+    chunk_size:    int                      = domains.ycs.ingestion.chunker.params.CHUNK_SIZE_CHARS
+    chunk_overlap: int                      = domains.ycs.ingestion.chunker.params.CHUNK_OVERLAP_CHARS
 
 
 # Knowledge Graph

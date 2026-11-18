@@ -4,9 +4,9 @@ imports them from there rather than duplicating the constants."""
 from __future__ import annotations
 
 
-# Qdrant collection name — kept verbatim so re-using existing data is
-# a no-op.
-QDRANT_COLLECTION = "youtube-transcripts"
+# Stable Qdrant alias used by YCS retrieval and maintenance. Physical
+# collections use this prefix plus the normalized model and vector size.
+QDRANT_COLLECTION = "coelhonexus-ycs-rag"
 
 # ES scroll batch size for the transcript iterator.
 SCROLL_BATCH_SIZE = 50
@@ -17,7 +17,9 @@ FETCH_BATCH_SIZE = 100
 
 # canonical chunker defaults if not overridden by caller.
 DEFAULT_CHUNK_SIZE = 2000
-DEFAULT_CHUNK_OVERLAP = 200
+DEFAULT_CHUNK_OVERLAP = 0
+QDRANT_INDEX_PROFILE_VERSION = "1"
+QDRANT_SPARSE_MODEL_NAME = "Qdrant/bm25"
 
 # Progress log throttle.
 LOG_EVERY_N_TRANSCRIPTS = 50

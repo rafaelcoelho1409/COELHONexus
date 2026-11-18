@@ -57,7 +57,7 @@ APP_BACKENDS: dict[str, dict[str, entities.AppNamespace]] = {
         BACKEND_QDRANT: entities.AppNamespace(
             available = True,
             label     = "YCS · transcript chunks",
-            target    = "youtube-transcripts",
+            target    = "coelhonexus-ycs-rag",
         ),
         BACKEND_NEO4J: entities.AppNamespace(
             available = True,

@@ -2,10 +2,10 @@
 from __future__ import annotations
 
 
-# `refresh=True` blocks the bulk call until the new docs are searchable.
-# Deprecated chose this so the next ES query (retriever or downstream
-# `fetch_transcripts_from_es`) sees the data immediately.
-BULK_REFRESH = True
+# Wait for the normal refresh cycle instead of forcing an immediate refresh.
+# The transcripts writer sends canonical transcript and passage documents in
+# one bulk request, so both projections become searchable together.
+BULK_REFRESH = "wait_for"
 
 # ES item "status" codes meaning "indexed OK".
 INDEXED_STATUSES: frozenset[int] = frozenset({200, 201})

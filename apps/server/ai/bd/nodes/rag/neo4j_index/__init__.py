@@ -1,4 +1,6 @@
-"""Neo4j knowledge-graph node."""
-from . import node
+"""Neo4j knowledge-graph node and application service."""
+from __future__ import annotations
 
-__all__ = ["node"]
+from . import node, service
+
+__all__ = ["node", "service"]

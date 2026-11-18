@@ -179,7 +179,7 @@ export const agenticRunStatusSchema = z.looseObject({
 export type AgenticRunStatus = z.infer<typeof agenticRunStatusSchema>;
 export type AgenticProgress = z.infer<typeof agenticProgressSchema>;
 
-export const RETRIEVAL_INDEX_WORKFLOW_VERSION = "4.0";
+export const RETRIEVAL_INDEX_WORKFLOW_VERSION = "6.0";
 
 export const retrievalIndexStatusSchema = z.looseObject({
   workflow_version: z.string().catch("1.0"),
@@ -195,8 +195,10 @@ export const retrievalIndexStatusSchema = z.looseObject({
   node_status: z.record(z.string(), z.enum(["pending", "running", "done", "failed", "cancelled"])).catch({}),
   attempt: z.number().int().positive().catch(1),
   elasticsearch_index: z.string().nullable().catch(null),
+  elasticsearch_passage_index: z.string().nullable().catch(null),
   pin_sources_pages_completed: z.number().int().nonnegative().catch(0),
   elasticsearch_document_count: z.number().int().nonnegative().catch(0),
+  elasticsearch_passage_count: z.number().int().nonnegative().catch(0),
   elasticsearch_pages_completed: z.number().int().nonnegative().catch(0),
   qdrant_collection: z.string().nullable().catch(null),
   embedding_model: z.string().nullable().catch(null),

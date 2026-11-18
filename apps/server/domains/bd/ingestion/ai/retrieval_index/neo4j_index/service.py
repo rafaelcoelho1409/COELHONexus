@@ -1,6 +1,7 @@
 """Idempotent, version-scoped Neo4j writes for processed-book graph records."""
 from __future__ import annotations
 
+import json
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -10,7 +11,7 @@ from langchain_core.documents import Document
 from langchain_neo4j import LLMGraphTransformer
 
 from .. import params
-from . import domain
+from . import domain, params as neo4j_params, prompts
 
 
 WriteProgressReporter = Callable[[str, int, int], Awaitable[None]]
@@ -26,6 +27,7 @@ def build_graph_transformer(model: Any) -> LLMGraphTransformer:
         llm = model,
         ignore_tool_usage = True,
         strict_mode = False,
+        additional_instructions = prompts.GRAPH_EXTRACTION_INSTRUCTIONS,
     )
 
 
@@ -34,7 +36,7 @@ async def extract_graph_facts(
     rows: list[dict[str, Any]],
     *,
     section_title: str,
-) -> dict[str, list[dict[str, str]]]:
+) -> dict[str, list[dict[str, Any]]]:
     """Use LangChain's graph transformation and return plain graph facts."""
     document = Document(
         page_content = f"Book section: {section_title}\n\n{domain.source_material(rows)}",
@@ -55,96 +57,114 @@ async def write_graph(
 ) -> tuple[int, int]:
     if progress_callback is not None:
         await progress_callback("preparing_writes", 0, 1)
-    node_rows = [
-        {"id": node.id, "kind": node.kind, "name": node.name, "properties": node.properties}
-        for node in nodes
-    ]
-    edge_rows = [
-        {
+    node_groups: dict[str, list[dict[str, Any]]] = {}
+    for node in nodes:
+        label = neo4j_params.GRAPH_NODE_LABELS_BY_KIND.get(node.kind)
+        if label is None:
+            raise ValueError(f"Unsupported BD graph node kind: {node.kind}")
+        node_groups.setdefault(label, []).append({
+            "id": node.id,
+            "kind": node.kind,
+            "name": node.name,
+            "properties": node.properties,
+        })
+    edge_groups: dict[str, list[dict[str, Any]]] = {}
+    for edge in edges:
+        relationship_type = domain.neo4j_relationship_type(edge.kind, semantic = edge.semantic)
+        properties = dict(edge.properties)
+        properties["citations"] = json.dumps(
+            properties.get("citations", []),
+            ensure_ascii = False,
+        )
+        edge_groups.setdefault(relationship_type, []).append({
             "id": edge.id,
             "source_id": edge.source_id,
             "target_id": edge.target_id,
             "kind": edge.kind,
-        }
-        for edge in edges
-    ]
+            "properties": properties,
+        })
     if progress_callback is not None:
         await progress_callback("preparing_writes", 1, 1)
     async with infra.neo4j.service.session() as session:
-        node_batch_count = (
-            len(node_rows) + params.GRAPH_WRITE_BATCH_SIZE - 1
-        ) // params.GRAPH_WRITE_BATCH_SIZE
+        node_batch_count = sum(
+            (len(rows) + params.GRAPH_WRITE_BATCH_SIZE - 1) // params.GRAPH_WRITE_BATCH_SIZE
+            for rows in node_groups.values()
+        )
         if progress_callback is not None:
             await progress_callback("writing_nodes", 0, node_batch_count)
-        for batch_index, offset in enumerate(
-            range(0, len(node_rows), params.GRAPH_WRITE_BATCH_SIZE),
-            start = 1,
-        ):
-            if cancel_check is not None and await cancel_check():
-                raise RuntimeError("processed-book retrieval indexing was cancelled")
+        node_batch_index = 0
+        for label, node_rows in node_groups.items():
+            for offset in range(0, len(node_rows), params.GRAPH_WRITE_BATCH_SIZE):
+                if cancel_check is not None and await cancel_check():
+                    raise RuntimeError("processed-book retrieval indexing was cancelled")
 
-            async def write_nodes(transaction):
-                result = await transaction.run(
-                    """
-                    UNWIND $rows AS row
-                    MERGE (node:COELHONexus:BD:BDNode {id: row.id})
-                    SET node.kind = row.kind,
-                        node.name = row.name,
-                        node.book_id = $book_id,
-                        node.agentic_run_id = $agentic_run_id,
-                        node.processed_book_revision = $revision,
-                        node += row.properties
-                    """,
-                    rows = node_rows[offset : offset + params.GRAPH_WRITE_BATCH_SIZE],
-                    book_id = book_id,
-                    agentic_run_id = agentic_run_id,
-                    revision = revision,
-                )
-                await result.consume()
-            await session.execute_write(write_nodes)
-            if progress_callback is not None:
-                await progress_callback("writing_nodes", batch_index, node_batch_count)
+                async def write_nodes(transaction):
+                    result = await transaction.run(
+                        f"""
+                        UNWIND $rows AS row
+                        MERGE (node:COELHONexus:BD {{id: row.id}})
+                        SET node:{label},
+                            node.kind = row.kind,
+                            node.name = row.name,
+                            node += row.properties,
+                            node.book_id = $book_id,
+                            node.agentic_run_id = $agentic_run_id,
+                            node.processed_book_revision = $revision
+                        REMOVE node:BDNode
+                        """,
+                        rows = node_rows[offset : offset + params.GRAPH_WRITE_BATCH_SIZE],
+                        book_id = book_id,
+                        agentic_run_id = agentic_run_id,
+                        revision = revision,
+                    )
+                    await result.consume()
+                await session.execute_write(write_nodes)
+                node_batch_index += 1
+                if progress_callback is not None:
+                    await progress_callback("writing_nodes", node_batch_index, node_batch_count)
 
-        edge_batch_count = (
-            len(edge_rows) + params.GRAPH_WRITE_BATCH_SIZE - 1
-        ) // params.GRAPH_WRITE_BATCH_SIZE
-        if edge_rows and progress_callback is not None:
+        edge_batch_count = sum(
+            (len(rows) + params.GRAPH_WRITE_BATCH_SIZE - 1) // params.GRAPH_WRITE_BATCH_SIZE
+            for rows in edge_groups.values()
+        )
+        if edge_groups and progress_callback is not None:
             await progress_callback("writing_relationships", 0, edge_batch_count)
-        for batch_index, offset in enumerate(
-            range(0, len(edge_rows), params.GRAPH_WRITE_BATCH_SIZE),
-            start = 1,
-        ):
-            if cancel_check is not None and await cancel_check():
-                raise RuntimeError("processed-book retrieval indexing was cancelled")
+        edge_batch_index = 0
+        for relationship_type, edge_rows in edge_groups.items():
+            for offset in range(0, len(edge_rows), params.GRAPH_WRITE_BATCH_SIZE):
+                if cancel_check is not None and await cancel_check():
+                    raise RuntimeError("processed-book retrieval indexing was cancelled")
 
-            async def write_edges(transaction):
-                result = await transaction.run(
-                    """
-                    UNWIND $rows AS row
-                    MATCH (source:COELHONexus:BD:BDNode {
-                        id: row.source_id, book_id: $book_id, agentic_run_id: $agentic_run_id,
-                        processed_book_revision: $revision
-                    })
-                    MATCH (target:COELHONexus:BD:BDNode {
-                        id: row.target_id, book_id: $book_id, agentic_run_id: $agentic_run_id,
-                        processed_book_revision: $revision
-                    })
-                    MERGE (source)-[relationship:BD_RELATES {id: row.id}]->(target)
-                    SET relationship.kind = row.kind,
-                        relationship.book_id = $book_id,
-                        relationship.agentic_run_id = $agentic_run_id,
-                        relationship.processed_book_revision = $revision
-                    """,
-                    rows = edge_rows[offset : offset + params.GRAPH_WRITE_BATCH_SIZE],
-                    book_id = book_id,
-                    agentic_run_id = agentic_run_id,
-                    revision = revision,
-                )
-                await result.consume()
-            await session.execute_write(write_edges)
-            if progress_callback is not None:
-                await progress_callback("writing_relationships", batch_index, edge_batch_count)
-    return len(node_rows), len(edge_rows)
+                async def write_edges(transaction):
+                    result = await transaction.run(
+                        f"""
+                        UNWIND $rows AS row
+                        MATCH (source:COELHONexus:BD {{
+                            id: row.source_id, book_id: $book_id, agentic_run_id: $agentic_run_id,
+                            processed_book_revision: $revision
+                        }})
+                        MATCH (target:COELHONexus:BD {{
+                            id: row.target_id, book_id: $book_id, agentic_run_id: $agentic_run_id,
+                            processed_book_revision: $revision
+                        }})
+                        MERGE (source)-[relationship:{relationship_type} {{id: row.id}}]->(target)
+                        SET relationship.kind = row.kind,
+                            relationship += row.properties,
+                            relationship.book_id = $book_id,
+                            relationship.agentic_run_id = $agentic_run_id,
+                            relationship.processed_book_revision = $revision
+                        """,
+                        rows = edge_rows[offset : offset + params.GRAPH_WRITE_BATCH_SIZE],
+                        book_id = book_id,
+                        agentic_run_id = agentic_run_id,
+                        revision = revision,
+                    )
+                    await result.consume()
+                await session.execute_write(write_edges)
+                edge_batch_index += 1
+                if progress_callback is not None:
+                    await progress_callback("writing_relationships", edge_batch_index, edge_batch_count)
+    return sum(map(len, node_groups.values())), sum(map(len, edge_groups.values()))
 
 
 async def delete_graph(book_id: str, agentic_run_id: str, revision: int) -> int:
@@ -153,7 +173,7 @@ async def delete_graph(book_id: str, agentic_run_id: str, revision: int) -> int:
         async def delete_nodes(transaction):
             result = await transaction.run(
                 """
-                MATCH (node:COELHONexus:BD:BDNode {
+                MATCH (node:COELHONexus:BD {
                     book_id: $book_id, agentic_run_id: $agentic_run_id,
                     processed_book_revision: $revision
                 })

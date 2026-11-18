@@ -660,7 +660,7 @@ async def extract_videos_async(
                 # written the instant its video's fetch succeeds, so
                 # `_on_video_indexed` can safely trigger downstream
                 # Neo4j/Qdrant work against a document guaranteed to
-                # already be searchable — `BULK_REFRESH=True` makes the
+                # already be searchable — `BULK_REFRESH="wait_for"` makes the
                 # per-video write block until visible). The bulk
                 # re-index that used to happen here on the full
                 # `transcription_docs` list would just be re-writing

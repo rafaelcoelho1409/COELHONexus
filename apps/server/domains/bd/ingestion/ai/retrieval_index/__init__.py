@@ -1,13 +1,14 @@
 """Versioned retrieval indexing for a published processed book."""
 from . import (
+    params,
+    chunking,
     domain,
+    qdrant_index,
     elasticsearch_index,
     keys,
     neo4j_index,
-    params,
     pin_sources,
     publish_retrieval_index,
-    qdrant_index,
     schemas,
     service,
     versions,
@@ -15,13 +16,14 @@ from . import (
 
 __all__ = [
     "domain",
+    "chunking",
+    "params",
+    "qdrant_index",
     "elasticsearch_index",
     "keys",
     "neo4j_index",
-    "params",
     "pin_sources",
     "publish_retrieval_index",
-    "qdrant_index",
     "schemas",
     "service",
     "versions",

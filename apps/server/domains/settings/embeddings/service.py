@@ -17,6 +17,7 @@ import time
 import weakref
 
 import openai
+import tiktoken
 
 
 logger = logging.getLogger(__name__)
@@ -95,6 +96,55 @@ def get_configured_model() -> str:
     `domains.ycs.ingestion.embedding_migration`'s gate check."""
     _apply_endpoint()
     return ENDPOINT.model
+
+
+def _embedding_input_token_limit() -> int | None:
+    raw_limit = _env_first(*params.MAX_INPUT_TOKENS_ENVS)
+    if not raw_limit:
+        return None
+    try:
+        limit = int(raw_limit)
+    except ValueError as error:
+        raise ValueError("EMBEDDING_MAX_INPUT_TOKENS must be a positive integer") from error
+    if limit < 1:
+        raise ValueError("EMBEDDING_MAX_INPUT_TOKENS must be a positive integer")
+    return limit
+
+
+def _embedding_tokenizer():
+    configured_encoding = _env_first(*params.TOKENIZER_ENCODING_ENVS)
+    if configured_encoding:
+        try:
+            return tiktoken.get_encoding(configured_encoding)
+        except ValueError as error:
+            raise ValueError(
+                "EMBEDDING_TOKENIZER_ENCODING is not a supported tiktoken encoding"
+            ) from error
+    try:
+        return tiktoken.encoding_for_model(ENDPOINT.model)
+    except KeyError as error:
+        raise ValueError(
+            "the embedding model has no known tokenizer; configure EMBEDDING_TOKENIZER_ENCODING "
+            "before setting EMBEDDING_MAX_INPUT_TOKENS"
+        ) from error
+
+
+def validate_embedding_input_tokens(texts: list[str]) -> None:
+    """Enforce a configured provider input-token ceiling before sending text.
+
+    The endpoint is OpenAI-compatible but can target arbitrary models, so the
+    limit is opt-in and the tokenizer must be known or explicitly configured.
+    """
+    limit = _embedding_input_token_limit()
+    if limit is None or not texts:
+        return
+    encoding = _embedding_tokenizer()
+    for index, text in enumerate(texts):
+        token_count = len(encoding.encode_ordinary(text))
+        if token_count > limit:
+            raise ValueError(
+                f"embedding input {index + 1} has {token_count} tokens; configured maximum is {limit}"
+            )
 
 
 _apply_endpoint(force=True)
@@ -236,6 +286,7 @@ async def embed_texts_async(
     (YCS's Qdrant payloads) need to detect a model change."""
     if not texts:
         return [], ENDPOINT.model
+    validate_embedding_input_tokens(texts)
     client = await _get_async_openai()
     kwargs: dict = {"model": ENDPOINT.model, "input": texts}
     t0 = time.monotonic()

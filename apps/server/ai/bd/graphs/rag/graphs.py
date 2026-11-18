@@ -15,10 +15,18 @@ def retrieval_index_graph(checkpointer: Any | None = None):
         states.ProcessedBookIndexState,
         context_schema = entities.ProcessedBookIndexDependencies,
     )
-    workflow.add_node("pin_sources", nodes.rag.pin_sources.node.pin_sources)
-    workflow.add_node("elasticsearch", nodes.rag.elasticsearch_index.node.index_pages)
-    workflow.add_node("qdrant", nodes.rag.qdrant_index.node.index_pages)
-    workflow.add_node("neo4j", nodes.rag.neo4j_index.node.index_book_graph)
+    workflow.add_node(
+        "pin_sources", 
+        nodes.rag.pin_sources.node.pin_sources)
+    workflow.add_node(
+        "elasticsearch", 
+        nodes.rag.elasticsearch_index.node.index_pages)
+    workflow.add_node(
+        "qdrant", 
+        nodes.rag.qdrant_index.node.index_pages)
+    workflow.add_node(
+        "neo4j", 
+        nodes.rag.neo4j_index.node.index_book_graph)
     workflow.add_node(
         "publish_retrieval_index",
         nodes.rag.publish_retrieval_index.node.publish_retrieval_index,

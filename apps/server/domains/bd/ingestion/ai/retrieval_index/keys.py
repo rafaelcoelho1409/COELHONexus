@@ -41,9 +41,16 @@ def thread_id(
     agentic_run_id: str,
     workflow_version: str,
     processed_book_revision: int,
+    index_profile_fingerprint: str | None = None,
+    checkpoint_generation: int = 0,
 ) -> str:
     """Stable LangGraph checkpoint identity for one processed-book index revision."""
-    return (
+    base = (
         f"bd-ingestion-retrieval-index:{book_id}:{extraction_run_id}:"
         f"{agentic_run_id}:{workflow_version}:{processed_book_revision}"
     )
+    if index_profile_fingerprint:
+        base = f"{base}:{index_profile_fingerprint}"
+    if checkpoint_generation > 0:
+        base = f"{base}:generation-{checkpoint_generation}"
+    return base

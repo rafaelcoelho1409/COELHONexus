@@ -925,23 +925,36 @@ async def _build_es_schema_live() -> dict[str, Any]:
     `_build_es_schema` merges this on top of the declared floor so the
     AI prompt always sees the full structural shape."""
     es = infra.elasticsearch.service.get_es()
-    indices = [infra.elasticsearch.keys.INDEX_METADATA, infra.elasticsearch.keys.INDEX_TRANSCRIPTIONS]
+    indices = [
+        infra.elasticsearch.keys.INDEX_METADATA,
+        infra.elasticsearch.keys.INDEX_TRANSCRIPTIONS,
+    ]
     out: dict[str, Any] = {"indices": {}}
     for idx in indices:
         try:
             with domains.ycs.ask.observability.service.es_search_span(
-                index = idx, top_k = 0, operation = "get_mapping",
+                index = idx, top_k = 0, operation = "get_alias",
             ):
-                mapping = await es.indices.get_mapping(index = idx)
-                stats   = await es.indices.stats(index = idx, metric = "docs")
+                aliases = await es.indices.get_alias(name = idx)
+            if len(aliases) != 1:
+                raise RuntimeError(f"expected one physical index behind alias {idx!r}")
+            physical_index = next(iter(aliases))
+            expected_index = infra.elasticsearch.keys.PHYSICAL_INDEX_BY_ALIAS[idx]
+            if physical_index != expected_index:
+                raise RuntimeError(
+                    f"alias {idx!r} targets {physical_index!r}, expected {expected_index!r}"
+                )
+            with domains.ycs.ask.observability.service.es_search_span(
+                index = physical_index, top_k = 0, operation = "get_mapping",
+            ):
+                mapping = await es.indices.get_mapping(index = physical_index)
+                stats   = await es.indices.stats(index = physical_index, metric = "docs")
         except Exception as e:
             out["indices"][idx] = {"error": f"{type(e).__name__}: {str(e)[:160]}"}
             continue
-        doc_count = (
-            stats.get("indices", {}).get(idx, {})
-            .get("primaries", {}).get("docs", {}).get("count", 0)
-        )
-        mappings = mapping.get(idx, {}).get("mappings", {})
+        index_stats = stats.get("indices", {}).get(physical_index, {})
+        doc_count = index_stats.get("primaries", {}).get("docs", {}).get("count", 0)
+        mappings = mapping.get(physical_index, {}).get("mappings", {})
         props    = mappings.get("properties", {}) or {}
 
         samples: list[dict[str, Any]] = []

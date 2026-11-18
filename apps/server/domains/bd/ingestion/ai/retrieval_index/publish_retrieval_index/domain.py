@@ -3,6 +3,9 @@ from __future__ import annotations
 
 from typing import Any
 
+from .. import params
+from ..qdrant_index import domain as qdrant_domain
+
 
 def published_pointer(
     state: dict[str, Any],
@@ -13,6 +16,10 @@ def published_pointer(
 ) -> dict[str, Any]:
     if state.get("elasticsearch_document_count") != state.get("processed_page_count"):
         raise ValueError("the full-text index does not contain every processed page")
+    if state.get("elasticsearch_passage_count", 0) < 1:
+        raise ValueError("the full-text passage index contains no processed-book passages")
+    if state.get("elasticsearch_passage_count") != state.get("qdrant_point_count"):
+        raise ValueError("the Elasticsearch and Qdrant passage counts do not match")
     if state.get("qdrant_point_count", 0) < 1:
         raise ValueError("the vector index contains no processed-book passages")
     if state.get("neo4j_node_count", 0) < state.get("processed_page_count", 0) + 1:
@@ -35,8 +42,17 @@ def published_pointer(
         "processed_book_sha256": processed_sha256,
         "manifest_key": manifest_key,
         "elasticsearch_index": state["elasticsearch_index"],
+        "elasticsearch_passage_index": state["elasticsearch_passage_index"],
+        "elasticsearch_passage_count": state["elasticsearch_passage_count"],
         "qdrant_collection": state["qdrant_collection"],
         "embedding_model": state["embedding_model"],
         "embedding_dimensions": state["embedding_dimensions"],
+        "qdrant_index_profile_version": params.QDRANT_INDEX_PROFILE_VERSION,
+        "qdrant_chunking_version": params.QDRANT_CHUNKING_VERSION,
+        "qdrant_chunk_size_chars": params.CHUNK_SIZE,
+        "qdrant_chunk_overlap_chars": params.CHUNK_OVERLAP,
+        "qdrant_chunk_separators": list(params.QDRANT_CHUNK_SEPARATORS),
+        "qdrant_sparse_model": params.SPARSE_MODEL_NAME,
+        "qdrant_index_profile_fingerprint": qdrant_domain.index_profile_fingerprint(),
         "published_at": published_at,
     }

@@ -1,5 +1,5 @@
-"""ycs/ingestion/es_index — async bulk-index helpers for metadata + transcriptions.
-Two near-symmetric writers (one per index). Both:
+"""ycs/ingestion/es_index — async bulk-index helpers for metadata + passages.
+The writers:
   - skip the no-op early
   - build `[{"index": {...}}, doc, ...]` ops
   - skip ops missing the doc id
@@ -8,8 +8,8 @@ Two near-symmetric writers (one per index). Both:
   - return `{indexed, failed, errors}` on success or
     `{indexed:0, failed:len(...), error:str(e)}` on exception
 
-Refresh policy is `True` so callers (Celery tasks → Qdrant ingest, retriever
-fetch) see new docs on the very next ES query."""
+Transcript passage documents use the same default chunker as Qdrant and are
+written beside canonical transcripts in one refresh-waiting bulk request."""
 from __future__ import annotations
 import domains, infra
 from . import params
@@ -75,7 +75,7 @@ async def index_videos_to_elasticsearch(
         indexed = len(indexed_ids)
         failed = len(failed_ids)
         logger.info(
-            f"[elasticsearch] OK indexed={indexed} failed={failed} "
+            f"[elasticsearch] indexed={indexed} failed={failed} "
             f"time={elapsed:.2f}s",
         )
         return {
@@ -112,61 +112,108 @@ async def index_transcriptions_to_elasticsearch(
         logger.info("[elasticsearch] skip indexing, no transcriptions")
         return {"indexed": 0, "failed": 0}
     operations: list[dict[str, Any]] = []
+    write_records: list[tuple[str, str]] = []
     valid_transcriptions: list[dict[str, Any]] = []
+    status_by_transcript: dict[str, dict[str, Any]] = {}
+    passage_index = infra.elasticsearch.keys.INDEX_YCS_RAG_PASSAGES
+    chunker = domains.ycs.ingestion.chunker.domain.create_chunker()
     for trans in transcriptions:
         doc_id = trans.get("id")
         if not doc_id:
             continue
         valid_transcriptions.append(trans)
+        video_id = str(trans.get("video_id") or "")
+        passages = domains.ycs.ingestion.es_index.domain.transcript_passages(trans, chunker)
+        status_by_transcript[str(doc_id)] = {
+            "video_id": video_id,
+            "canonical_ok": False,
+            "passages_expected": len(passages),
+            "passages_ok": 0,
+            "failed": False,
+        }
         operations.append({"index": {"_index": index, "_id": doc_id}})
         operations.append(trans)
+        write_records.append((str(doc_id), "canonical"))
+        for passage in passages:
+            operations.append({"index": {"_index": passage_index, "_id": passage["_id"]}})
+            operations.append(passage["_source"])
+            write_records.append((str(doc_id), "passage"))
     if not operations:
         logger.info(
             "[elasticsearch] skip indexing, no valid transcription IDs",
         )
         return {"indexed": 0, "failed": 0}
     logger.info(
-        f"[elasticsearch] indexing {len(operations) // 2} transcriptions "
-        f"to {index}",
+        f"[elasticsearch] indexing {len(valid_transcriptions)} transcriptions and "
+        f"{len(write_records) - len(valid_transcriptions)} passages to {index} + {passage_index}",
     )
     start_time = time.time()
     try:
+        transcript_ids = list(status_by_transcript)
+        stale_passages_deleted = 0
+        if transcript_ids and await es_client.indices.exists(index = passage_index):
+            deleted = await es_client.delete_by_query(
+                index = passage_index,
+                query = {"terms": {"transcript_id": transcript_ids}},
+                conflicts = "proceed",
+                refresh = False,
+            )
+            if deleted.get("timed_out") or deleted.get("failures"):
+                raise RuntimeError("Elasticsearch could not remove stale transcript passages")
+            stale_passages_deleted = int(deleted.get("deleted", 0) or 0)
         with domains.ycs.ask.observability.service.es_search_span(
-            index = index, top_k = len(operations) // 2, operation = "bulk_index",
+            index = index, top_k = len(valid_transcriptions), operation = "bulk_index",
         ):
             response = await es_client.bulk(
                 operations = operations,
                 refresh = params.BULK_REFRESH,
             )
+        if stale_passages_deleted and not any(kind == "passage" for _, kind in write_records):
+            await es_client.indices.refresh(index = passage_index)
         elapsed = time.time() - start_time
-        indexed_ids: list[str] = []
-        failed_ids: list[str] = []
         response_items = response.get("items", [])
-        for transcript, item in zip(valid_transcriptions, response_items):
-            video_id = str(transcript.get("video_id") or "")
+        for (transcript_id, kind), item in zip(write_records, response_items):
             status = item.get("index", {}).get("status")
-            if not video_id:
-                continue
-            (indexed_ids if status in params.INDEXED_STATUSES else failed_ids).append(video_id)
-        failed_ids.extend(
-            str(transcript["video_id"])
-            for transcript in valid_transcriptions[len(response_items):]
-            if transcript.get("video_id")
-        )
-        indexed = sum(
-            1
-            for item in response.get("items", [])
-            if item.get("index", {}).get("status") in params.INDEXED_STATUSES
-        )
-        failed = max(0, len(valid_transcriptions) - indexed)
+            result = status_by_transcript[transcript_id]
+            if status not in params.INDEXED_STATUSES:
+                result["failed"] = True
+            elif kind == "canonical":
+                result["canonical_ok"] = True
+            else:
+                result["passages_ok"] += 1
+        for transcript_id, _kind in write_records[len(response_items):]:
+            status_by_transcript[transcript_id]["failed"] = True
+
+        successful = {
+            transcript_id for transcript_id, result in status_by_transcript.items()
+            if result["canonical_ok"]
+            and result["passages_ok"] == result["passages_expected"]
+            and not result["failed"]
+        }
+        indexed_ids = list(dict.fromkeys(
+            str(result["video_id"])
+            for transcript_id, result in status_by_transcript.items()
+            if transcript_id in successful and result["video_id"]
+        ))
+        failed_ids = list(dict.fromkeys(
+            str(result["video_id"])
+            for transcript_id, result in status_by_transcript.items()
+            if transcript_id not in successful and result["video_id"]
+        ))
+        indexed = len(successful)
+        failed = len(valid_transcriptions) - indexed
+        passages_indexed = sum(result["passages_ok"] for result in status_by_transcript.values())
+        errors = bool(response.get("errors", False) or failed)
         logger.info(
             f"[elasticsearch] OK indexed={indexed} failed={failed} "
+            f"passages={passages_indexed} "
             f"time={elapsed:.2f}s",
         )
         return {
             "indexed": indexed,
             "failed":  failed,
-            "errors":  response.get("errors", False),
+            "passages_indexed": passages_indexed,
+            "errors":  errors,
             "indexed_ids": list(dict.fromkeys(indexed_ids)),
             "failed_ids": list(dict.fromkeys(failed_ids)),
         }
@@ -179,6 +226,7 @@ async def index_transcriptions_to_elasticsearch(
         return {
             "indexed": 0,
             "failed":  len(valid_transcriptions),
+            "passages_indexed": 0,
             "failed_ids": list(dict.fromkeys(
                 str(transcript["video_id"])
                 for transcript in valid_transcriptions
@@ -192,8 +240,8 @@ async def delete_videos_from_es(
     es:        infra.elasticsearch.service.AsyncElasticsearch,
     video_ids: list[str],
 ) -> dict[str, Any]:
-    """Best-effort delete of the supplied video_ids from BOTH
-    `INDEX_METADATA` and `INDEX_TRANSCRIPTIONS`. Used by the Pipeline
+    """Best-effort delete of the supplied video_ids from metadata,
+    canonical transcripts, and passage documents. Used by the Pipeline
     panel's `Wipe cache` button so the next Retry re-fetches from yt-dlp
     + re-scrapes via Playwright instead of hitting the cache.
 
@@ -216,20 +264,21 @@ async def delete_videos_from_es(
     `delete_by_query` (vs. doc-by-doc DELETE) lets a single request
     drop every match — small/large batches behave the same. `conflicts:
     proceed` so a concurrent ingestion writer doesn't sink the wipe.
-    Each index failure is logged + counted separately; the wipe
-    proceeds across both even if one index errors."""
+    Each index failure is logged + counted separately; the wipe proceeds
+    across the canonical and passage indexes even if one index errors."""
     if not video_ids:
-        return {"metadata_deleted": 0, "transcripts_deleted": 0}
+        return {"metadata_deleted": 0, "transcripts_deleted": 0, "passages_deleted": 0}
     out: dict[str, Any] = {}
     queries: tuple[tuple[str, str, dict], ...] = (
         ("metadata",    infra.elasticsearch.keys.INDEX_METADATA,        {"ids": {"values": list(video_ids)}}),
         ("transcripts", infra.elasticsearch.keys.INDEX_TRANSCRIPTIONS,  {"bool": {"should": [
             {"terms": {"video_id":                 list(video_ids)}},
-            # `.keyword`, not the bare field — see
-            # `ingestion.service.expand_with_partition_ids`'s comment;
-            # `parent_video_id` is analyzed `text`, a `terms` query
-            # against the bare name silently matches nothing.
-            {"terms": {"parent_video_id.keyword": list(video_ids)}},
+            # The fresh mapping stores `parent_video_id` as a keyword.
+            {"terms": {"parent_video_id": list(video_ids)}},
+        ]}}),
+        ("passages", infra.elasticsearch.keys.INDEX_YCS_RAG_PASSAGES, {"bool": {"should": [
+            {"terms": {"video_id": list(video_ids)}},
+            {"terms": {"parent_video_id": list(video_ids)}},
         ]}}),
     )
     for index_label, index_name, query in queries:
@@ -240,7 +289,7 @@ async def delete_videos_from_es(
                 resp = await es.delete_by_query(
                     index = index_name,
                     query = query,
-                    refresh = True,
+                    refresh = False,
                     conflicts = "proceed",
                 )
             n = int(resp.get("deleted", 0) or 0)
@@ -255,4 +304,14 @@ async def delete_videos_from_es(
             )
             out[f"{index_label}_deleted"] = 0
             out[f"{index_label}_error"] = str(e)[:200]
+    indexes_to_refresh = [
+        index_name for index_name in (
+            infra.elasticsearch.keys.INDEX_METADATA,
+            infra.elasticsearch.keys.INDEX_TRANSCRIPTIONS,
+            infra.elasticsearch.keys.INDEX_YCS_RAG_PASSAGES,
+        )
+        if await es.indices.exists(index = index_name)
+    ]
+    if indexes_to_refresh:
+        await es.indices.refresh(index = indexes_to_refresh)
     return out

@@ -5,3 +5,4 @@ import re
 
 
 SPACE_RE = re.compile(r"\s+")
+SENTENCE_RE = re.compile(r"[^.!?\n]+(?:[.!?]+|$)")
