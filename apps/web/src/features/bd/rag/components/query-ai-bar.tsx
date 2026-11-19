@@ -1,7 +1,7 @@
 "use client";
 
-/** The assistant bar above the editor, one row tall: describe the data you want, and the query it writes lands in the
- * editor (which stays editable afterwards). The box grows with a longer request. Ctrl/Cmd+Enter generates,
+/** The assistant prompt above the editor: describe the data you want, and the query it writes lands in the editor
+ * (which stays editable afterwards). The box grows with a longer request. Ctrl/Cmd+Enter generates,
  * Ctrl/Cmd+Shift+Enter runs what is in the editor, Escape stops; one polite line reports progress. */
 
 import { Sparkles, Square } from "lucide-react";

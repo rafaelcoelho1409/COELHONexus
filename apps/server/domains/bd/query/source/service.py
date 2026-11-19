@@ -1,9 +1,11 @@
 """Coordinate BD Query access to retrieval stores and saved-query history."""
 from __future__ import annotations
-import infra
-from . import domain, indexes, keys, params
 
 from typing import Any
+
+import infra
+
+from . import domain, indexes, keys, params
 
 
 def namespaces() -> dict[str, Any]:
@@ -58,8 +60,24 @@ async def query_schema(backend: str) -> dict[str, Any]:
     if backend == params.BACKEND_QDRANT:
         return await indexes.qdrant_index.service.query_schema()
     if backend == params.BACKEND_NEO4J:
-        return indexes.neo4j_index.service.query_schema()
+        return await indexes.neo4j_index.service.query_schema()
     return {}
+
+
+async def validate_query(
+    backend: str,
+    body_text: str,
+    *,
+    schema: dict[str, Any],
+) -> tuple[bool, str | None]:
+    """Validate a generated query against the selected store and live schema."""
+    if backend == params.BACKEND_ELASTICSEARCH:
+        return await indexes.elasticsearch_index.service.validate_query(body_text)
+    if backend == params.BACKEND_QDRANT:
+        return await indexes.qdrant_index.service.validate_query(body_text, schema = schema)
+    if backend == params.BACKEND_NEO4J:
+        return await indexes.neo4j_index.service.validate_query(body_text)
+    return False, f"Unsupported backend: {backend}."
 
 
 async def list_query_history(

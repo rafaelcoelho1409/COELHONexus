@@ -8,7 +8,7 @@
  * the plain table model. */
 
 import { ArrowDown, ArrowUp, ArrowUpDown, Columns3, Filter } from "lucide-react";
-import { type JSX, useMemo, useState } from "react";
+import { type JSX, useEffect, useMemo, useState } from "react";
 import { useBdOverlays } from "../../hooks/use-overlays";
 import { QUERY_ID_CLIP, QUERY_ROWS_STEP } from "../params";
 import {
@@ -54,6 +54,9 @@ const CELL_WIDTH: Record<ColumnKind, string> = {
   plain: "min-w-24 max-w-xs",
 };
 
+const TABLE_ACTION_CLASS =
+  "w-full min-w-0 justify-center whitespace-normal xl:flex-col xl:gap-1 xl:px-1 xl:text-xs 2xl:flex-row 2xl:gap-2 2xl:px-3 2xl:text-sm";
+
 function Cell({
   column,
   kind,
@@ -92,7 +95,13 @@ function Cell({
   return <div className="line-clamp-3 break-words">{clip(text)}</div>;
 }
 
-export function QueryTable({ rows }: { rows: ReadonlyArray<Row> }): JSX.Element {
+export function QueryTable({
+  rows,
+  onVisibleCountChange,
+}: {
+  rows: ReadonlyArray<Row>;
+  onVisibleCountChange: (count: number) => void;
+}): JSX.Element {
   const { toast } = useBdOverlays();
   const plan = useMemo(() => planColumns(rows), [rows]);
   const [sort, setSort] = useState<Sort>(null);
@@ -111,6 +120,10 @@ export function QueryTable({ rows }: { rows: ReadonlyArray<Row> }): JSX.Element 
   // The row's place in the current order is its identity (result rows carry no id of their own).
   const painted = visible.slice(0, shown).map((row, position) => ({ row, position }));
 
+  useEffect(() => {
+    onVisibleCountChange(visible.length);
+  }, [onVisibleCountChange, visible.length]);
+
   const copyAll = () => {
     navigator.clipboard.writeText(toCsv(exportColumns, visible)).then(
       () => toast(`Copied ${visible.length} rows as CSV`),
@@ -128,13 +141,14 @@ export function QueryTable({ rows }: { rows: ReadonlyArray<Row> }): JSX.Element 
 
   return (
     <div className="flex flex-col gap-3">
-      <div className="flex flex-wrap items-center gap-2">
-        <p role="status" className="tabular mr-auto text-sm text-muted-foreground">
-          {visible.length === rows.length
-            ? `${rows.length.toLocaleString("en-US")} rows`
-            : `${visible.length.toLocaleString("en-US")} of ${rows.length.toLocaleString("en-US")} rows match`}
-        </p>
-        <Button variant="outline" size="lg" aria-pressed={picking} onClick={() => setPicking((was) => !was)}>
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
+        <Button
+          variant="outline"
+          size="lg"
+          aria-pressed={picking}
+          onClick={() => setPicking((was) => !was)}
+          className={TABLE_ACTION_CLASS}
+        >
           <Columns3 aria-hidden /> Columns
         </Button>
         <Button
@@ -142,6 +156,7 @@ export function QueryTable({ rows }: { rows: ReadonlyArray<Row> }): JSX.Element 
           size="lg"
           aria-pressed={filtering}
           onClick={() => setFiltering((was) => !was)}
+          className={TABLE_ACTION_CLASS}
         >
           <Filter aria-hidden /> Filter columns
         </Button>
@@ -149,6 +164,7 @@ export function QueryTable({ rows }: { rows: ReadonlyArray<Row> }): JSX.Element 
           variant="outline"
           size="lg"
           onClick={() => download("results.csv", toCsv(exportColumns, visible), "text/csv")}
+          className={TABLE_ACTION_CLASS}
         >
           Export CSV
         </Button>
@@ -156,10 +172,16 @@ export function QueryTable({ rows }: { rows: ReadonlyArray<Row> }): JSX.Element 
           variant="outline"
           size="lg"
           onClick={() => download("results.json", toJsonText(visible), "application/json")}
+          className={TABLE_ACTION_CLASS}
         >
           Export JSON
         </Button>
-        <Button variant="outline" size="lg" onClick={copyAll}>
+        <Button
+          variant="outline"
+          size="lg"
+          onClick={copyAll}
+          className={`col-span-2 sm:col-span-1 ${TABLE_ACTION_CLASS}`}
+        >
           Copy CSV
         </Button>
       </div>

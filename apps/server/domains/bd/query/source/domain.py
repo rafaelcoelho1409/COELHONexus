@@ -1,10 +1,12 @@
 """Pure query response and read-safety helpers for BD retrieval stores."""
 from __future__ import annotations
-import infra
-from . import entities, errors, params, patterns
 
 import json
 from typing import Any
+
+import infra
+
+from . import entities, errors, params, patterns
 
 
 def raw_response(
@@ -50,6 +52,21 @@ def check_query_body(backend: str, body: str) -> tuple[bool, str | None]:
     return True, None
 
 
+def normalize_neo4j_query(body: str) -> str:
+    """Unwrap the common single-field JSON response into plain Cypher."""
+    try:
+        candidate = json.loads(body)
+    except json.JSONDecodeError:
+        return body
+    if (
+        isinstance(candidate, dict)
+        and set(candidate) == {"query"}
+        and isinstance(candidate["query"], str)
+    ):
+        return candidate["query"].strip()
+    return body
+
+
 def assert_cypher_readonly(statement: str) -> None:
     """Reject Cypher write clauses and mutation procedures."""
     if not statement.strip():
@@ -58,6 +75,23 @@ def assert_cypher_readonly(statement: str) -> None:
     scan = patterns.CYPHER_STRING.sub(" ", statement).lower()
     scan = patterns.CYPHER_LINE_COMMENT.sub(" ", scan)
     scan = patterns.CYPHER_BLOCK_COMMENT.sub(" ", scan)
+    scan = scan.strip()
+    if not patterns.CYPHER_READ_QUERY_START.search(scan):
+        raise errors.QueryNotAllowed(
+            "Cypher must start with a read-only MATCH, WITH, UNWIND, RETURN, "
+            "or approved schema-inspection clause.",
+        )
+    limit_values = patterns.CYPHER_LIMIT_VALUE.findall(scan)
+    if not limit_values:
+        raise errors.QueryNotAllowed("Neo4j queries must include an explicit LIMIT.")
+    if any(
+        len(value) > len(str(params.NEO4J_MAX_QUERY_LIMIT))
+        or int(value) > params.NEO4J_MAX_QUERY_LIMIT
+        for value in limit_values
+    ):
+        raise errors.QueryNotAllowed(
+            f"Neo4j queries are capped at LIMIT {params.NEO4J_MAX_QUERY_LIMIT}.",
+        )
 
     tokens = patterns.CYPHER_IDENTIFIER.findall(scan)
     bad = sorted({token for token in tokens if token in params.CYPHER_WRITE_KEYWORDS})
@@ -136,6 +170,18 @@ def parse_qdrant_body(text: str) -> entities.ParsedQdrantOperation:
             f"Qdrant op {operation!r} is not allowed. "
             f"Read-only ops: {', '.join(params.QDRANT_READ_OPERATIONS)}.",
         )
+    if "query_text" in body:
+        query_text = body["query_text"]
+        if operation not in {"search", "query_points"}:
+            raise errors.QueryNotAllowed("`query_text` is only supported by Qdrant search operations.")
+        if not isinstance(query_text, str) or not query_text.strip():
+            raise errors.QueryNotAllowed("`query_text` must contain natural-language search text.")
+        if len(query_text) > params.MAX_QDRANT_QUERY_TEXT_CHARS:
+            raise errors.QueryNotAllowed(
+                f"`query_text` exceeds {params.MAX_QDRANT_QUERY_TEXT_CHARS} characters.",
+            )
+        if "query_vector" in body or "query" in body:
+            raise errors.QueryNotAllowed("Use `query_text` or a vector query, not both.")
     if operation in {"search", "scroll", "query_points"}:
         limit = body.get("limit", params.QDRANT_DEFAULT_LIMIT)
         try:

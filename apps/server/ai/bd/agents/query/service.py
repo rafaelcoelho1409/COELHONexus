@@ -1,16 +1,16 @@
 """Invocation helpers for the BD Query DeepAgent."""
 from __future__ import annotations
-from . import agent
 
 import json
 from typing import Any
 
 from langchain_core.messages import AIMessage
 
+from . import agent
+
 
 async def generate_query(
     *,
-    model: Any,
     backend: str,
     user_prompt: str,
     previous: str,
@@ -25,7 +25,7 @@ async def generate_query(
         "schema": schema,
         "validation_error": repair_error,
     }
-    result = await agent.query_agent(model = model).ainvoke({
+    result = await agent.query_agent().ainvoke({
         "messages": [{
             "role": "user",
             "content": json.dumps(details, ensure_ascii = False, default = str),

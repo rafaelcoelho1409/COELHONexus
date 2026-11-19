@@ -17,7 +17,7 @@ export function ContextBar({
   end,
   pinned = false,
 }: {
-  start: ReactNode;
+  start?: ReactNode;
   end?: ReactNode;
   pinned?: boolean;
 }) {
@@ -28,9 +28,11 @@ export function ContextBar({
     <div data-pinned={pinned ? "true" : undefined} className="border-b border-border bg-background">
       <div className="mx-auto flex min-h-12 max-w-screen-2xl flex-wrap items-center justify-between gap-x-6 gap-y-1 px-4 py-2 sm:px-6">
         {/* `relative`: on a phone a dropdown list spans this box, inside the bar's side padding. */}
-        <div className="relative flex min-w-0 flex-wrap items-center gap-x-4 gap-y-1 max-sm:w-full">
-          {start}
-        </div>
+        {start ? (
+          <div className="relative flex min-w-0 flex-wrap items-center gap-x-4 gap-y-1 max-sm:w-full">
+            {start}
+          </div>
+        ) : null}
         {end}
       </div>
     </div>,

@@ -1,12 +1,15 @@
 """Read-only Qdrant query and schema operations for BD."""
 from __future__ import annotations
-import infra
-from ... import domain, errors, params
 
 import logging
 import time
 from typing import Any
 
+import infra
+
+from ...... import settings
+from ..... import rag
+from ... import domain, errors, params
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +26,7 @@ async def run_raw_query(body_text: str) -> dict[str, Any]:
     body = dict(parsed.body)
     body.pop("op", None)
     requested_collection = body.pop("collection_name", None)
+    query_text = body.pop("query_text", None)
     notes: list[str] = []
     try:
         client = infra.qdrant.service.get_qdrant()
@@ -55,8 +59,60 @@ async def run_raw_query(body_text: str) -> dict[str, Any]:
                 error = f"BD Qdrant collection {requested_collection!r} was not found.",
             )
         collection_names = [requested_collection]
-    elif len(collection_names) > 1:
+    elif len(collection_names) > 1 and not query_text:
         notes.append(f"Queried {len(collection_names)} BD embedding collections.")
+
+    if query_text:
+        try:
+            vectors, model = await settings.embeddings.service.embed_texts_async([query_text])
+        except Exception as error:  # noqa: BLE001 - report embedding failures through the query result.
+            return domain.raw_response(
+                backend,
+                ok = False,
+                error = f"Could not embed the Qdrant search text: {type(error).__name__}: {str(error)[:250]}",
+                took_ms = int((time.monotonic() - started) * 1000),
+            )
+        if not vectors or not vectors[0]:
+            return domain.raw_response(
+                backend,
+                ok = False,
+                error = "The configured embedding model returned an empty search vector.",
+            )
+        expected_collection = rag.source.indexes.qdrant_index.domain.collection_name(model, len(vectors[0]))
+        if requested_collection and requested_collection != expected_collection:
+            return domain.raw_response(
+                backend,
+                ok = False,
+                error = (
+                    "This semantic search uses the configured embedding model and requires collection "
+                    f"{expected_collection!r}."
+                ),
+            )
+        if expected_collection not in collection_names:
+            try:
+                collection_exists = await client.collection_exists(expected_collection)
+            except Exception as error:  # noqa: BLE001 - report a collection lookup failure to the user.
+                return domain.raw_response(
+                    backend,
+                    ok = False,
+                    error = f"Could not verify the configured BD Qdrant collection: {type(error).__name__}.",
+                    took_ms = int((time.monotonic() - started) * 1000),
+                )
+            if not collection_exists:
+                return domain.raw_response(
+                    backend,
+                    ok = False,
+                    error = (
+                        "No BD Qdrant collection exists for the configured embedding model. "
+                        "Reindex BD RAG before running semantic searches."
+                    ),
+                )
+        collection_names = [expected_collection]
+        body["query_vector"] = {
+            "name": str(body.pop("using", "dense")),
+            "vector": vectors[0],
+        }
+        operation = "search"
 
     if not collection_names:
         return domain.raw_response(
@@ -153,3 +209,89 @@ async def query_schema() -> dict[str, Any]:
         if len(collections) >= params.QDRANT_MAX_COLLECTIONS:
             break
     return {"collections": collections}
+
+
+async def validate_query(
+    body_text: str,
+    *,
+    schema: dict[str, Any],
+) -> tuple[bool, str | None]:
+    """Validate Qdrant operation, indexed collection, vector name, and filter fields."""
+    valid, error = domain.check_query_body(params.BACKEND_QDRANT, body_text)
+    if not valid:
+        return False, error
+    try:
+        parsed = domain.parse_qdrant_body(body_text)
+    except errors.QueryNotAllowed as error:
+        return False, str(error)
+
+    collections = schema.get("collections", [])
+    if not isinstance(collections, list) or not collections:
+        return False, "No BD Qdrant collection is indexed yet."
+    body = parsed.body
+    query_text = body.get("query_text")
+    if query_text is not None:
+        if not isinstance(query_text, str) or not query_text.strip():
+            return False, "`query_text` must contain the natural-language search text."
+        if len(query_text) > params.MAX_QDRANT_QUERY_TEXT_CHARS:
+            return False, f"`query_text` exceeds {params.MAX_QDRANT_QUERY_TEXT_CHARS} characters."
+        if body.get("using", "dense") != "dense":
+            return False, "Natural-language searches use the indexed `dense` vector."
+
+    requested_collection = body.get("collection_name")
+    scoped_collections = [
+        collection
+        for collection in collections
+        if isinstance(collection, dict)
+        and (not requested_collection or collection.get("name") == requested_collection)
+    ]
+    if requested_collection and not scoped_collections:
+        return False, f"BD Qdrant collection {requested_collection!r} was not found."
+    if query_text and not requested_collection:
+        # A text query is embedded with the active indexing model, so it must not
+        # be sent to old collections created with different model dimensions.
+        scoped_collections = [
+            collection
+            for collection in scoped_collections
+            if isinstance(collection.get("vectors_config"), dict)
+            and "dense" in collection["vectors_config"]
+        ]
+        if not scoped_collections:
+            return False, "No BD Qdrant collection has the `dense` vector required for semantic search."
+
+    available_payload_keys = set(params.QDRANT_PAYLOAD_KEYS)
+    available_vector_names: set[str] = set()
+    for collection in scoped_collections:
+        payload_schema = collection.get("payload_schema")
+        if isinstance(payload_schema, dict):
+            available_payload_keys.update(str(key) for key in payload_schema)
+        vectors_config = collection.get("vectors_config")
+        if isinstance(vectors_config, dict):
+            available_vector_names.update(str(key) for key in vectors_config)
+    unknown_filter_keys = sorted(
+        key for key in _qdrant_filter_keys(body.get("filter"))
+        if key not in available_payload_keys
+    )
+    if unknown_filter_keys:
+        return False, f"Unknown BD Qdrant payload field(s): {', '.join(unknown_filter_keys)}."
+
+    vector_name = body.get("using")
+    if query_text:
+        vector_name = "dense"
+    if vector_name and available_vector_names and vector_name not in available_vector_names:
+        return False, f"The selected Qdrant collections do not contain vector {vector_name!r}."
+    return True, None
+
+
+def _qdrant_filter_keys(value: Any) -> set[str]:
+    if isinstance(value, dict):
+        keys = {value["key"]} if isinstance(value.get("key"), str) else set()
+        for item in value.values():
+            keys.update(_qdrant_filter_keys(item))
+        return keys
+    if isinstance(value, list):
+        keys: set[str] = set()
+        for item in value:
+            keys.update(_qdrant_filter_keys(item))
+        return keys
+    return set()

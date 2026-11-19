@@ -1,10 +1,10 @@
 """BD Query workbench routes."""
 from __future__ import annotations
-from . import schemas, service
 
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 
+from . import schemas, service
 
 router = APIRouter()
 
@@ -52,6 +52,5 @@ async def delete_history(entry_id: int, request: Request) -> dict:
 async def generate_query(
     backend: schemas.QueryBackend,
     payload: schemas.QueryAIRequest,
-    request: Request,
 ) -> StreamingResponse:
-    return service.generate_query(backend, payload, request)
+    return service.generate_query(backend, payload)

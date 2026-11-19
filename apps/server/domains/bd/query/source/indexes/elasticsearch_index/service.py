@@ -1,12 +1,13 @@
 """Read-only Elasticsearch query and schema operations for BD."""
 from __future__ import annotations
-import infra
-from ... import domain, errors, params
 
 import logging
 import time
 from typing import Any
 
+import infra
+
+from ... import domain, errors, params
 
 logger = logging.getLogger(__name__)
 
@@ -81,3 +82,29 @@ async def query_schema() -> dict[str, Any]:
             logger.debug(f"[bd:query:schema:elasticsearch] count lookup failed for {name}: {error}")
         indices[name] = {"mappings": mapping, "doc_count": doc_count}
     return {"indices": indices}
+
+
+async def validate_query(body_text: str) -> tuple[bool, str | None]:
+    """Use Elasticsearch's validator to check generated search syntax and fields."""
+    valid, error = domain.check_query_body(params.BACKEND_ELASTICSEARCH, body_text)
+    if not valid:
+        return False, error
+    try:
+        parsed = domain.parse_elasticsearch_body(body_text)
+        client = infra.elasticsearch.service.get_es()
+        result = await client.indices.validate_query(
+            index = ",".join(params.ELASTICSEARCH_INDEX_NAMES),
+            body = {"query": parsed.body.get("query", {"match_all": {}})},
+            explain = True,
+        )
+    except Exception as error:  # noqa: BLE001 - return backend validation details for one repair attempt.
+        return False, f"Elasticsearch rejected query validation: {type(error).__name__}: {str(error)[:300]}"
+    if result.get("valid", False):
+        return True, None
+    explanations = result.get("explanations") or []
+    details = "; ".join(
+        str(item.get("error") or item.get("explanation") or "")
+        for item in explanations
+        if isinstance(item, dict) and (item.get("error") or item.get("explanation"))
+    )
+    return False, f"Elasticsearch marked the query invalid{': ' + details if details else '.'}"

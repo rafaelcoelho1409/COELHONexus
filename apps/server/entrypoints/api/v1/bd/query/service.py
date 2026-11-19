@@ -1,12 +1,14 @@
 """HTTP orchestration for the BD Query workbench."""
 from __future__ import annotations
-import domains
-from . import schemas
 
 import time
 
 from fastapi import HTTPException, Request
 from fastapi.responses import StreamingResponse
+
+import domains
+
+from . import schemas
 
 
 def get_namespaces() -> dict:
@@ -72,18 +74,11 @@ async def delete_history(request: Request, entry_id: int) -> dict:
 def generate_query(
     backend: schemas.QueryBackend,
     payload: schemas.QueryAIRequest,
-    request: Request,
 ) -> StreamingResponse:
     if not payload.prompt.strip():
         raise HTTPException(status_code = 400, detail = "`prompt` is required.")
-    model = (
-        getattr(request.app.state, "query_ai_llm", None)
-        or getattr(request.app.state, "llm", None)
-    )
-
     async def event_source():
         async for frame in domains.bd.query.ai.service.generate_query_stream(
-            model = model,
             backend = backend,
             user_prompt = payload.prompt,
             previous = payload.previous,

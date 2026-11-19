@@ -12,6 +12,7 @@ import { QueryTable } from "./query-table";
 import { RagActionButton as Button } from "./rag-action-button";
 
 type View = "table" | "json" | "graph";
+type QueryResultState = Exclude<RunState, { kind: "idle" }>;
 
 const VIEW_LABEL: Record<View, string> = { table: "Table", json: "JSON", graph: "Graph" };
 
@@ -32,11 +33,18 @@ function Notes({ notes }: { notes: ReadonlyArray<string> }): JSX.Element | null 
   );
 }
 
-export function QueryResults({ backend, state }: { backend: QueryBackend; state: RunState }): JSX.Element {
+export function QueryResults({
+  backend,
+  state,
+}: {
+  backend: QueryBackend;
+  state: QueryResultState;
+}): JSX.Element {
   // Until the reader picks one, the view follows the result: whole nodes and relationships open as a graph, plain
   // values as a table. A new result remounts this component, so each Run starts from the result's own shape again.
   const [picked, setPicked] = useState<View | null>(null);
   const [openDepth, setOpenDepth] = useState<number | null>(null);
+  const [visibleRowCount, setVisibleRowCount] = useState<number | null>(null);
   const hits = state.kind === "done" ? state.result.hits : null;
   const rows = useMemo(() => (hits ? flattenRows(backend, hits) : []), [backend, hits]);
   const drawable = useMemo(
@@ -44,17 +52,6 @@ export function QueryResults({ backend, state }: { backend: QueryBackend; state:
     [backend, hits],
   );
 
-  if (state.kind === "idle") {
-    return (
-      <div className="rounded-sm border border-border p-6">
-        <h2 className="text-base font-semibold">Query workbench</h2>
-        <p className="mt-2 max-w-prose text-sm text-muted-foreground">
-          Write the query in the editor and press Run, or describe what you need to the assistant and let it
-          fill the editor. Pick the store with the tabs above; every query is read-only.
-        </p>
-      </div>
-    );
-  }
   if (state.kind === "running") {
     return (
       <p className="rounded-sm border border-border p-6 text-sm text-muted-foreground">Running the query…</p>
@@ -81,9 +78,10 @@ export function QueryResults({ backend, state }: { backend: QueryBackend; state:
     <div className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center gap-2">
         <h2 className="text-base font-semibold">Results</h2>
-        <p className="tabular text-sm text-muted-foreground">
+        <p role="status" className="tabular text-sm text-muted-foreground">
           {result.hits.length.toLocaleString("en-US")} of {total.toLocaleString("en-US")} rows ·{" "}
           {result.took_ms} ms
+          {current === "table" ? ` · ${(visibleRowCount ?? rows.length).toLocaleString("en-US")} rows` : ""}
         </p>
         <fieldset className="m-0 ml-auto flex min-w-0 gap-1 border-0 p-0">
           <legend className="sr-only">Result view</legend>
@@ -93,7 +91,10 @@ export function QueryResults({ backend, state }: { backend: QueryBackend; state:
               variant={current === id ? "secondary" : "outline"}
               size="lg"
               aria-pressed={current === id}
-              onClick={() => setPicked(id)}
+              onClick={() => {
+                if (id === "table") setVisibleRowCount(null);
+                setPicked(id);
+              }}
             >
               {VIEW_LABEL[id]}
             </Button>
@@ -106,7 +107,7 @@ export function QueryResults({ backend, state }: { backend: QueryBackend; state:
           The query ran and returned no rows.
         </p>
       ) : current === "table" ? (
-        <QueryTable rows={rows} />
+        <QueryTable rows={rows} onVisibleCountChange={setVisibleRowCount} />
       ) : current === "json" ? (
         <div className="flex flex-col gap-2">
           <div className="flex gap-1">

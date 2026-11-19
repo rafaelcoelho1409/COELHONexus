@@ -1,8 +1,9 @@
 """Store names and limits for the BD retrieval query workbench."""
 from __future__ import annotations
-import infra
-from ... import rag
 
+import infra
+
+from ... import rag
 
 APP_BD = "bd"
 
@@ -44,19 +45,26 @@ QDRANT_PAYLOAD_KEYS = (
     "index_profile_fingerprint",
 )
 
-NEO4J_NODE_PROPERTIES = (
-    ("id", "String"),
-    ("kind", "String"),
-    ("name", "String"),
-    ("book_id", "String"),
-    ("agentic_run_id", "String"),
-    ("processed_book_revision", "Integer"),
-)
+NEO4J_BASE_LABELS = ("COELHONexus", "BD")
+NEO4J_NODE_LABELS = tuple(rag.source.indexes.neo4j_index.params.GRAPH_NODE_LABELS_BY_KIND.values())
+NEO4J_COMMON_NODE_PROPERTIES = rag.source.indexes.neo4j_index.params.GRAPH_NODE_COMMON_PROPERTIES
+NEO4J_NODE_PROPERTIES_BY_LABEL = {
+    rag.source.indexes.neo4j_index.params.GRAPH_NODE_LABELS_BY_KIND[kind]: (
+        *NEO4J_COMMON_NODE_PROPERTIES,
+        *properties,
+    )
+    for kind, properties in rag.source.indexes.neo4j_index.params.GRAPH_NODE_PROPERTIES_BY_KIND.items()
+}
+NEO4J_RELATIONSHIP_PATTERNS = rag.source.indexes.neo4j_index.params.GRAPH_STRUCTURAL_RELATIONSHIP_PATTERNS
+NEO4J_RELATIONSHIP_PROPERTIES = rag.source.indexes.neo4j_index.params.GRAPH_RELATIONSHIP_COMMON_PROPERTIES
+NEO4J_OPTIONAL_RELATIONSHIP_PROPERTIES = rag.source.indexes.neo4j_index.params.GRAPH_RELATIONSHIP_OPTIONAL_PROPERTIES
+NEO4J_MAX_QUERY_LIMIT = 100
 
 ES_MAX_SIZE = 200
 QDRANT_DEFAULT_LIMIT = 20
 QDRANT_READ_OPERATIONS = ("search", "scroll", "query_points", "count")
 QDRANT_MAX_QUERY_LIMIT = 200
+MAX_QDRANT_QUERY_TEXT_CHARS = 4_000
 
 CYPHER_WRITE_KEYWORDS = (
     "create",
@@ -69,8 +77,3 @@ CYPHER_WRITE_KEYWORDS = (
     "foreach",
     "detach",
 )
-
-NEO4J_RELATIONSHIP_TYPES = tuple(dict.fromkeys((
-    *rag.source.indexes.neo4j_index.params.GRAPH_STRUCTURAL_RELATIONSHIP_TYPES_BY_KIND.values(),
-    rag.source.indexes.neo4j_index.params.GRAPH_FALLBACK_RELATIONSHIP_TYPE,
-)))

@@ -41,7 +41,7 @@ export const QUERY_BACKENDS: ReadonlyArray<{
   label: string;
   language: QueryLanguage;
 }> = [
-  { id: "elasticsearch", label: "Elasticsearch", language: "json" },
+  { id: "elasticsearch", label: "ElasticSearch", language: "json" },
   { id: "qdrant", label: "Qdrant", language: "json" },
   { id: "neo4j", label: "Neo4j", language: "cypher" },
 ];

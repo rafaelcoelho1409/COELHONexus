@@ -1,9 +1,8 @@
 "use client";
 
-/** The Query stage: a read-only workbench over the three stores. Backend tabs on top, then one card with the editor's
- * header, the assistant bar and the editor, and the results below at full width (a result table needs the room).
- * Each backend keeps its own draft and its own last result, so switching tabs loses nothing. Schema (which can insert a
- * starting query) and History open as side sheets. */
+/** The Query stage: a read-only workbench over the three stores. On wide screens the editor and results share a 2:3
+ * split; on narrow screens they stack. Each backend keeps its own draft and last result. Schema and History open as
+ * side sheets. */
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { type JSX, useId, useRef, useState } from "react";
@@ -20,7 +19,7 @@ import { QueryEditor } from "./query-editor";
 import { QueryHistorySheet, queryHistoryKey } from "./query-history-sheet";
 import { QueryResults } from "./query-results";
 import { QuerySchemaSheet } from "./query-schema-sheet";
-import { BackendTabs, EditorHeader } from "./query-toolbar";
+import { BackendTabs, EditorActions, EditorHeader } from "./query-toolbar";
 
 type PerBackend<T> = Record<QueryBackend, T>;
 
@@ -99,53 +98,63 @@ export function QueryStage(): JSX.Element {
 
   return (
     <div className="flex flex-col gap-4">
-      <ContextBar
-        start={<span className="text-sm font-medium text-muted-foreground">Query store</span>}
-        end={<BackendTabs backend={backend} onChange={setBackend} />}
-      />
+      <ContextBar end={<BackendTabs backend={backend} onChange={setBackend} />} />
 
-      <section
-        aria-label="Editor"
-        className="flex flex-col gap-3 rounded-md border border-border bg-card p-3"
+      <div
+        className={`grid min-w-0 grid-cols-1 items-start gap-4 ${
+          current.kind === "idle" ? "" : "xl:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]"
+        }`}
       >
-        <EditorHeader
-          backend={backend}
-          caption={labels.data?.[backend] ?? ""}
-          status={runStatus(current)}
-          running={running}
-          onRun={run}
-          onReset={() => setDraft(backend, QUERY_SCAFFOLDS[backend])}
-          onSchema={() => setSheet("schema")}
-          onHistory={() => setSheet("history")}
-        />
-        <QueryAiBar
-          prompt={prompt}
-          onPrompt={setPrompt}
-          state={ai.state}
-          running={ai.running}
-          onGenerate={generate}
-          onStop={ai.stop}
-          onRun={run}
-        />
-        <div className="flex flex-col gap-1.5">
-          {/* One editor per backend: its undo history never reaches back into another store's query. */}
-          <QueryEditor
-            key={backend}
-            value={drafts[backend]}
-            language={entry?.language ?? "json"}
-            label={EDITOR_LABEL}
-            describedBy={hintId}
-            locked={ai.running && aiBackend === backend}
-            onChange={(text) => setDraft(backend, text)}
+        <section
+          aria-label="Query editor"
+          className="flex min-w-0 flex-col gap-3 rounded-md border border-border bg-card p-3"
+        >
+          <EditorHeader
+            backend={backend}
+            caption={labels.data?.[backend] ?? ""}
+            status={runStatus(current)}
+          />
+          <QueryAiBar
+            prompt={prompt}
+            onPrompt={setPrompt}
+            state={ai.state}
+            running={ai.running}
+            onGenerate={generate}
+            onStop={ai.stop}
             onRun={run}
           />
-          <p id={hintId} className="text-xs text-muted-foreground">
-            Ctrl/Cmd+Enter runs. Tab indents; press Escape, then Tab, to move focus out of the editor.
-          </p>
-        </div>
-      </section>
+          <EditorActions
+            queryRunning={running}
+            queryDisabled={ai.running}
+            onReset={() => setDraft(backend, QUERY_SCAFFOLDS[backend])}
+            onSchema={() => setSheet("schema")}
+            onHistory={() => setSheet("history")}
+            onRun={run}
+          />
+          <div className="flex min-w-0 flex-col gap-1.5">
+            {/* One editor per backend: its undo history never reaches back into another store's query. */}
+            <QueryEditor
+              key={backend}
+              value={drafts[backend]}
+              language={entry?.language ?? "json"}
+              label={EDITOR_LABEL}
+              describedBy={hintId}
+              locked={ai.running && aiBackend === backend}
+              onChange={(text) => setDraft(backend, text)}
+              onRun={run}
+            />
+            <p id={hintId} className="text-xs text-muted-foreground">
+              Ctrl/Cmd+Enter runs. Tab indents; press Escape, then Tab, to move focus out of the editor.
+            </p>
+          </div>
+        </section>
 
-      <QueryResults key={`${backend}-${versions[backend]}`} backend={backend} state={current} />
+        {current.kind !== "idle" ? (
+          <section aria-label="Query results" className="min-w-0 rounded-md border border-border bg-card p-3">
+            <QueryResults key={`${backend}-${versions[backend]}`} backend={backend} state={current} />
+          </section>
+        ) : null}
+      </div>
 
       {sheet === "schema" ? (
         <QuerySchemaSheet
