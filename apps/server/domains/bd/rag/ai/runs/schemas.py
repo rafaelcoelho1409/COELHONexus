@@ -73,6 +73,7 @@ class RetrievalIndexManifest(BaseModel):
     graph_batches_completed: int = Field(default = 0, ge = 0, strict = True)
     graph_batches_total: int = Field(default = 0, ge = 0, strict = True)
     neo4j_pages_completed: int = Field(default = 0, ge = 0, strict = True)
+    neo4j_llm_calls_active: int | None = Field(default = None, ge = 0, strict = True)
     neo4j_stage: Neo4jStage = "idle"
     neo4j_stage_completed: int = Field(default = 0, ge = 0, strict = True)
     neo4j_stage_total: int = Field(default = 0, ge = 0, strict = True)

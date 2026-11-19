@@ -38,6 +38,7 @@ export type AgenticNodeProgress = {
   total: number;
   label: string;
   active: number;
+  activeLabel?: string;
 };
 
 const noResources: AgenticNodeResources = { agents: [], skills: [], tools: [] };

@@ -210,6 +210,7 @@ export const retrievalIndexStatusSchema = z.looseObject({
   graph_batches_completed: z.number().int().nonnegative().catch(0),
   graph_batches_total: z.number().int().nonnegative().catch(0),
   neo4j_pages_completed: z.number().int().nonnegative().catch(0),
+  neo4j_llm_calls_active: z.number().int().nonnegative().nullable().catch(null),
   neo4j_stage: z.enum([
     "idle",
     "extracting",

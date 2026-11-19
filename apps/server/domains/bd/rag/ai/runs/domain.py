@@ -59,6 +59,7 @@ def initial_manifest(
         "graph_batches_completed": 0,
         "graph_batches_total": 0,
         "neo4j_stage": "idle",
+        "neo4j_llm_calls_active": 0,
         "neo4j_stage_completed": 0,
         "neo4j_stage_total": 0,
         "neo4j_node_write_batches_completed": 0,

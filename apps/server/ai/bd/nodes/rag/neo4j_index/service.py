@@ -62,31 +62,53 @@ async def index_book_graph(
     extraction_semaphore = asyncio.Semaphore(domains.bd.rag.ai.params.GRAPH_EXTRACTION_CONCURRENCY)
     progress_lock = asyncio.Lock()
     completed_batches = 0
+    active_llm_calls = 0
 
     async def extract_batch(
         section_title: str,
         batch_rows: list[dict[str, Any]],
     ) -> dict[str, Any]:
-        nonlocal completed_batches, pages_completed
+        nonlocal active_llm_calls, completed_batches, pages_completed
         async with extraction_semaphore:
             if await context.cancel_check():
                 raise RuntimeError("processed-book retrieval indexing was cancelled")
-            with domains.settings.llm_counter.service.llm_context(
-                ns = "bd",
-                run_id = domains.bd.rag.ai.keys.usage_run_id(
-                    graph_state["book_id"],
-                    graph_state["agentic_run_id"],
-                ),
-                node_id = "neo4j",
-                stage = "agentic_rag",
-            ):
-                extraction = await extract_graph_facts(
-                    context.graph_transformer,
-                    batch_rows,
-                    section_title = section_title,
-                )
+            registered = False
+            try:
+                async with progress_lock:
+                    active_llm_calls += 1
+                    registered = True
+                    await context.progress_callback(
+                        "neo4j",
+                        "running",
+                        {"neo4j_llm_calls_active": active_llm_calls},
+                    )
+                with domains.settings.llm_counter.service.llm_context(
+                    ns = "bd",
+                    run_id = domains.bd.rag.ai.keys.usage_run_id(
+                        graph_state["book_id"],
+                        graph_state["agentic_run_id"],
+                    ),
+                    node_id = "neo4j",
+                    stage = "agentic_rag",
+                ):
+                    extraction = await extract_graph_facts(
+                        context.graph_transformer,
+                        batch_rows,
+                        section_title = section_title,
+                    )
+            except BaseException:
+                if registered:
+                    async with progress_lock:
+                        active_llm_calls -= 1
+                        await context.progress_callback(
+                            "neo4j",
+                            "running",
+                            {"neo4j_llm_calls_active": active_llm_calls},
+                        )
+                raise
 
         async with progress_lock:
+            active_llm_calls -= 1
             for row in batch_rows:
                 page_number = row["processed_page_number"]
                 chunks_remaining_by_page[page_number] -= 1
@@ -104,6 +126,7 @@ async def index_book_graph(
                     "graph_batches_completed": completed_batches,
                     "graph_batches_total": len(batches),
                     "neo4j_pages_completed": pages_completed,
+                    "neo4j_llm_calls_active": active_llm_calls,
                 },
             )
         return {"section_title": section_title, "rows": batch_rows, "extraction": extraction}

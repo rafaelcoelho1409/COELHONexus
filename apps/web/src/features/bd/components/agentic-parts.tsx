@@ -200,7 +200,11 @@ export function AgenticNodeProgressBar({
 }) {
   const current = Math.max(0, Math.min(progress.current, progress.total));
   const percent = progress.total > 0 ? Math.round((current / progress.total) * 100) : 0;
-  const active = progress.active > 0 ? ` · ${progress.active} active` : "";
+  const active = progress.activeLabel
+    ? ` · ${progress.active} ${progress.activeLabel}`
+    : progress.active > 0
+      ? ` · ${progress.active} active`
+      : "";
   return (
     <span className="mt-1 block">
       <span className="flex items-center justify-between gap-2 text-xs">

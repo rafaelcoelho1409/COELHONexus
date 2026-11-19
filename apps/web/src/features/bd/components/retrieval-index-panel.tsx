@@ -421,12 +421,24 @@ function neo4jNodeProgress(
   if (status === "done" || index.neo4j_stage === "complete") {
     return { current: 1, total: 1, label: "graph stored", active: 0 };
   }
+  if (index.neo4j_stage === "extracting") {
+    const activeLlmCalls = index.neo4j_llm_calls_active;
+    const activeLabel =
+      activeLlmCalls === null ? undefined : activeLlmCalls === 1 ? "LLM call active" : "LLM calls active";
+    return {
+      current: Math.min(index.neo4j_pages_completed, totalPages),
+      total: totalPages,
+      label: "pages analyzed",
+      active: status === "running" && activeLlmCalls !== null ? activeLlmCalls : 0,
+      activeLabel: status === "running" && activeLlmCalls !== null ? activeLabel : undefined,
+    };
+  }
   if (index.neo4j_stage === "building_graph") {
     return {
       current: index.neo4j_stage_completed,
       total: Math.max(index.neo4j_stage_total, 1),
       label: "graph records assembled",
-      active: status === "running" && index.neo4j_stage_completed < index.neo4j_stage_total ? 1 : 0,
+      active: 0,
     };
   }
   if (index.neo4j_stage === "clearing_graph") {
@@ -434,7 +446,7 @@ function neo4jNodeProgress(
       current: index.neo4j_stage_completed,
       total: Math.max(index.neo4j_stage_total, 1),
       label: "previous graph cleared",
-      active: status === "running" && index.neo4j_stage_completed < index.neo4j_stage_total ? 1 : 0,
+      active: 0,
     };
   }
   if (index.neo4j_stage === "preparing_writes") {
@@ -442,7 +454,7 @@ function neo4jNodeProgress(
       current: index.neo4j_stage_completed,
       total: Math.max(index.neo4j_stage_total, 1),
       label: "graph write records prepared",
-      active: status === "running" && index.neo4j_stage_completed < index.neo4j_stage_total ? 1 : 0,
+      active: 0,
     };
   }
   if (index.neo4j_stage === "writing_nodes") {
@@ -450,11 +462,7 @@ function neo4jNodeProgress(
       current: Math.min(index.neo4j_node_write_batches_completed, index.neo4j_node_write_batches_total),
       total: Math.max(index.neo4j_node_write_batches_total, 1),
       label: "node batches written",
-      active:
-        status === "running" &&
-        index.neo4j_node_write_batches_completed < index.neo4j_node_write_batches_total
-          ? 1
-          : 0,
+      active: 0,
     };
   }
   if (index.neo4j_stage === "writing_relationships") {
@@ -465,18 +473,14 @@ function neo4jNodeProgress(
       ),
       total: Math.max(index.neo4j_relationship_write_batches_total, 1),
       label: "relationship batches written",
-      active:
-        status === "running" &&
-        index.neo4j_relationship_write_batches_completed < index.neo4j_relationship_write_batches_total
-          ? 1
-          : 0,
+      active: 0,
     };
   }
   return {
     current: Math.min(index.neo4j_pages_completed, totalPages),
     total: totalPages,
     label: "pages analyzed",
-    active: status === "running" && index.neo4j_pages_completed < totalPages ? 1 : 0,
+    active: 0,
   };
 }
 
