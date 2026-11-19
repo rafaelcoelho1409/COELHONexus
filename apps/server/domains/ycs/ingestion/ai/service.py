@@ -1,221 +1,18 @@
-"""Run LangChain graph extraction and validate transcript grounding."""
+"""Coordinate the parallel YCS ingestion graph and translate its progress."""
 from __future__ import annotations
-
-import ai
-import domains, infra
-from . import entities
 
 import asyncio
 import logging
 import threading
 from typing import Any
 
-from langchain_core.documents import Document
-from langchain_neo4j import LLMGraphTransformer
-from langchain_neo4j.graphs.graph_document import GraphDocument, Node, Relationship
+import ai
+import infra
 
+from ... import rag
+from .. import domain, extract, pipeline_task, transcript
 
 logger = logging.getLogger(__name__)
-
-
-def build_graph_transformer(
-    model: Any,
-    *,
-    run_id: str | None = None,
-) -> entities.GraphTransformerRuntime:
-    """Create a per-task runtime for transcript graph transformation."""
-    if run_id:
-        model = model.with_config(config = {
-            "callbacks": [domains.settings.llm_counter.service.LLMCounterCallback()],
-        })
-    return entities.GraphTransformerRuntime(model = model, run_id = run_id)
-
-
-def _transformer(
-    runtime: entities.GraphTransformerRuntime,
-    *,
-    additional_instructions: str = "",
-    unstructured: bool = False,
-) -> LLMGraphTransformer:
-    from domains.ycs.ingestion.graph_builder import prompts
-
-    instructions = prompts.EXTRACTION_INSTRUCTIONS
-    if additional_instructions:
-        instructions = f"{instructions}\n\n{additional_instructions}"
-    options: dict[str, Any] = {
-        "llm": runtime.model,
-        "strict_mode": False,
-        "additional_instructions": instructions,
-    }
-    if unstructured:
-        # Some configured providers reject LangChain's nested structured
-        # graph schema or return an empty graph for it. This path omits
-        # property schemas; the caller applies conservative text checks.
-        options["ignore_tool_usage"] = True
-    else:
-        options["node_properties"] = ["evidence"]
-        options["relationship_properties"] = ["evidence"]
-    return LLMGraphTransformer(**options)
-
-
-def _validated_graph_document(
-    candidate: GraphDocument,
-    source: Document,
-    *,
-    require_evidence: bool,
-) -> tuple[GraphDocument, list[str]]:
-    """Validate candidates in the domain and adapt accepted facts to LangChain."""
-    from domains.ycs.ingestion.graph_builder import domain
-
-    nodes, relations, issues = domain.validate_graph_candidates(
-        candidate,
-        source.page_content or "",
-        require_evidence = require_evidence,
-    )
-    nodes_by_id = {
-        item["id"].casefold(): Node(id = item["id"], type = item["type"])
-        for item in nodes
-    }
-    accepted_relationships = [
-        Relationship(
-            source = nodes_by_id[relation["source_id"].casefold()],
-            target = nodes_by_id[relation["target_id"].casefold()],
-            type = relation["type"],
-        )
-        for relation in relations
-    ]
-    return GraphDocument(
-        nodes = list(nodes_by_id.values()),
-        relationships = accepted_relationships,
-        source = source,
-    ), issues
-
-
-def _is_structured_schema_error(error: Exception) -> bool:
-    message = f"{type(error).__name__}: {error}".casefold()
-    return any(marker in message for marker in (
-        "dynamicgraph",
-        "anyof",
-        "json schema",
-        "structured output",
-        "invalid schema",
-        "schema validation",
-        "function_calling",
-        "function calling",
-        "tool call schema",
-    ))
-
-
-async def _process(
-    runtime: entities.GraphTransformerRuntime,
-    document: Document,
-    *,
-    additional_instructions: str = "",
-) -> tuple[GraphDocument, bool]:
-    """Return a candidate and whether provider compatibility fallback ran."""
-    try:
-        transformer = _transformer(
-            runtime,
-            additional_instructions = additional_instructions,
-        )
-        result = await transformer.aprocess_response(document)
-        return result, False
-    except Exception as error:
-        if not _is_structured_schema_error(error):
-            raise
-        logger.warning(
-            "[ycs:neo4j] provider rejected structured graph output; "
-            "retrying with the compatibility parser (%s)",
-            type(error).__name__,
-        )
-    transformer = _transformer(
-        runtime,
-        additional_instructions = additional_instructions,
-        unstructured = True,
-    )
-    return await transformer.aprocess_response(document), True
-
-
-async def extract_graph_document(
-    runtime: entities.GraphTransformerRuntime,
-    document: Document,
-) -> GraphDocument:
-    """Transform one transcript, validate facts, and preserve its source tag."""
-    candidate, compatibility_fallback = await _process(runtime, document)
-    if not compatibility_fallback and not (candidate.nodes or candidate.relationships):
-        # Known provider behavior: some endpoints accept the structured
-        # request but silently emit an empty graph. Try the compatibility
-        # mode once; the caller still rejects an empty result as a failure.
-        candidate = await _transformer(runtime, unstructured = True).aprocess_response(document)
-        compatibility_fallback = True
-        logger.warning("[ycs:neo4j] structured graph output was empty; used compatibility parser")
-
-    accepted, issues = _validated_graph_document(
-        candidate,
-        document,
-        require_evidence = not compatibility_fallback,
-    )
-    if issues and not compatibility_fallback:
-        feedback = (
-            f"{len(issues)} candidate(s) were rejected because they lacked "
-            "exact source evidence, referenced missing endpoints, had "
-            "conflicting types, or exceeded extraction limits."
-        )
-        retry_candidate, retry_fallback = await _process(
-            runtime,
-            document,
-            additional_instructions = (
-                "Correct the prior unsupported candidates using only exact "
-                "transcript evidence. Every node and relationship must have "
-                "an evidence property copied verbatim from the transcript. "
-                "Validation feedback:\n" + feedback
-            ),
-        )
-        retried, retry_issues = _validated_graph_document(
-            retry_candidate,
-            document,
-            require_evidence = not retry_fallback,
-        )
-        if (
-            len(retried.nodes) + len(retried.relationships)
-            > len(accepted.nodes) + len(accepted.relationships)
-        ):
-            accepted = retried
-        if retry_issues:
-            logger.info(
-                "[ycs:neo4j] transformer retained %d unsupported candidate(s) after evidence retry",
-                len(retry_issues),
-            )
-        if (
-            not retry_fallback
-            and not retried.nodes
-            and not retried.relationships
-            and (retry_candidate.nodes or retry_candidate.relationships)
-        ):
-            # A provider may accept the structured schema yet omit its
-            # evidence properties. Keep a conservative recovery path for
-            # that case; its weaker grounding checks are isolated here.
-            fallback_candidate = await _transformer(
-                runtime,
-                additional_instructions = (
-                    "Return only transcript-supported entities and direct "
-                    "relationships. Omit facts whose named endpoints do not "
-                    "appear together in one sentence."
-                ),
-                unstructured = True,
-            ).aprocess_response(document)
-            fallback_graph, _ = _validated_graph_document(
-                fallback_candidate,
-                document,
-                require_evidence = False,
-            )
-            if fallback_graph.nodes or fallback_graph.relationships:
-                accepted = fallback_graph
-                logger.warning(
-                    "[ycs:neo4j] evidence validation yielded no facts; "
-                    "accepted locally grounded compatibility output",
-                )
-    return accepted
 
 
 class _IngestionProgressReporter:
@@ -251,7 +48,7 @@ class _IngestionProgressReporter:
         try:
             payload["node_progress"] = self._node_progress()
             self.callback(payload)
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 - report progress callback failures without stopping ingestion.
             logger.warning(
                 f"[ycs:ingestion:graph] progress callback failed: "
                 f"{type(error).__name__}: {error}"
@@ -298,7 +95,7 @@ class _IngestionProgressReporter:
         for phase in ("qdrant", "neo4j"):
             for video_id in self.dispatched_ids:
                 try:
-                    await domains.ycs.ingestion.pipeline_task.service.mark_failed_if_unreported(
+                    await pipeline_task.service.mark_failed_if_unreported(
                         redis,
                         extract_id,
                         phase,
@@ -306,7 +103,7 @@ class _IngestionProgressReporter:
                         "Ingestion graph stopped before this store node reported an outcome.",
                         self.partition_total(video_id),
                     )
-                except Exception as error:
+                except Exception as error:  # noqa: BLE001 - reconcile failures are logged while other items continue.
                     logger.warning(
                         f"[ycs:ingestion:graph] unable to reconcile {phase}/{video_id}: "
                         f"{type(error).__name__}: {error}"
@@ -411,7 +208,7 @@ class _IngestionProgressReporter:
         with self._lock:
             metadata_videos = state.get("metadata_videos", [])
             metadata_by_id = {
-                str(video["id"]): domains.ycs.ingestion.extract.domain.project_video_meta(video)
+                str(video["id"]): extract.domain.project_video_meta(video)
                 for video in metadata_videos
                 if isinstance(video, dict) and video.get("id")
             }
@@ -432,7 +229,7 @@ class _IngestionProgressReporter:
                 if isinstance(document, dict):
                     video_id = str(document.get("parent_video_id") or document.get("video_id") or "")
                     if video_id:
-                        completed_transcription_ids.add(domains.ycs.ingestion.domain.parent_video_id(video_id))
+                        completed_transcription_ids.add(domain.parent_video_id(video_id))
             self.transcription_completed_ids.update(completed_transcription_ids - fetch_failed_ids)
 
             if replay_node in {"qdrant", "neo4j"}:
@@ -579,7 +376,7 @@ async def validate_replay_checkpoints(
     if node_id not in {"playwright", "elasticsearch", "qdrant", "neo4j"}:
         raise ValueError(f"unknown YCS ingestion node {node_id!r}")
     graph = ai.ycs.graphs.ingestion.graphs.ingestion_graph(checkpointer=checkpointer)
-    chunk_size = domains.ycs.ingestion.graph_builder.params.EXTRACT_CONCURRENCY
+    chunk_size = rag.source.indexes.neo4j_index.params.EXTRACT_CONCURRENCY
     chunks = [video_ids[index:index + chunk_size] for index in range(0, len(video_ids), chunk_size)]
     for index, _chunk in enumerate(chunks):
         config = {"configurable": {"thread_id": f"ycs-ingestion:{checkpoint_extract_id}:{index}"}}
@@ -616,11 +413,11 @@ async def run_ingestion_graph_async(
     async def cancel_check() -> bool:
         if redis is None or extract_id is None:
             return False
-        return await domains.ycs.ingestion.pipeline_task.service.is_pipeline_cancelled(redis, extract_id)
+        return await pipeline_task.service.is_pipeline_cancelled(redis, extract_id)
 
     try:
         if extract_id:
-            redis = domains.ycs.ingestion.pipeline_task.service.build_redis_client()
+            redis = pipeline_task.service.build_redis_client()
         if extract_id and include_transcription and video_ids:
             if replay_from_node == "qdrant":
                 phases_to_initialize = ("qdrant",)
@@ -629,7 +426,7 @@ async def run_ingestion_graph_async(
             else:
                 phases_to_initialize = ("neo4j", "qdrant")
             for phase in phases_to_initialize:
-                await domains.ycs.ingestion.pipeline_task.service.set_phase_total(
+                await pipeline_task.service.set_phase_total(
                     redis,
                     extract_id,
                     phase,
@@ -637,13 +434,13 @@ async def run_ingestion_graph_async(
                 )
         should_fetch_transcripts = replay_from_node in {None, "playwright"}
         if include_transcription and video_ids and should_fetch_transcripts:
-            transcript_service = await domains.ycs.ingestion.transcript.service.init_transcript_service(
-                max_concurrent = domains.ycs.ingestion.transcript.params.MAX_CONCURRENT,
+            transcript_service = await transcript.service.init_transcript_service(
+                max_concurrent = transcript.params.MAX_CONCURRENT,
                 browser_refresh_interval = 10,
                 max_retries = 3,
             )
 
-        chunk_size = domains.ycs.ingestion.graph_builder.params.EXTRACT_CONCURRENCY
+        chunk_size = rag.source.indexes.neo4j_index.params.EXTRACT_CONCURRENCY
         chunks = [video_ids[index:index + chunk_size] for index in range(0, len(video_ids), chunk_size)]
         replay_checkpoints: dict[int, dict[str, Any]] = {}
         if replay_from_node is not None and checkpointer is not None and checkpoint_extract_id:
@@ -661,7 +458,7 @@ async def run_ingestion_graph_async(
         concurrency = asyncio.Semaphore(ai.ycs.graphs.ingestion.params.MAX_CONCURRENT_BATCHES)
         context = ai.ycs.graphs.ingestion.entities.IngestionContext(
             es_client = es,
-            extractor = domains.ycs.ingestion.extract.service.get_extractor(),
+            extractor = extract.service.get_extractor(),
             transcript_service = transcript_service,
             run_id = extract_id,
             include_transcription = include_transcription,
@@ -669,7 +466,7 @@ async def run_ingestion_graph_async(
             total_videos = len(video_ids),
             reporter = reporter,
             qdrant_semaphore = asyncio.Semaphore(
-                domains.ycs.ingestion.graph_builder.params.EXTRACT_CONCURRENCY,
+                rag.source.indexes.neo4j_index.params.EXTRACT_CONCURRENCY,
             ),
             neo4j_semaphore = asyncio.Semaphore(
                 ai.ycs.graphs.ingestion.params.MAX_CONCURRENT_NEO4J_BATCHES,
@@ -763,7 +560,7 @@ async def run_ingestion_graph_async(
 
         dispatched_ids = list(dict.fromkeys(dispatched_ids))
         expected_store_ids = {
-            domains.ycs.ingestion.domain.parent_video_id(video_id)
+            domain.parent_video_id(video_id)
             for video_id in dispatched_ids
         }
 
@@ -773,15 +570,15 @@ async def run_ingestion_graph_async(
             cancelled_ids: set[str],
         ) -> dict[str, Any]:
             completed_parents = {
-                domains.ycs.ingestion.domain.parent_video_id(video_id)
+                domain.parent_video_id(video_id)
                 for video_id in completed_ids
             }
             failed_parents = {
-                domains.ycs.ingestion.domain.parent_video_id(video_id)
+                domain.parent_video_id(video_id)
                 for video_id in failed_ids
             }
             cancelled_parents = {
-                domains.ycs.ingestion.domain.parent_video_id(video_id)
+                domain.parent_video_id(video_id)
                 for video_id in cancelled_ids
             }
             completed_parents -= failed_parents
@@ -823,7 +620,7 @@ async def run_ingestion_graph_async(
                 node_progress[untouched_node] = preserved_progress
 
         if extract_id:
-            await domains.ycs.ingestion.extract.service.dispatch_streaming_totals(
+            await extract.service.dispatch_streaming_totals(
                 extract_id,
                 video_ids,
                 list(dict.fromkeys(dispatched_ids)),
@@ -849,7 +646,7 @@ async def run_ingestion_graph_async(
     except Exception:
         if extract_id and redis is not None:
             await reporter.fail_unreported_stores(redis, extract_id)
-            await domains.ycs.ingestion.extract.service.dispatch_streaming_totals(
+            await extract.service.dispatch_streaming_totals(
                 extract_id,
                 video_ids,
                 reporter.dispatched_ids,
@@ -859,7 +656,7 @@ async def run_ingestion_graph_async(
     finally:
         try:
             if transcript_service is not None:
-                await domains.ycs.ingestion.transcript.service.close_transcript_service()
+                await transcript.service.close_transcript_service()
         finally:
             try:
                 if redis is not None:

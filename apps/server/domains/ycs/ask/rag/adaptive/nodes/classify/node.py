@@ -29,7 +29,7 @@ def _resolve_channel_ids(neo4j_graph, channel_names: list[str]) -> list[str]:
         return []
     patterns = [n.lower() for n in channel_names]
     try:
-        source_label = domains.ycs.ingestion.graph_builder.params.SOURCE_LABEL
+        source_label = domains.ycs.rag.source.indexes.neo4j_index.params.SOURCE_LABEL
         results = neo4j_graph.query(
             f"MATCH (c:Channel:{source_label}) "
             "WHERE toLower(c.name) IN $names OR toLower(c.id) IN $names "

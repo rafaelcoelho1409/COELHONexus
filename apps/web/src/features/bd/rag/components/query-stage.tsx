@@ -8,6 +8,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { type JSX, useId, useRef, useState } from "react";
 
+import { ContextBar } from "@/shared/layout/context-bar";
 import { apiErrorMessage } from "@/shared/lib/api-error";
 
 import { fetchQueryLabels, runRawQuery, saveQueryHistory } from "../api";
@@ -98,9 +99,10 @@ export function QueryStage(): JSX.Element {
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="border-b border-border">
-        <BackendTabs backend={backend} onChange={setBackend} />
-      </div>
+      <ContextBar
+        start={<span className="text-sm font-medium text-muted-foreground">Query store</span>}
+        end={<BackendTabs backend={backend} onChange={setBackend} />}
+      />
 
       <section
         aria-label="Editor"

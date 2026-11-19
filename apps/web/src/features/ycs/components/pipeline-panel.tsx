@@ -10,7 +10,7 @@
  * reused as a lookup key, not task ids). */
 
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { ListChecks } from "lucide-react";
+import { Info, ListChecks } from "lucide-react";
 import { useRouter } from "next/navigation";
 import type { JSX } from "react";
 import { useEffect, useRef, useState } from "react";
@@ -56,6 +56,7 @@ import { IngestionAgenticStructure } from "./ingestion-agentic-structure";
 import type { Step, StepView } from "./pipeline-steps";
 import { PipelineUsageSheet } from "./pipeline-usage-sheet";
 import { PipelineVideosSheet } from "./pipeline-videos-sheet";
+import { SideSheet } from "./side-sheet";
 import { StatusBadge } from "./status-badge";
 
 const PREFIXES: ReadonlyArray<PipelinePrefix> = ["playwright", "elasticsearch", "qdrant", "neo4j"];
@@ -71,7 +72,21 @@ const BAR_HINTS: Record<PipelinePrefix, string> = {
   playwright: "yt-dlp metadata + Playwright transcript scrape.",
   elasticsearch: "Bulk-index fetched transcripts (chunk-grained).",
   qdrant: "Hybrid dense + BM25 upsert.",
-  neo4j: "DeepAgent entity extraction, transcript-evidence validation, and Neo4j graph writes.",
+  neo4j: "LLMGraphTransformer extraction, transcript-evidence validation, and Neo4j graph writes.",
+};
+
+const BAR_READS: Record<PipelinePrefix, readonly string[]> = {
+  playwright: ["Selected video ids", "Source options"],
+  elasticsearch: ["Video metadata", "Transcripts"],
+  qdrant: ["Transcripts"],
+  neo4j: ["Transcripts", "Video metadata"],
+};
+
+const BAR_WRITES: Record<PipelinePrefix, readonly string[]> = {
+  playwright: ["Video metadata", "Transcripts"],
+  elasticsearch: ["Searchable metadata", "Transcript index"],
+  qdrant: ["Transcript chunks", "Hybrid vectors"],
+  neo4j: ["Knowledge graph", "Evidence-linked relationships"],
 };
 
 type AllItem = { id: string; title?: string | null; channel?: string | null };
@@ -172,6 +187,7 @@ export function PipelinePanel({
   const router = useRouter();
   const { confirm, toast } = useYcsOverlays();
   const [sheet, setSheet] = useState<"videos" | "usage" | null>(null);
+  const [detailsOpen, setDetailsOpen] = useState(false);
 
   const extractQuery = useQuery({
     ...getYcsAdminTaskTaskIdOptions({ path: { task_id: tracking.extract } }),
@@ -211,10 +227,15 @@ export function PipelinePanel({
   const countersQuery = useQuery({
     ...getYcsAdminPipelineExtractIdLlmCountersOptions({ path: { extract_id: tracking.neo4j } }),
     retry: 0,
-    enabled: !allTerminal || sheet === "usage",
     refetchInterval: allTerminal ? false : LLM_USAGE_REFRESH_MS,
   });
   const usage = llmCountersSchema.safeParse(countersQuery.data);
+  const usageData = usage.success ? usage.data : null;
+  const usageError = countersQuery.isError
+    ? apiErrorMessage(countersQuery.error)
+    : usage.success || countersQuery.isPending
+      ? null
+      : "Usage data could not be read.";
 
   // Phase 1 emits a one-shot all_items payload once yt-dlp metadata is done; later polls lack it, so
   // the latest non-empty list is kept for the per-video table. The guard makes this the sanctioned
@@ -250,9 +271,16 @@ export function PipelinePanel({
   // transition — the Library refreshes on these ticks instead of polling.
   const phaseDoneFired = useRef<Set<PipelinePrefix>>(new Set());
   const allDoneFired = useRef(false);
+  const playwrightState = snapshots.playwright.state;
+  const elasticsearchState = snapshots.elasticsearch.state;
+  const qdrantState = snapshots.qdrant.state;
+  const neo4jState = snapshots.neo4j.state;
   useEffect(() => {
     const states: ReadonlyArray<readonly [PipelinePrefix, string]> = [
-      ...PREFIXES.map((prefix) => [prefix, snapshots[prefix].state] as const),
+      ["playwright", playwrightState],
+      ["elasticsearch", elasticsearchState],
+      ["qdrant", qdrantState],
+      ["neo4j", neo4jState],
     ];
     for (const [prefix, state] of states) {
       if (isTerminal(state) && !phaseDoneFired.current.has(prefix)) {
@@ -260,7 +288,7 @@ export function PipelinePanel({
         onPhaseDone();
       }
     }
-  }, [snapshots, onPhaseDone]);
+  }, [playwrightState, elasticsearchState, qdrantState, neo4jState, onPhaseDone]);
   useEffect(() => {
     if (!allTerminal || allDoneFired.current) return;
     allDoneFired.current = true;
@@ -356,8 +384,17 @@ export function PipelinePanel({
     key: prefix,
     title: BAR_TITLES[prefix],
     defaultHint: BAR_HINTS[prefix],
+    reads: BAR_READS[prefix],
+    writes: BAR_WRITES[prefix],
     view: stepView(prefix),
   }));
+  const completedStages = steps.filter((step) => step.view.state === "success").length;
+  const progress = Math.round(
+    steps.reduce((total, step) => {
+      if (step.view.state === "success") return total + 100;
+      return step.view.state === "running" ? total + step.view.pct : total;
+    }, 0) / steps.length,
+  );
   const overall = pipelineOverall(
     steps.map((step) => step.view.state),
     stopped,
@@ -371,7 +408,7 @@ export function PipelinePanel({
 
   async function handleStop(): Promise<void> {
     const ok = await confirm({
-      title: "Stop the pipeline?",
+      title: "Stop the Agentic RAG run?",
       message:
         "The currently-running phase gets SIGTERM; queued phases are cancelled. Completed phases keep their writes — use Start/Resume to run this batch again from the Source phase.",
       confirmLabel: "Stop",
@@ -384,7 +421,8 @@ export function PipelinePanel({
     if (running || replay.isPending) return;
     const ok = await confirm({
       title: `Replay from ${nodeId}?`,
-      message: "This clears the selected stage's saved output and downstream results, then reruns from this node. Completed upstream stages remain available.",
+      message:
+        "This clears the selected stage's saved output and downstream results, then reruns from this node. Completed upstream stages remain available.",
       confirmLabel: "Replay",
       tone: "primary",
     });
@@ -393,7 +431,7 @@ export function PipelinePanel({
 
   async function handleWipe(): Promise<void> {
     const ok = await confirm({
-      title: "Wipe cache for these videos?",
+      title: "Wipe Agentic RAG data for these videos?",
       message: `Deletes every cached artifact for the ${videoCount || ""} video${videoCount === 1 ? "" : "s"} in this pipeline — ES metadata + transcripts, Qdrant hybrid points, Neo4j Document and Video nodes. The next Start/Resume will run the full chain from scratch (no Phase 1 cache hits, no Phase 3 skip-on-video_id). Entity nodes are left intact. This cannot be undone.`,
       confirmLabel: "Wipe",
     });
@@ -403,7 +441,7 @@ export function PipelinePanel({
 
   const videoCount = tracking.videoIds.length || allItems.length;
   return (
-    <section aria-label="Agentic AI ingestion progress" className="flex min-w-0 flex-col gap-3">
+    <section aria-label="Agentic RAG progress" className="flex min-w-0 flex-col gap-3">
       {/* The one place a screen reader hears the run: it changes when a phase changes state, not at every poll. */}
       <p role="status" className="sr-only">
         {announcement}
@@ -411,13 +449,26 @@ export function PipelinePanel({
 
       <header className="flex flex-wrap items-center gap-2">
         <div className="flex min-w-0 items-baseline gap-1.5">
-          <h2 className="whitespace-nowrap text-base font-medium">Agentic AI</h2>
+          <h2 className="whitespace-nowrap text-base font-medium">Agentic RAG</h2>
           <span className="whitespace-nowrap font-mono text-xs text-muted-foreground">
             {videoCount ? `· ${videoCount} video${videoCount === 1 ? "" : "s"}` : ""}
           </span>
         </div>
         <StatusBadge tone={overall} label={STATUS_WORD_LABEL[overall]} />
+        <span aria-live="polite" className="whitespace-nowrap text-xs text-muted-foreground">
+          {completedStages} / {steps.length} stages
+        </span>
         <span className="whitespace-nowrap tabular font-mono text-xs text-muted-foreground">{elapsed}</span>
+        <ActionButton
+          type="button"
+          iconOnly
+          aria-haspopup="dialog"
+          aria-label="Open Agentic RAG details"
+          title="Agentic RAG details"
+          onClick={() => setDetailsOpen(true)}
+        >
+          <Info aria-hidden />
+        </ActionButton>
         <ActionButton
           type="button"
           aria-haspopup="dialog"
@@ -430,6 +481,18 @@ export function PipelinePanel({
       </header>
 
       {wipeLine ? <p className="text-xs text-muted-foreground">{wipeLine}</p> : null}
+
+      <div
+        role="progressbar"
+        aria-label="Agentic RAG progress"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={progress}
+        aria-valuetext={`${progress}% · ${completedStages} of ${steps.length} stages complete`}
+        className="h-1.5 w-full overflow-hidden rounded-sm bg-muted"
+      >
+        <div className="h-full bg-primary" style={{ width: `${progress}%` }} />
+      </div>
 
       <IngestionAgenticStructure
         steps={steps}
@@ -464,8 +527,11 @@ export function PipelinePanel({
           },
         }}
         onOpenUsage={() => setSheet("usage")}
+        usage={usageData}
+        usageLoading={countersQuery.isPending}
+        usageError={usageError}
         onPlayNode={allTerminal ? (nodeId) => void handleReplay(nodeId) : undefined}
-        ariaLabel="Pipeline progress"
+        ariaLabel="Agentic RAG pipeline"
       />
 
       {stop.isError ? (
@@ -480,7 +546,7 @@ export function PipelinePanel({
       ) : null}
       {rerun.isError ? (
         <p role="alert" className="text-sm text-destructive-text">
-          Start/Resume failed — {apiErrorMessage(rerun.error)}
+          Agentic RAG start/resume failed — {apiErrorMessage(rerun.error)}
         </p>
       ) : null}
       {replay.isError ? (
@@ -491,8 +557,58 @@ export function PipelinePanel({
 
       {sheet === "videos" ? <PipelineVideosSheet rows={videoRows} onClose={() => setSheet(null)} /> : null}
       {sheet === "usage" ? (
-        <PipelineUsageSheet usage={usage.success ? usage.data : null} onClose={() => setSheet(null)} />
+        <PipelineUsageSheet
+          usage={usageData}
+          loading={countersQuery.isPending}
+          error={usageError}
+          title="Agentic RAG LLM usage"
+          subtitle="Neo4j graph extraction across the selected videos."
+          onClose={() => setSheet(null)}
+        />
+      ) : null}
+      {detailsOpen ? (
+        <SideSheet
+          title="Agentic RAG details"
+          subtitle={STATUS_WORD_LABEL[overall]}
+          closeLabel="Close Agentic RAG details"
+          onClose={() => setDetailsOpen(false)}
+        >
+          <section
+            aria-label="Agentic RAG run status"
+            className="rounded-sm border border-border bg-card p-4"
+          >
+            <h3 className="text-sm font-medium">Run status</h3>
+            <div className="mt-3 flex flex-col gap-3">
+              <Metric label="Selected videos" value={videoCount.toLocaleString()} />
+              <Metric label="Completed stages" value={`${completedStages} / ${steps.length}`} />
+              <Metric
+                label="Active stage"
+                value={steps.find((step) => step.view.state === "running")?.title ?? "—"}
+              />
+              <Metric label="Elapsed" value={elapsed} />
+              <Metric
+                label="Neo4j LLM calls"
+                value={
+                  usageData?.total
+                    ? usageData.total.calls.toLocaleString()
+                    : countersQuery.isPending
+                      ? "Loading"
+                      : "0"
+                }
+              />
+            </div>
+          </section>
+        </SideSheet>
       ) : null}
     </section>
+  );
+}
+
+function Metric({ label, value }: { label: string; value: string }): JSX.Element {
+  return (
+    <div className="flex items-baseline justify-between gap-2 border-t border-border pt-3 text-xs">
+      <span className="text-muted-foreground">{label}</span>
+      <span className="tabular-nums text-foreground">{value}</span>
+    </div>
   );
 }

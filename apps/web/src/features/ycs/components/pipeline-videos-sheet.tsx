@@ -46,7 +46,7 @@ export function PipelineVideosSheet({
 
   return (
     <SideSheet
-      title="Videos in this pipeline"
+      title="Videos in this Agentic RAG run"
       closeLabel="Close the video list"
       onClose={onClose}
       subtitle={

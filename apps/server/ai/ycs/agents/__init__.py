@@ -1,5 +1,5 @@
 """YCS DeepAgents and their shared contracts."""
-from . import ask, ingestion, params, service
+from . import ask, ingestion, params, rag, service
 from .. import middlewares
 
-__all__ = ["ask", "ingestion", "middlewares", "params", "service"]
+__all__ = ["ask", "ingestion", "middlewares", "params", "rag", "service"]

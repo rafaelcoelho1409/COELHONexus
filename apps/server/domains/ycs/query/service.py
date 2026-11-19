@@ -1234,7 +1234,7 @@ async def _build_neo4j_schema() -> dict[str, Any]:
     zero structural grounding on day-zero or after a wipe.
 
     Declared floor (`domain.declared_neo4j_schema`) is sourced from
-    the actual writer code in `domains/ycs/ingestion/graph_builder/` so it
+    the actual writer code in `domains/ycs/rag/source/indexes/neo4j_index/` so it
     matches what the LLMGraphTransformer + the YCS-specific
     `build_video_metadata_graph` produce."""
     declared = domain.declared_neo4j_schema()
@@ -1316,30 +1316,34 @@ async def save_query_history_entry(
 
 
 async def list_query_history_entries(
-    pg_url: str, *, backend: str | None = None, limit: int = 50,
+    pg_url: str,
+    *,
+    app: str | None = None,
+    backend: str | None = None,
+    limit: int = 50,
 ) -> list[dict[str, Any]]:
-    """Return the latest `limit` entries, optionally filtered to one
-    backend. Body is included so the UI can show a snippet without an
-    extra round-trip."""
+    """Return recent entries, optionally filtered by app and backend."""
     await ensure_query_history_table(pg_url)
     with domains.ycs.ask.observability.service.postgres_span(
         operation = "select", table = keys.HISTORY_TABLE_NAME,
     ):
         async with await infra.postgres.service.connect(pg_url) as conn:
+            filters: list[str] = []
+            values: list[Any] = []
+            if app:
+                filters.append("app = %s")
+                values.append(app)
             if backend:
-                result = await conn.execute(
-                    f"SELECT id, backend, app, body, prompt, favorite, created_at "
-                    f"FROM {keys.HISTORY_TABLE_NAME} WHERE backend = %s "
-                    f"ORDER BY created_at DESC LIMIT %s",
-                    (backend, limit),
-                )
-            else:
-                result = await conn.execute(
-                    f"SELECT id, backend, app, body, prompt, favorite, created_at "
-                    f"FROM {keys.HISTORY_TABLE_NAME} "
-                    f"ORDER BY created_at DESC LIMIT %s",
-                    (limit,),
-                )
+                filters.append("backend = %s")
+                values.append(backend)
+            where = f" WHERE {' AND '.join(filters)}" if filters else ""
+            values.append(limit)
+            result = await conn.execute(
+                f"SELECT id, backend, app, body, prompt, favorite, created_at "
+                f"FROM {keys.HISTORY_TABLE_NAME}{where} "
+                f"ORDER BY created_at DESC LIMIT %s",
+                tuple(values),
+            )
             rows = await result.fetchall()
     return [
         {
@@ -1355,17 +1359,28 @@ async def list_query_history_entries(
     ]
 
 
-async def delete_query_history_entry(pg_url: str, entry_id: int) -> int:
-    """DELETE one row by id. Returns 1 if removed, 0 if not found."""
+async def delete_query_history_entry(
+    pg_url: str,
+    entry_id: int,
+    *,
+    app: str | None = None,
+) -> int:
+    """Delete one row by id, optionally scoping it to its owning app."""
     await ensure_query_history_table(pg_url)
     with domains.ycs.ask.observability.service.postgres_span(
         operation = "delete", table = keys.HISTORY_TABLE_NAME,
     ):
         async with await infra.postgres.service.connect(pg_url) as conn:
-            result = await conn.execute(
-                f"DELETE FROM {keys.HISTORY_TABLE_NAME} WHERE id = %s",
-                (entry_id,),
-            )
+            if app:
+                result = await conn.execute(
+                    f"DELETE FROM {keys.HISTORY_TABLE_NAME} WHERE id = %s AND app = %s",
+                    (entry_id, app),
+                )
+            else:
+                result = await conn.execute(
+                    f"DELETE FROM {keys.HISTORY_TABLE_NAME} WHERE id = %s",
+                    (entry_id,),
+                )
             await conn.commit()
     # psycopg cursor.rowcount carries the affected-row count.
     return int(getattr(result, "rowcount", 0) or 0)

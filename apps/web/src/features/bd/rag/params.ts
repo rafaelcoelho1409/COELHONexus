@@ -52,7 +52,7 @@ export const QUERY_SCAFFOLDS: Record<QueryBackend, string> = {
     '  "query": {',
     '    "multi_match": {',
     '      "query": "distributed systems",',
-    '      "fields": ["title^3", "chapter", "content", "summary"],',
+    '      "fields": ["content", "section_path.text"],',
     '      "type": "best_fields"',
     "    }",
     "  },",
@@ -62,7 +62,7 @@ export const QUERY_SCAFFOLDS: Record<QueryBackend, string> = {
   qdrant: JSON.stringify({ op: "scroll", limit: 10, with_payload: true }, null, 2),
   neo4j: [
     "// Browse the Book Distiller knowledge graph.",
-    "MATCH (a)-[r]->(b)",
+    "MATCH (a:BD)-[r]->(b:BD)",
     "RETURN a, r, b",
     "LIMIT 25",
   ].join("\n"),

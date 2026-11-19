@@ -163,7 +163,7 @@ async def ingest_pipeline(
         # 2026-09-15: dedupe to PARENT video ids before building the
         # Video/Channel metadata graph — `all_video_ids` carries one
         # entry PER PARTITION for a split video (correct for
-        # Document nodes, one per piece), but `domains.ycs.ingestion.graph_builder.service.build_video_metadata_graph`
+        # Document nodes, one per piece), but `domains.ycs.rag.source.indexes.neo4j_index.service.build_video_metadata_graph`
         # MERGEs on `video_id` verbatim, so passing partition ids
         # through unchanged created one duplicate `Video` node per
         # partition (`id: "xyz#p1"`, `"xyz#p2"`, …) instead of one
@@ -181,12 +181,12 @@ async def ingest_pipeline(
                 continue
             _seen_parents.add(parent)
             video_metadata.append({**metadata_map.get(vid, {}), "video_id": parent})
-        domains.ycs.ingestion.graph_builder.service.build_video_metadata_graph(neo4j_graph, video_metadata)
+        domains.ycs.rag.source.indexes.neo4j_index.service.build_video_metadata_graph(neo4j_graph, video_metadata)
         # Cumulative progress adapter: segment-local callback restarts at 0/1; this keeps the bar advancing.
         completed_global: set[str] = set()
         try:
             rows = neo4j_graph.query(
-                f"MATCH (d:Document:{domains.ycs.ingestion.graph_builder.params.SOURCE_LABEL}) "
+                f"MATCH (d:Document:{domains.ycs.rag.source.indexes.neo4j_index.params.SOURCE_LABEL}) "
                 "WHERE d.video_id IN $video_ids "
                 "RETURN collect(DISTINCT d.video_id) AS processed_ids",
                 params = {"video_ids": all_video_ids},
@@ -297,7 +297,7 @@ async def ingest_pipeline(
         for attempt in range(params.MAX_RETRY_PASSES + 1):
             # 2026-09-14: cooperative-cancel checkpoint — only
             # between passes (never mid-pass; a pass's own
-            # `domains.ycs.ingestion.graph_builder.service.extract_and_store_graph` call always runs to
+            # `domains.ycs.rag.source.indexes.neo4j_index.service.extract_and_store_graph` call always runs to
             # completion for whatever it's already dispatched).
             # Stop's replacement for `revoke(terminate=True)` — see
             # `pipeline_task.service.revoke_pipeline_phases`.
@@ -324,7 +324,7 @@ async def ingest_pipeline(
                 # Jittered backoff between passes (DD pattern,
                 # scaled for heavy calls): immediate retries hammer
                 # an already-exhausted free-tier pool.
-                _lo, _hi = domains.ycs.ingestion.graph_builder.params.RETRY_PASS_BACKOFF_S
+                _lo, _hi = domains.ycs.rag.source.indexes.neo4j_index.params.RETRY_PASS_BACKOFF_S
                 _sleep_s = _lo + random.uniform(0, _hi - _lo)
                 logger.info(
                     f"[ingest_to_neo4j] backing off {_sleep_s:.1f}s "
@@ -339,7 +339,7 @@ async def ingest_pipeline(
                 f"[ingest_to_neo4j] {pass_label}: "
                 f"{len(pending_transcripts)} transcript(s)",
             )
-            extraction_stats = await domains.ycs.ingestion.graph_builder.service.extract_and_store_graph(
+            extraction_stats = await domains.ycs.rag.source.indexes.neo4j_index.service.extract_and_store_graph(
                 transcripts  = pending_transcripts,
                 metadata_map = metadata_map,
                 llm          = llm,
@@ -385,19 +385,19 @@ async def ingest_pipeline(
                 _last_err = str(
                     extraction_stats.get("last_batch_error") or ""
                 )
-                if domains.ycs.ingestion.graph_builder.domain.is_infra_error(_last_err):
+                if domains.ycs.rag.source.indexes.neo4j_index.domain.is_infra_error(_last_err):
                     # 2026-09-17: a pass with too few pending videos
                     # can't tell "provider is down" apart from "this
                     # one item got unlucky twice" — see
-                    # domains.ycs.ingestion.graph_builder.params.MIN_PENDING_FOR_INFRA_HALT's comment. Below the
+                    # domains.ycs.rag.source.indexes.neo4j_index.params.MIN_PENDING_FOR_INFRA_HALT's comment. Below the
                     # threshold, retry normally without touching the
                     # streak counter at all.
-                    if len(pending_transcripts) < domains.ycs.ingestion.graph_builder.params.MIN_PENDING_FOR_INFRA_HALT:
+                    if len(pending_transcripts) < domains.ycs.rag.source.indexes.neo4j_index.params.MIN_PENDING_FOR_INFRA_HALT:
                         logger.warning(
                             f"[ingest_to_neo4j] {pass_label} produced 0 "
                             f"successes out of {len(pending_transcripts)} "
                             f"attempted (below the "
-                            f"{domains.ycs.ingestion.graph_builder.params.MIN_PENDING_FOR_INFRA_HALT}-video infra-"
+                            f"{domains.ycs.rag.source.indexes.neo4j_index.params.MIN_PENDING_FOR_INFRA_HALT}-video infra-"
                             f"halt threshold — retrying without "
                             f"counting toward the streak)"
                         )
@@ -409,7 +409,7 @@ async def ingest_pipeline(
                             continue
                     else:
                         consecutive_infra_passes += 1
-                        if consecutive_infra_passes >= domains.ycs.ingestion.graph_builder.params.MAX_CONSECUTIVE_INFRA_PASSES:
+                        if consecutive_infra_passes >= domains.ycs.rag.source.indexes.neo4j_index.params.MAX_CONSECUTIVE_INFRA_PASSES:
                             logger.error(
                                 f"[ingest_to_neo4j] {pass_label} produced 0 "
                                 f"successes out of {len(pending_transcripts)} "
@@ -425,7 +425,7 @@ async def ingest_pipeline(
                             f"[ingest_to_neo4j] {pass_label} produced 0 "
                             f"successes (infra streak "
                             f"{consecutive_infra_passes}/"
-                            f"{domains.ycs.ingestion.graph_builder.params.MAX_CONSECUTIVE_INFRA_PASSES}) — one more "
+                            f"{domains.ycs.rag.source.indexes.neo4j_index.params.MAX_CONSECUTIVE_INFRA_PASSES}) — one more "
                             f"pass after backoff"
                         )
                         if attempt < params.MAX_RETRY_PASSES:
@@ -542,7 +542,7 @@ async def ingest_pipeline(
                                 domains.ycs.ingestion.pipeline_task.keys.neo4j_resolving_key(extract_id), "1", ex = 300,
                             )
                             try:
-                                agg_merged = await domains.ycs.ingestion.graph_builder.service.resolve_entities(neo4j_graph)
+                                agg_merged = await domains.ycs.rag.source.indexes.neo4j_index.service.resolve_entities(neo4j_graph)
                                 # entities_merged is a WHOLE-RUN number,
                                 # only known now — patched onto the
                                 # DISPLAYED status entry: parent_vid, not
@@ -568,7 +568,7 @@ async def ingest_pipeline(
                 "rels":  agg_rels,
             })
             logger.info("[ingest_to_neo4j] entity resolution starting")
-            agg_merged = await domains.ycs.ingestion.graph_builder.service.resolve_entities(neo4j_graph)
+            agg_merged = await domains.ycs.rag.source.indexes.neo4j_index.service.resolve_entities(neo4j_graph)
             logger.info(
                 f"[ingest_to_neo4j] entity resolution: "
                 f"{agg_merged} nodes merged"

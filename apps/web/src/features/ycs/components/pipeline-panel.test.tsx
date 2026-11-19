@@ -140,14 +140,14 @@ describe("PipelinePanel", () => {
     expect(screen.getByText("· 2 videos")).toBeInTheDocument();
 
     // Each phase says where it stands in an icon and a word, and draws a named progress bar with a value.
-    const steps = screen.getByRole("list", { name: "Pipeline phases" });
+    const steps = screen.getByRole("list", { name: "Agentic RAG stages" });
     expect(within(steps).getAllByRole("progressbar")).toHaveLength(4);
     const playwright = within(steps).getByRole("progressbar", { name: "Phase 1 · Playwright" });
     expect(playwright).toHaveAttribute("aria-valuenow");
 
     // The per-video table is in a side sheet, failed videos first.
     await userEvent.click(screen.getByRole("button", { name: "Videos (2)" }));
-    const sheet = await screen.findByRole("dialog", { name: "Videos in this pipeline" });
+    const sheet = await screen.findByRole("dialog", { name: "Videos in this Agentic RAG run" });
     const table = within(sheet).getByRole("region", { name: "Per-video pipeline progress" });
     const row1 = within(table).getByRole("row", { name: /One/ });
     expect(within(row1).getAllByText("Done").length).toBeGreaterThan(0); // qdrant done
@@ -164,7 +164,7 @@ describe("PipelinePanel", () => {
     expect(live).toHaveTextContent("Pipeline running.");
     expect(live).toHaveTextContent("Phase 1 · Playwright: running");
     expect(live).not.toHaveTextContent("3/10"); // counts change at every poll; they are not announced
-    expect(screen.getByRole("region", { name: "Pipeline progress" })).not.toHaveAttribute("aria-live");
+    expect(screen.getByRole("region", { name: "Agentic RAG pipeline" })).not.toHaveAttribute("aria-live");
   });
 
   it("opens the LLM usage in a sheet, with the models the run called", async () => {
@@ -189,7 +189,7 @@ describe("PipelinePanel", () => {
     );
     renderWith(<PipelinePanel tracking={TRACKING} onPhaseDone={vi.fn()} onAllDone={vi.fn()} />);
     await userEvent.click(await screen.findByRole("button", { name: "LLM usage" }));
-    const sheet = await screen.findByRole("dialog", { name: "Pipeline LLM usage" });
+    const sheet = await screen.findByRole("dialog", { name: "Agentic RAG LLM usage" });
     expect(await within(sheet).findByText("1,200")).toBeInTheDocument();
     const models = within(sheet).getByRole("region", { name: "Usage by model" });
     expect(
@@ -287,7 +287,7 @@ describe("PipelinePanel", () => {
     taskState.meta = { phase: "transcription", current: 3, total: 10 };
     renderWith(<PipelinePanel tracking={TRACKING} onPhaseDone={vi.fn()} onAllDone={vi.fn()} />);
 
-    const header = screen.getByRole("heading", { name: "Agentic AI" }).parentElement?.parentElement;
+    const header = screen.getByRole("heading", { name: "Agentic RAG" }).parentElement?.parentElement;
     expect(header).toContainElement(await screen.findByRole("button", { name: "Videos (2)" }));
     expect(screen.queryByRole("button", { name: "Dismiss" })).not.toBeInTheDocument();
   });

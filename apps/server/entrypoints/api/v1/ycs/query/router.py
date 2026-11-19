@@ -166,6 +166,7 @@ async def post_ai_generate(
 async def list_history(
     request: Request,
     backend: str | None = None,
+    app: str | None = None,
     limit:   int = 50,
 ) -> dict:
     """Return the latest history entries, newest-first. `backend` is an
@@ -177,7 +178,12 @@ async def list_history(
             status_code = 503,
             detail = "Postgres not initialized (YCS lifespan failed).",
         )
-    items = await domains.ycs.query.service.list_query_history_entries(pg_url, backend = backend, limit = max(1, min(limit, 200)))
+    items = await domains.ycs.query.service.list_query_history_entries(
+        pg_url,
+        app = app,
+        backend = backend,
+        limit = max(1, min(limit, 200)),
+    )
     return {"items": items, "total": len(items)}
 
 

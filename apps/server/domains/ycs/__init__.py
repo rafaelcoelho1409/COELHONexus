@@ -2,7 +2,8 @@
 
 * ``source`` owns YouTube discovery and source metadata search.
 * ``ingestion`` owns extraction, transcription, indexing, storage, and task coordination.
-* ``ask`` owns RAG, retrieval, grading, reranking, and conversation state.
+* ``rag`` owns transcript-grounded knowledge-graph extraction and retrieval indexes.
+* ``ask`` owns retrieval, grading, reranking, and conversation state.
   Its observability helpers are shared with ingestion and query.
 * ``query`` owns the direct Elasticsearch, Qdrant, and Neo4j workbench.
 
@@ -16,10 +17,10 @@ import importlib
 
 
 if TYPE_CHECKING:
-    from . import ask, ingestion, query, source
+    from . import ask, ingestion, query, rag, source
 
 
-__all__ = ["source", "ingestion", "ask", "query"]
+__all__ = ["source", "ingestion", "rag", "ask", "query"]
 
 
 def __getattr__(name: str):

@@ -12,14 +12,36 @@ import { SideSheet } from "./side-sheet";
 export function PipelineUsageSheet({
   usage,
   onClose,
-  title = "Pipeline LLM usage",
-  subtitle = "Phase 4, the entity extraction.",
+  loading = false,
+  error = null,
+  title = "Agentic RAG LLM usage",
+  subtitle = "Neo4j graph extraction across the selected videos.",
   emptyMessage = "Usage is loading or unavailable.",
 }: {
   usage: AskUsage | null;
   onClose: () => void;
+  loading?: boolean;
+  error?: string | null;
   title?: string;
   subtitle?: string;
+  emptyMessage?: string;
+}): JSX.Element {
+  return (
+    <SideSheet title={title} closeLabel="Close usage" onClose={onClose} subtitle={subtitle}>
+      <PipelineUsageBreakdown usage={usage} loading={loading} error={error} emptyMessage={emptyMessage} />
+    </SideSheet>
+  );
+}
+
+export function PipelineUsageBreakdown({
+  usage,
+  loading = false,
+  error = null,
+  emptyMessage = "Usage is loading or unavailable.",
+}: {
+  usage: AskUsage | null;
+  loading?: boolean;
+  error?: string | null;
   emptyMessage?: string;
 }): JSX.Element {
   const total = usage?.total ?? null;
@@ -36,8 +58,12 @@ export function PipelineUsageSheet({
     : [];
 
   return (
-    <SideSheet title={title} closeLabel="Close usage" onClose={onClose} subtitle={subtitle}>
-      {total && total.calls > 0 ? (
+    <>
+      {error ? (
+        <p role="alert" className="text-sm text-destructive-text">
+          {error}
+        </p>
+      ) : total && total.calls > 0 ? (
         <div className="flex flex-col gap-4">
           <dl className="grid grid-cols-2 gap-2 sm:grid-cols-4">
             {figures.map((figure) => (
@@ -96,8 +122,10 @@ export function PipelineUsageSheet({
           ) : null}
         </div>
       ) : (
-        <p className="text-sm text-muted-foreground">{usage ? "No LLM usage recorded yet." : emptyMessage}</p>
+        <p role={loading ? "status" : undefined} className="text-sm text-muted-foreground">
+          {loading ? "Loading usage…" : usage ? "No LLM usage recorded yet." : emptyMessage}
+        </p>
       )}
-    </SideSheet>
+    </>
   );
 }

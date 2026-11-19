@@ -209,7 +209,7 @@ async def wipe_videos_data(
         # 3. Neo4j — Document + Video nodes (entities left intact;
         #    may be referenced by other videos' graphs)
         if neo4j_graph is not None:
-            summary["neo4j"] = domains.ycs.ingestion.graph_builder.service.delete_documents_for_videos(
+            summary["neo4j"] = domains.ycs.rag.source.indexes.neo4j_index.service.delete_documents_for_videos(
                 neo4j_graph, video_ids,
             )
         else:
@@ -251,7 +251,7 @@ async def wipe_video_stage_outputs(
     if node_id == "neo4j":
         if neo4j_graph is None:
             raise ValueError("Neo4j is unavailable; the selected stage cannot be safely replayed")
-        removed = domains.ycs.ingestion.graph_builder.service.delete_documents_for_videos(
+        removed = domains.ycs.rag.source.indexes.neo4j_index.service.delete_documents_for_videos(
             neo4j_graph, video_ids,
         )
         return {"neo4j": removed}

@@ -53,6 +53,24 @@ export type ActiveRuns = {
 };
 
 /**
+ * AgenticNodePageProgress
+ */
+export type AgenticNodePageProgress = {
+    /**
+     * Completed Count
+     */
+    completed_count?: number;
+    /**
+     * Total Count
+     */
+    total_count?: number;
+    /**
+     * Active Count
+     */
+    active_count?: number;
+};
+
+/**
  * AgenticProgress
  */
 export type AgenticProgress = {
@@ -110,6 +128,12 @@ export type AgenticProgress = {
      * Visual Failed Count
      */
     visual_failed_count?: number;
+    /**
+     * Node Page Progress
+     */
+    node_page_progress?: {
+        [key: string]: AgenticNodePageProgress;
+    };
     /**
      * Selected Page Count
      */
@@ -1354,6 +1378,28 @@ export type NamespaceMap = {
 };
 
 /**
+ * NamespaceResponse
+ */
+export type NamespaceResponse = {
+    /**
+     * Apps
+     */
+    apps?: Array<string>;
+    /**
+     * Backends
+     */
+    backends?: Array<string>;
+    /**
+     * Matrix
+     */
+    matrix?: {
+        [key: string]: {
+            [key: string]: NamespaceEntry;
+        };
+    };
+};
+
+/**
  * OutlineEntry
  */
 export type OutlineEntry = {
@@ -1773,6 +1819,72 @@ export type Progress = {
 };
 
 /**
+ * QueryAIRequest
+ */
+export type QueryAiRequest = {
+    /**
+     * App
+     */
+    app?: 'bd';
+    /**
+     * Prompt
+     */
+    prompt: string;
+    /**
+     * Previous
+     */
+    previous?: string;
+};
+
+/**
+ * QueryHistoryEntry
+ */
+export type QueryHistoryEntry = {
+    /**
+     * Id
+     */
+    id: number;
+    /**
+     * Backend
+     */
+    backend: 'elasticsearch' | 'qdrant' | 'neo4j';
+    /**
+     * App
+     */
+    app: string;
+    /**
+     * Body
+     */
+    body: string;
+    /**
+     * Prompt
+     */
+    prompt?: string;
+    /**
+     * Favorite
+     */
+    favorite?: boolean;
+    /**
+     * Created At
+     */
+    created_at?: string;
+};
+
+/**
+ * QueryHistoryResponse
+ */
+export type QueryHistoryResponse = {
+    /**
+     * Items
+     */
+    items?: Array<QueryHistoryEntry>;
+    /**
+     * Total
+     */
+    total?: number;
+};
+
+/**
  * QueryHit
  *
  * Uniform projection across all three backends so the frontend's
@@ -1903,6 +2015,30 @@ export type QueryResponse = {
 };
 
 /**
+ * QuerySchemaResponse
+ */
+export type QuerySchemaResponse = {
+    /**
+     * Backend
+     */
+    backend: 'elasticsearch' | 'qdrant' | 'neo4j';
+    /**
+     * App
+     */
+    app?: 'bd';
+    /**
+     * Cached At
+     */
+    cached_at?: number;
+    /**
+     * Schema
+     */
+    schema?: {
+        [key: string]: unknown;
+    };
+};
+
+/**
  * RAGSearchRequest
  *
  * Adaptive RAG question. `force_mode` overrides auto-classification (fast/standard/deep).
@@ -1932,98 +2068,6 @@ export type RagSearchRequest = {
      * Sub Questions
      */
     sub_questions?: Array<string> | null;
-};
-
-/**
- * RawQueryHit
- *
- * Renderer-friendly projection of one row, generic across backends.
- *
- * Each backend's `service.raw_*` writes the FULL store-side record
- * here under `raw`; `summary` is a short label so the right-pane
- * renderers don't have to know each backend's payload shape just
- * to print a fallback title.
- */
-export type RawQueryHit = {
-    /**
-     * Summary
-     */
-    summary?: string;
-    /**
-     * Raw
-     */
-    raw?: {
-        [key: string]: unknown;
-    };
-};
-
-/**
- * RawQueryRequest
- *
- * Raw DSL/Cypher/JSON typed by the user in the CodeMirror editor.
- *
- * `app` is currently pinned to `"ycs"` by the frontend but threads
- * through the same matrix so re-enabling the cross-app pivot is one
- * JS line + a router-side payload.
- *
- * The `body` is the editor's text content verbatim:
- * - Elasticsearch → JSON request-body for `_search`
- * - Qdrant        → JSON `{"op": ..., ...}` (see domain.parse_qdrant_body)
- * - Neo4j         → Cypher source
- */
-export type RawQueryRequest = {
-    /**
-     * App
-     */
-    app?: 'dd' | 'ycs';
-    /**
-     * Body
-     *
-     * Editor content.
-     */
-    body?: string;
-};
-
-/**
- * RawQueryResponse
- *
- * `ok=False` short-circuits the UI to the error band; `notes` is a
- * list of user-visible advisories (e.g. "default size=20 synthesized
- * because the request body omitted it").
- */
-export type RawQueryResponse = {
-    /**
-     * Backend
-     */
-    backend: 'elasticsearch' | 'qdrant' | 'neo4j';
-    /**
-     * App
-     */
-    app: 'dd' | 'ycs';
-    /**
-     * Ok
-     */
-    ok: boolean;
-    /**
-     * Error
-     */
-    error?: string | null;
-    /**
-     * Notes
-     */
-    notes?: Array<string>;
-    /**
-     * Took Ms
-     */
-    took_ms?: number;
-    /**
-     * Total
-     */
-    total?: number | null;
-    /**
-     * Hits
-     */
-    hits?: Array<RawQueryHit>;
 };
 
 /**
@@ -2343,6 +2387,10 @@ export type RetrievalIndexStatus = {
      */
     status: 'queued' | 'running' | 'done' | 'failed' | 'cancelled';
     /**
+     * Cancel Requested
+     */
+    cancel_requested?: boolean;
+    /**
      * Current Node
      */
     current_node: string | null;
@@ -2365,6 +2413,22 @@ export type RetrievalIndexStatus = {
      */
     elasticsearch_document_count?: number;
     /**
+     * Elasticsearch Passage Index
+     */
+    elasticsearch_passage_index?: string | null;
+    /**
+     * Elasticsearch Passage Count
+     */
+    elasticsearch_passage_count?: number;
+    /**
+     * Pin Sources Pages Completed
+     */
+    pin_sources_pages_completed?: number;
+    /**
+     * Elasticsearch Pages Completed
+     */
+    elasticsearch_pages_completed?: number;
+    /**
      * Qdrant Collection
      */
     qdrant_collection?: string | null;
@@ -2381,6 +2445,10 @@ export type RetrievalIndexStatus = {
      */
     qdrant_point_count?: number;
     /**
+     * Qdrant Pages Completed
+     */
+    qdrant_pages_completed?: number;
+    /**
      * Neo4J Node Count
      */
     neo4j_node_count?: number;
@@ -2396,6 +2464,38 @@ export type RetrievalIndexStatus = {
      * Graph Batches Total
      */
     graph_batches_total?: number;
+    /**
+     * Neo4J Pages Completed
+     */
+    neo4j_pages_completed?: number;
+    /**
+     * Neo4J Stage
+     */
+    neo4j_stage?: 'idle' | 'extracting' | 'building_graph' | 'clearing_graph' | 'preparing_writes' | 'writing_nodes' | 'writing_relationships' | 'complete';
+    /**
+     * Neo4J Stage Completed
+     */
+    neo4j_stage_completed?: number;
+    /**
+     * Neo4J Stage Total
+     */
+    neo4j_stage_total?: number;
+    /**
+     * Neo4J Node Write Batches Completed
+     */
+    neo4j_node_write_batches_completed?: number;
+    /**
+     * Neo4J Node Write Batches Total
+     */
+    neo4j_node_write_batches_total?: number;
+    /**
+     * Neo4J Relationship Write Batches Completed
+     */
+    neo4j_relationship_write_batches_completed?: number;
+    /**
+     * Neo4J Relationship Write Batches Total
+     */
+    neo4j_relationship_write_batches_total?: number;
     /**
      * Created At
      */
@@ -2460,6 +2560,28 @@ export type RunStart = {
      * Run Id
      */
     run_id: string;
+};
+
+/**
+ * SaveQueryHistoryRequest
+ */
+export type SaveQueryHistoryRequest = {
+    /**
+     * Backend
+     */
+    backend: 'elasticsearch' | 'qdrant' | 'neo4j';
+    /**
+     * App
+     */
+    app?: 'bd';
+    /**
+     * Body
+     */
+    body: string;
+    /**
+     * Prompt
+     */
+    prompt?: string;
 };
 
 /**
@@ -3117,6 +3239,98 @@ export type WipeResponse = {
 };
 
 /**
+ * RawQueryHit
+ *
+ * Renderer-friendly projection of one row, generic across backends.
+ *
+ * Each backend's `service.raw_*` writes the FULL store-side record
+ * here under `raw`; `summary` is a short label so the right-pane
+ * renderers don't have to know each backend's payload shape just
+ * to print a fallback title.
+ */
+export type DomainsYcsQuerySchemasRawQueryHit = {
+    /**
+     * Summary
+     */
+    summary?: string;
+    /**
+     * Raw
+     */
+    raw?: {
+        [key: string]: unknown;
+    };
+};
+
+/**
+ * RawQueryRequest
+ *
+ * Raw DSL/Cypher/JSON typed by the user in the CodeMirror editor.
+ *
+ * `app` is currently pinned to `"ycs"` by the frontend but threads
+ * through the same matrix so re-enabling the cross-app pivot is one
+ * JS line + a router-side payload.
+ *
+ * The `body` is the editor's text content verbatim:
+ * - Elasticsearch → JSON request-body for `_search`
+ * - Qdrant        → JSON `{"op": ..., ...}` (see domain.parse_qdrant_body)
+ * - Neo4j         → Cypher source
+ */
+export type DomainsYcsQuerySchemasRawQueryRequest = {
+    /**
+     * App
+     */
+    app?: 'dd' | 'ycs';
+    /**
+     * Body
+     *
+     * Editor content.
+     */
+    body?: string;
+};
+
+/**
+ * RawQueryResponse
+ *
+ * `ok=False` short-circuits the UI to the error band; `notes` is a
+ * list of user-visible advisories (e.g. "default size=20 synthesized
+ * because the request body omitted it").
+ */
+export type DomainsYcsQuerySchemasRawQueryResponse = {
+    /**
+     * Backend
+     */
+    backend: 'elasticsearch' | 'qdrant' | 'neo4j';
+    /**
+     * App
+     */
+    app: 'dd' | 'ycs';
+    /**
+     * Ok
+     */
+    ok: boolean;
+    /**
+     * Error
+     */
+    error?: string | null;
+    /**
+     * Notes
+     */
+    notes?: Array<string>;
+    /**
+     * Took Ms
+     */
+    took_ms?: number;
+    /**
+     * Total
+     */
+    total?: number | null;
+    /**
+     * Hits
+     */
+    hits?: Array<DomainsYcsQuerySchemasRawQueryHit>;
+};
+
+/**
  * CancelResponse
  */
 export type EntrypointsApiV1BdDistillSchemasCancelResponse = {
@@ -3146,6 +3360,74 @@ export type EntrypointsApiV1BdIngestionSchemasCancelResponse = {
      * Status
      */
     status: string;
+};
+
+/**
+ * RawQueryHit
+ */
+export type EntrypointsApiV1BdQuerySchemasRawQueryHit = {
+    /**
+     * Summary
+     */
+    summary?: string;
+    /**
+     * Raw
+     */
+    raw?: {
+        [key: string]: unknown;
+    };
+};
+
+/**
+ * RawQueryRequest
+ */
+export type EntrypointsApiV1BdQuerySchemasRawQueryRequest = {
+    /**
+     * App
+     */
+    app?: 'bd';
+    /**
+     * Body
+     */
+    body?: string;
+};
+
+/**
+ * RawQueryResponse
+ */
+export type EntrypointsApiV1BdQuerySchemasRawQueryResponse = {
+    /**
+     * Backend
+     */
+    backend: 'elasticsearch' | 'qdrant' | 'neo4j';
+    /**
+     * App
+     */
+    app?: 'bd';
+    /**
+     * Ok
+     */
+    ok: boolean;
+    /**
+     * Error
+     */
+    error?: string | null;
+    /**
+     * Notes
+     */
+    notes?: Array<string>;
+    /**
+     * Took Ms
+     */
+    took_ms?: number;
+    /**
+     * Total
+     */
+    total?: number | null;
+    /**
+     * Hits
+     */
+    hits?: Array<EntrypointsApiV1BdQuerySchemasRawQueryHit>;
 };
 
 export type GetHealthData = {
@@ -4862,6 +5144,207 @@ export type PostBdIngestionBookIdRunResponses = {
 };
 
 export type PostBdIngestionBookIdRunResponse = PostBdIngestionBookIdRunResponses[keyof PostBdIngestionBookIdRunResponses];
+
+export type PostBdQueryAiBackendData = {
+    body: QueryAiRequest;
+    path: {
+        /**
+         * Backend
+         */
+        backend: 'elasticsearch' | 'qdrant' | 'neo4j';
+    };
+    query?: never;
+    url: '/api/v1/bd/query/ai/{backend}';
+};
+
+export type PostBdQueryAiBackendErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type PostBdQueryAiBackendError = PostBdQueryAiBackendErrors[keyof PostBdQueryAiBackendErrors];
+
+export type PostBdQueryAiBackendResponses = {
+    /**
+     * Successful Response
+     */
+    200: unknown;
+};
+
+export type GetBdQueryHistoryData = {
+    body?: never;
+    path?: never;
+    query?: {
+        /**
+         * Backend
+         */
+        backend?: 'elasticsearch' | 'qdrant' | 'neo4j' | null;
+        /**
+         * Limit
+         */
+        limit?: number;
+    };
+    url: '/api/v1/bd/query/history';
+};
+
+export type GetBdQueryHistoryErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type GetBdQueryHistoryError = GetBdQueryHistoryErrors[keyof GetBdQueryHistoryErrors];
+
+export type GetBdQueryHistoryResponses = {
+    /**
+     * Successful Response
+     */
+    200: QueryHistoryResponse;
+};
+
+export type GetBdQueryHistoryResponse = GetBdQueryHistoryResponses[keyof GetBdQueryHistoryResponses];
+
+export type PostBdQueryHistoryData = {
+    body: SaveQueryHistoryRequest;
+    path?: never;
+    query?: never;
+    url: '/api/v1/bd/query/history';
+};
+
+export type PostBdQueryHistoryErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type PostBdQueryHistoryError = PostBdQueryHistoryErrors[keyof PostBdQueryHistoryErrors];
+
+export type PostBdQueryHistoryResponses = {
+    /**
+     * Response Post Bd Query History
+     *
+     * Successful Response
+     */
+    200: {
+        [key: string]: unknown;
+    };
+};
+
+export type PostBdQueryHistoryResponse = PostBdQueryHistoryResponses[keyof PostBdQueryHistoryResponses];
+
+export type DeleteBdQueryHistoryEntryIdData = {
+    body?: never;
+    path: {
+        /**
+         * Entry Id
+         */
+        entry_id: number;
+    };
+    query?: never;
+    url: '/api/v1/bd/query/history/{entry_id}';
+};
+
+export type DeleteBdQueryHistoryEntryIdErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type DeleteBdQueryHistoryEntryIdError = DeleteBdQueryHistoryEntryIdErrors[keyof DeleteBdQueryHistoryEntryIdErrors];
+
+export type DeleteBdQueryHistoryEntryIdResponses = {
+    /**
+     * Response Delete Bd Query History Entry Id
+     *
+     * Successful Response
+     */
+    200: {
+        [key: string]: unknown;
+    };
+};
+
+export type DeleteBdQueryHistoryEntryIdResponse = DeleteBdQueryHistoryEntryIdResponses[keyof DeleteBdQueryHistoryEntryIdResponses];
+
+export type GetBdQueryNamespacesData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v1/bd/query/namespaces';
+};
+
+export type GetBdQueryNamespacesResponses = {
+    /**
+     * Successful Response
+     */
+    200: NamespaceResponse;
+};
+
+export type GetBdQueryNamespacesResponse = GetBdQueryNamespacesResponses[keyof GetBdQueryNamespacesResponses];
+
+export type PostBdQueryRawBackendData = {
+    body: EntrypointsApiV1BdQuerySchemasRawQueryRequest;
+    path: {
+        /**
+         * Backend
+         */
+        backend: 'elasticsearch' | 'qdrant' | 'neo4j';
+    };
+    query?: never;
+    url: '/api/v1/bd/query/raw/{backend}';
+};
+
+export type PostBdQueryRawBackendErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type PostBdQueryRawBackendError = PostBdQueryRawBackendErrors[keyof PostBdQueryRawBackendErrors];
+
+export type PostBdQueryRawBackendResponses = {
+    /**
+     * Successful Response
+     */
+    200: EntrypointsApiV1BdQuerySchemasRawQueryResponse;
+};
+
+export type PostBdQueryRawBackendResponse = PostBdQueryRawBackendResponses[keyof PostBdQueryRawBackendResponses];
+
+export type GetBdQuerySchemaBackendData = {
+    body?: never;
+    path: {
+        /**
+         * Backend
+         */
+        backend: 'elasticsearch' | 'qdrant' | 'neo4j';
+    };
+    query?: never;
+    url: '/api/v1/bd/query/schema/{backend}';
+};
+
+export type GetBdQuerySchemaBackendErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type GetBdQuerySchemaBackendError = GetBdQuerySchemaBackendErrors[keyof GetBdQuerySchemaBackendErrors];
+
+export type GetBdQuerySchemaBackendResponses = {
+    /**
+     * Successful Response
+     */
+    200: QuerySchemaResponse;
+};
+
+export type GetBdQuerySchemaBackendResponse = GetBdQuerySchemaBackendResponses[keyof GetBdQuerySchemaBackendResponses];
 
 export type GetDdCatalogData = {
     body?: never;
@@ -8228,6 +8711,10 @@ export type GetYcsQueryHistoryData = {
          */
         backend?: string | null;
         /**
+         * App
+         */
+        app?: string | null;
+        /**
          * Limit
          */
         limit?: number;
@@ -8378,7 +8865,7 @@ export type PostYcsQueryQdrantResponses = {
 export type PostYcsQueryQdrantResponse = PostYcsQueryQdrantResponses[keyof PostYcsQueryQdrantResponses];
 
 export type PostYcsQueryRawElasticsearchData = {
-    body: RawQueryRequest;
+    body: DomainsYcsQuerySchemasRawQueryRequest;
     path?: never;
     query?: never;
     url: '/api/v1/ycs/query/raw/elasticsearch';
@@ -8397,13 +8884,13 @@ export type PostYcsQueryRawElasticsearchResponses = {
     /**
      * Successful Response
      */
-    200: RawQueryResponse;
+    200: DomainsYcsQuerySchemasRawQueryResponse;
 };
 
 export type PostYcsQueryRawElasticsearchResponse = PostYcsQueryRawElasticsearchResponses[keyof PostYcsQueryRawElasticsearchResponses];
 
 export type PostYcsQueryRawNeo4jData = {
-    body: RawQueryRequest;
+    body: DomainsYcsQuerySchemasRawQueryRequest;
     path?: never;
     query?: never;
     url: '/api/v1/ycs/query/raw/neo4j';
@@ -8422,13 +8909,13 @@ export type PostYcsQueryRawNeo4jResponses = {
     /**
      * Successful Response
      */
-    200: RawQueryResponse;
+    200: DomainsYcsQuerySchemasRawQueryResponse;
 };
 
 export type PostYcsQueryRawNeo4jResponse = PostYcsQueryRawNeo4jResponses[keyof PostYcsQueryRawNeo4jResponses];
 
 export type PostYcsQueryRawQdrantData = {
-    body: RawQueryRequest;
+    body: DomainsYcsQuerySchemasRawQueryRequest;
     path?: never;
     query?: never;
     url: '/api/v1/ycs/query/raw/qdrant';
@@ -8447,7 +8934,7 @@ export type PostYcsQueryRawQdrantResponses = {
     /**
      * Successful Response
      */
-    200: RawQueryResponse;
+    200: DomainsYcsQuerySchemasRawQueryResponse;
 };
 
 export type PostYcsQueryRawQdrantResponse = PostYcsQueryRawQdrantResponses[keyof PostYcsQueryRawQdrantResponses];

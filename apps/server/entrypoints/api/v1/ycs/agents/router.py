@@ -1466,7 +1466,7 @@ async def ingest_to_neo4j(payload: schemas.GraphIngestRequest) -> dict:
 async def graph_stats(request: Request) -> dict:
     """Get Neo4j node/relationship counts."""
     try:
-        stats = await domains.ycs.ingestion.graph_builder.service.get_graph_stats(request.app.state.neo4j_graph)
+        stats = await domains.ycs.rag.source.indexes.neo4j_index.service.get_graph_stats(request.app.state.neo4j_graph)
         return stats
     except Exception as e:
         raise HTTPException(

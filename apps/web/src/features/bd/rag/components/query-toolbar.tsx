@@ -16,19 +16,21 @@ export function BackendTabs({
   onChange: (backend: QueryBackend) => void;
 }): JSX.Element {
   return (
-    <nav aria-label="Query backend" className="flex flex-wrap gap-1">
+    <div aria-label="Query backend" role="tablist" className="flex flex-wrap items-center gap-1">
       {QUERY_BACKENDS.map((entry) => (
         <Button
           key={entry.id}
           type="button"
-          aria-pressed={entry.id === backend}
+          role="tab"
+          aria-selected={entry.id === backend}
           onClick={() => onChange(entry.id)}
+          variant={entry.id === backend ? "secondary" : "ghost"}
           className="px-3"
         >
           {entry.label}
         </Button>
       ))}
-    </nav>
+    </div>
   );
 }
 

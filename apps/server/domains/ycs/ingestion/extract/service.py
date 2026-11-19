@@ -347,7 +347,7 @@ async def dispatch_streaming_totals(
             # guards against, just missed here on the first pass.
             try:
                 neo4j_graph = infra.neo4j.service.new_graph(refresh_schema = True)
-                merged = await domains.ycs.ingestion.graph_builder.service.resolve_entities(neo4j_graph)
+                merged = await domains.ycs.rag.source.indexes.neo4j_index.service.resolve_entities(neo4j_graph)
                 logger.info(
                     f"[extract_videos] {extract_id}: totals-correction "
                     f"completed the Neo4j phase — resolution merged "
@@ -469,7 +469,7 @@ async def extract_videos_async(
             # run, per-video dispatch left exactly 1 slot for ALL
             # downstream work — 21 videos ran through Neo4j strictly
             # one at a time, throwing away `extract_and_store_graph`'s
-            # own internal `domains.ycs.ingestion.graph_builder.params.EXTRACT_CONCURRENCY`-wide (5) asyncio pool
+            # own internal `domains.ycs.rag.source.indexes.neo4j_index.params.EXTRACT_CONCURRENCY`-wide (5) asyncio pool
             # entirely (a pool of width 5 processing 1 document at a
             # time buys nothing). That's a real regression from the
             # PRE-streaming design, where one `ingest_to_neo4j` call
@@ -482,7 +482,7 @@ async def extract_videos_async(
             # `batch_size=len(chunk)` so the internal pool width exactly
             # matches the chunk — full concurrency restored, while still
             # starting well before the whole 25-video batch finishes
-            # Phase 1 (chunks flush every `domains.ycs.ingestion.graph_builder.params.EXTRACT_CONCURRENCY` videos,
+            # Phase 1 (chunks flush every `domains.ycs.rag.source.indexes.neo4j_index.params.EXTRACT_CONCURRENCY` videos,
             # not after all 25). `ingest_to_neo4j` already natively
             # accepts and pools a list — this reverts ONLY the call
             # site back to batching, not the task's own logic.
@@ -531,7 +531,7 @@ async def extract_videos_async(
                 # every downstream piece of Redis bookkeeping shares.
                 dispatched_ids.append(vid)
                 neo4j_chunk.append(vid)
-                if len(neo4j_chunk) >= domains.ycs.ingestion.graph_builder.params.EXTRACT_CONCURRENCY:
+                if len(neo4j_chunk) >= domains.ycs.rag.source.indexes.neo4j_index.params.EXTRACT_CONCURRENCY:
                     _flush_neo4j_chunk()
                 qdrant_task = domains.ycs.ingestion.qdrant_task.task.stream_video_to_qdrant.si(
                     vid, extract_id,
@@ -673,7 +673,7 @@ async def extract_videos_async(
                 es_transcriptions["cached"]       = trans_stats.get("cached", 0)
                 es_transcriptions["fetch_failed"] = trans_stats.get("fetched_failed", 0)
                 es_transcriptions["no_transcript"] = trans_stats.get("no_transcript", 0)
-                # Flush whatever's left below the domains.ycs.ingestion.graph_builder.params.EXTRACT_CONCURRENCY
+                # Flush whatever's left below the domains.ycs.rag.source.indexes.neo4j_index.params.EXTRACT_CONCURRENCY
                 # threshold — otherwise a tail of 1-4 videos would never
                 # get a Neo4j task at all.
                 _flush_neo4j_chunk()

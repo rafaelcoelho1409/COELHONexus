@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Any
 
 GRAPH_TRANSFORMER_TIMEOUT_S = 650.0
+GRAPH_EXTRACTION_CONCURRENCY = 2
 GRAPH_ROTATOR_TASK = "bd_ingestion_agentic_rag_neo4j"
 RUN_LOCK_LEASE_S = 180
 RUN_LOCK_RENEW_S = 45

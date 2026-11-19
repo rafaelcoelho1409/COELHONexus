@@ -2582,6 +2582,335 @@
         }
       }
     },
+    "/api/v1/bd/query/ai/{backend}": {
+      "post": {
+        "tags": [
+          "Book Distiller"
+        ],
+        "summary": "Generate Query",
+        "operationId": "post_bd_query_ai_backend",
+        "parameters": [
+          {
+            "name": "backend",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "enum": [
+                "elasticsearch",
+                "qdrant",
+                "neo4j"
+              ],
+              "type": "string",
+              "title": "Backend"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QueryAIRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/bd/query/history": {
+      "get": {
+        "tags": [
+          "Book Distiller"
+        ],
+        "summary": "List History",
+        "operationId": "get_bd_query_history",
+        "parameters": [
+          {
+            "name": "backend",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "elasticsearch",
+                    "qdrant",
+                    "neo4j"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Backend"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 50,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QueryHistoryResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Book Distiller"
+        ],
+        "summary": "Save History",
+        "operationId": "post_bd_query_history",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SaveQueryHistoryRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Post Bd Query History"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/bd/query/history/{entry_id}": {
+      "delete": {
+        "tags": [
+          "Book Distiller"
+        ],
+        "summary": "Delete History",
+        "operationId": "delete_bd_query_history_entry_id",
+        "parameters": [
+          {
+            "name": "entry_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Entry Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Delete Bd Query History Entry Id"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/bd/query/namespaces": {
+      "get": {
+        "tags": [
+          "Book Distiller"
+        ],
+        "summary": "Get Namespaces",
+        "operationId": "get_bd_query_namespaces",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NamespaceResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/bd/query/raw/{backend}": {
+      "post": {
+        "tags": [
+          "Book Distiller"
+        ],
+        "summary": "Run Raw Query",
+        "operationId": "post_bd_query_raw_backend",
+        "parameters": [
+          {
+            "name": "backend",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "enum": [
+                "elasticsearch",
+                "qdrant",
+                "neo4j"
+              ],
+              "type": "string",
+              "title": "Backend"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/entrypoints__api__v1__bd__query__schemas__RawQueryRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/entrypoints__api__v1__bd__query__schemas__RawQueryResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/bd/query/schema/{backend}": {
+      "get": {
+        "tags": [
+          "Book Distiller"
+        ],
+        "summary": "Get Schema",
+        "operationId": "get_bd_query_schema_backend",
+        "parameters": [
+          {
+            "name": "backend",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "enum": [
+                "elasticsearch",
+                "qdrant",
+                "neo4j"
+              ],
+              "type": "string",
+              "title": "Backend"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QuerySchemaResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/dd/catalog": {
       "get": {
         "tags": [
@@ -7427,6 +7756,22 @@
             }
           },
           {
+            "name": "app",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "App"
+            }
+          },
+          {
             "name": "limit",
             "in": "query",
             "required": false,
@@ -7644,7 +7989,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/RawQueryRequest"
+                "$ref": "#/components/schemas/domains__ycs__query__schemas__RawQueryRequest"
               }
             }
           },
@@ -7656,7 +8001,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/RawQueryResponse"
+                  "$ref": "#/components/schemas/domains__ycs__query__schemas__RawQueryResponse"
                 }
               }
             }
@@ -7685,7 +8030,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/RawQueryRequest"
+                "$ref": "#/components/schemas/domains__ycs__query__schemas__RawQueryRequest"
               }
             }
           },
@@ -7697,7 +8042,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/RawQueryResponse"
+                  "$ref": "#/components/schemas/domains__ycs__query__schemas__RawQueryResponse"
                 }
               }
             }
@@ -7726,7 +8071,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/RawQueryRequest"
+                "$ref": "#/components/schemas/domains__ycs__query__schemas__RawQueryRequest"
               }
             }
           },
@@ -7738,7 +8083,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/RawQueryResponse"
+                  "$ref": "#/components/schemas/domains__ycs__query__schemas__RawQueryResponse"
                 }
               }
             }
@@ -7878,6 +8223,27 @@
         ],
         "title": "ActiveRuns"
       },
+      "AgenticNodePageProgress": {
+        "properties": {
+          "completed_count": {
+            "type": "integer",
+            "title": "Completed Count",
+            "default": 0
+          },
+          "total_count": {
+            "type": "integer",
+            "title": "Total Count",
+            "default": 0
+          },
+          "active_count": {
+            "type": "integer",
+            "title": "Active Count",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "title": "AgenticNodePageProgress"
+      },
       "AgenticProgress": {
         "properties": {
           "current_node": {
@@ -7966,6 +8332,13 @@
             "type": "integer",
             "title": "Visual Failed Count",
             "default": 0
+          },
+          "node_page_progress": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/AgenticNodePageProgress"
+            },
+            "type": "object",
+            "title": "Node Page Progress"
           },
           "selected_page_count": {
             "type": "integer",
@@ -9962,7 +10335,7 @@
           "chunk_overlap": {
             "type": "integer",
             "title": "Chunk Overlap",
-            "default": 200
+            "default": 0
           }
         },
         "type": "object",
@@ -10106,6 +10479,36 @@
         "type": "object",
         "title": "NamespaceMap",
         "description": "Returned by `GET /query/namespaces`. The UI fetches this on\nfirst load to know which `(app, backend)` chips to grey out."
+      },
+      "NamespaceResponse": {
+        "properties": {
+          "apps": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Apps"
+          },
+          "backends": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Backends"
+          },
+          "matrix": {
+            "additionalProperties": {
+              "additionalProperties": {
+                "$ref": "#/components/schemas/NamespaceEntry"
+              },
+              "type": "object"
+            },
+            "type": "object",
+            "title": "Matrix"
+          }
+        },
+        "type": "object",
+        "title": "NamespaceResponse"
       },
       "OutlineEntry": {
         "properties": {
@@ -10755,6 +11158,99 @@
         ],
         "title": "Progress"
       },
+      "QueryAIRequest": {
+        "properties": {
+          "app": {
+            "type": "string",
+            "const": "bd",
+            "title": "App",
+            "default": "bd"
+          },
+          "prompt": {
+            "type": "string",
+            "maxLength": 4000,
+            "minLength": 1,
+            "title": "Prompt"
+          },
+          "previous": {
+            "type": "string",
+            "maxLength": 100000,
+            "title": "Previous",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "prompt"
+        ],
+        "title": "QueryAIRequest"
+      },
+      "QueryHistoryEntry": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "backend": {
+            "type": "string",
+            "enum": [
+              "elasticsearch",
+              "qdrant",
+              "neo4j"
+            ],
+            "title": "Backend"
+          },
+          "app": {
+            "type": "string",
+            "title": "App"
+          },
+          "body": {
+            "type": "string",
+            "title": "Body"
+          },
+          "prompt": {
+            "type": "string",
+            "title": "Prompt",
+            "default": ""
+          },
+          "favorite": {
+            "type": "boolean",
+            "title": "Favorite",
+            "default": false
+          },
+          "created_at": {
+            "type": "string",
+            "title": "Created At",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "backend",
+          "app",
+          "body"
+        ],
+        "title": "QueryHistoryEntry"
+      },
+      "QueryHistoryResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/QueryHistoryEntry"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "title": "QueryHistoryResponse"
+      },
       "QueryHit": {
         "properties": {
           "kind": {
@@ -10917,6 +11413,40 @@
         "title": "QueryResponse",
         "description": "`supported=False` short-circuits the UI to a \"no data in this\nbackend for this app\" empty state, separately from \"supported but\nzero hits\". `namespace` doubles as the UI caption (\"Searching in:\nYCS · metadata + transcripts\")."
       },
+      "QuerySchemaResponse": {
+        "properties": {
+          "backend": {
+            "type": "string",
+            "enum": [
+              "elasticsearch",
+              "qdrant",
+              "neo4j"
+            ],
+            "title": "Backend"
+          },
+          "app": {
+            "type": "string",
+            "const": "bd",
+            "title": "App",
+            "default": "bd"
+          },
+          "cached_at": {
+            "type": "integer",
+            "title": "Cached At",
+            "default": 0
+          },
+          "schema": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Schema"
+          }
+        },
+        "type": "object",
+        "required": [
+          "backend"
+        ],
+        "title": "QuerySchemaResponse"
+      },
       "RAGSearchRequest": {
         "properties": {
           "question": {
@@ -10987,119 +11517,6 @@
         ],
         "title": "RAGSearchRequest",
         "description": "Adaptive RAG question. `force_mode` overrides auto-classification (fast/standard/deep)."
-      },
-      "RawQueryHit": {
-        "properties": {
-          "summary": {
-            "type": "string",
-            "title": "Summary",
-            "default": ""
-          },
-          "raw": {
-            "additionalProperties": true,
-            "type": "object",
-            "title": "Raw"
-          }
-        },
-        "type": "object",
-        "title": "RawQueryHit",
-        "description": "Renderer-friendly projection of one row, generic across backends.\n\nEach backend's `service.raw_*` writes the FULL store-side record\nhere under `raw`; `summary` is a short label so the right-pane\nrenderers don't have to know each backend's payload shape just\nto print a fallback title."
-      },
-      "RawQueryRequest": {
-        "properties": {
-          "app": {
-            "type": "string",
-            "enum": [
-              "dd",
-              "ycs"
-            ],
-            "title": "App",
-            "default": "ycs"
-          },
-          "body": {
-            "type": "string",
-            "title": "Body",
-            "description": "Editor content.",
-            "default": ""
-          }
-        },
-        "type": "object",
-        "title": "RawQueryRequest",
-        "description": "Raw DSL/Cypher/JSON typed by the user in the CodeMirror editor.\n\n`app` is currently pinned to `\"ycs\"` by the frontend but threads\nthrough the same matrix so re-enabling the cross-app pivot is one\nJS line + a router-side payload.\n\nThe `body` is the editor's text content verbatim:\n  - Elasticsearch → JSON request-body for `_search`\n  - Qdrant        → JSON `{\"op\": ..., ...}` (see domain.parse_qdrant_body)\n  - Neo4j         → Cypher source"
-      },
-      "RawQueryResponse": {
-        "properties": {
-          "backend": {
-            "type": "string",
-            "enum": [
-              "elasticsearch",
-              "qdrant",
-              "neo4j"
-            ],
-            "title": "Backend"
-          },
-          "app": {
-            "type": "string",
-            "enum": [
-              "dd",
-              "ycs"
-            ],
-            "title": "App"
-          },
-          "ok": {
-            "type": "boolean",
-            "title": "Ok"
-          },
-          "error": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Error"
-          },
-          "notes": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array",
-            "title": "Notes"
-          },
-          "took_ms": {
-            "type": "integer",
-            "title": "Took Ms",
-            "default": 0
-          },
-          "total": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Total"
-          },
-          "hits": {
-            "items": {
-              "$ref": "#/components/schemas/RawQueryHit"
-            },
-            "type": "array",
-            "title": "Hits"
-          }
-        },
-        "type": "object",
-        "required": [
-          "backend",
-          "app",
-          "ok"
-        ],
-        "title": "RawQueryResponse",
-        "description": "`ok=False` short-circuits the UI to the error band; `notes` is a\nlist of user-visible advisories (e.g. \"default size=20 synthesized\nbecause the request body omitted it\")."
       },
       "ReportActionStep": {
         "properties": {
@@ -11666,6 +12083,11 @@
             ],
             "title": "Status"
           },
+          "cancel_requested": {
+            "type": "boolean",
+            "title": "Cancel Requested",
+            "default": false
+          },
           "current_node": {
             "anyOf": [
               {
@@ -11702,6 +12124,32 @@
           "elasticsearch_document_count": {
             "type": "integer",
             "title": "Elasticsearch Document Count",
+            "default": 0
+          },
+          "elasticsearch_passage_index": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Elasticsearch Passage Index"
+          },
+          "elasticsearch_passage_count": {
+            "type": "integer",
+            "title": "Elasticsearch Passage Count",
+            "default": 0
+          },
+          "pin_sources_pages_completed": {
+            "type": "integer",
+            "title": "Pin Sources Pages Completed",
+            "default": 0
+          },
+          "elasticsearch_pages_completed": {
+            "type": "integer",
+            "title": "Elasticsearch Pages Completed",
             "default": 0
           },
           "qdrant_collection": {
@@ -11742,6 +12190,11 @@
             "title": "Qdrant Point Count",
             "default": 0
           },
+          "qdrant_pages_completed": {
+            "type": "integer",
+            "title": "Qdrant Pages Completed",
+            "default": 0
+          },
           "neo4j_node_count": {
             "type": "integer",
             "title": "Neo4J Node Count",
@@ -11760,6 +12213,56 @@
           "graph_batches_total": {
             "type": "integer",
             "title": "Graph Batches Total",
+            "default": 0
+          },
+          "neo4j_pages_completed": {
+            "type": "integer",
+            "title": "Neo4J Pages Completed",
+            "default": 0
+          },
+          "neo4j_stage": {
+            "type": "string",
+            "enum": [
+              "idle",
+              "extracting",
+              "building_graph",
+              "clearing_graph",
+              "preparing_writes",
+              "writing_nodes",
+              "writing_relationships",
+              "complete"
+            ],
+            "title": "Neo4J Stage",
+            "default": "idle"
+          },
+          "neo4j_stage_completed": {
+            "type": "integer",
+            "title": "Neo4J Stage Completed",
+            "default": 0
+          },
+          "neo4j_stage_total": {
+            "type": "integer",
+            "title": "Neo4J Stage Total",
+            "default": 0
+          },
+          "neo4j_node_write_batches_completed": {
+            "type": "integer",
+            "title": "Neo4J Node Write Batches Completed",
+            "default": 0
+          },
+          "neo4j_node_write_batches_total": {
+            "type": "integer",
+            "title": "Neo4J Node Write Batches Total",
+            "default": 0
+          },
+          "neo4j_relationship_write_batches_completed": {
+            "type": "integer",
+            "title": "Neo4J Relationship Write Batches Completed",
+            "default": 0
+          },
+          "neo4j_relationship_write_batches_total": {
+            "type": "integer",
+            "title": "Neo4J Relationship Write Batches Total",
             "default": 0
           },
           "created_at": {
@@ -11871,6 +12374,43 @@
           "run_id"
         ],
         "title": "RunStart"
+      },
+      "SaveQueryHistoryRequest": {
+        "properties": {
+          "backend": {
+            "type": "string",
+            "enum": [
+              "elasticsearch",
+              "qdrant",
+              "neo4j"
+            ],
+            "title": "Backend"
+          },
+          "app": {
+            "type": "string",
+            "const": "bd",
+            "title": "App",
+            "default": "bd"
+          },
+          "body": {
+            "type": "string",
+            "maxLength": 100000,
+            "minLength": 1,
+            "title": "Body"
+          },
+          "prompt": {
+            "type": "string",
+            "maxLength": 4000,
+            "title": "Prompt",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "backend",
+          "body"
+        ],
+        "title": "SaveQueryHistoryRequest"
       },
       "SearchDefaultBody": {
         "properties": {
@@ -13226,6 +13766,119 @@
         ],
         "title": "WipeResponse"
       },
+      "domains__ycs__query__schemas__RawQueryHit": {
+        "properties": {
+          "summary": {
+            "type": "string",
+            "title": "Summary",
+            "default": ""
+          },
+          "raw": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Raw"
+          }
+        },
+        "type": "object",
+        "title": "RawQueryHit",
+        "description": "Renderer-friendly projection of one row, generic across backends.\n\nEach backend's `service.raw_*` writes the FULL store-side record\nhere under `raw`; `summary` is a short label so the right-pane\nrenderers don't have to know each backend's payload shape just\nto print a fallback title."
+      },
+      "domains__ycs__query__schemas__RawQueryRequest": {
+        "properties": {
+          "app": {
+            "type": "string",
+            "enum": [
+              "dd",
+              "ycs"
+            ],
+            "title": "App",
+            "default": "ycs"
+          },
+          "body": {
+            "type": "string",
+            "title": "Body",
+            "description": "Editor content.",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "title": "RawQueryRequest",
+        "description": "Raw DSL/Cypher/JSON typed by the user in the CodeMirror editor.\n\n`app` is currently pinned to `\"ycs\"` by the frontend but threads\nthrough the same matrix so re-enabling the cross-app pivot is one\nJS line + a router-side payload.\n\nThe `body` is the editor's text content verbatim:\n  - Elasticsearch → JSON request-body for `_search`\n  - Qdrant        → JSON `{\"op\": ..., ...}` (see domain.parse_qdrant_body)\n  - Neo4j         → Cypher source"
+      },
+      "domains__ycs__query__schemas__RawQueryResponse": {
+        "properties": {
+          "backend": {
+            "type": "string",
+            "enum": [
+              "elasticsearch",
+              "qdrant",
+              "neo4j"
+            ],
+            "title": "Backend"
+          },
+          "app": {
+            "type": "string",
+            "enum": [
+              "dd",
+              "ycs"
+            ],
+            "title": "App"
+          },
+          "ok": {
+            "type": "boolean",
+            "title": "Ok"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "notes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Notes"
+          },
+          "took_ms": {
+            "type": "integer",
+            "title": "Took Ms",
+            "default": 0
+          },
+          "total": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total"
+          },
+          "hits": {
+            "items": {
+              "$ref": "#/components/schemas/domains__ycs__query__schemas__RawQueryHit"
+            },
+            "type": "array",
+            "title": "Hits"
+          }
+        },
+        "type": "object",
+        "required": [
+          "backend",
+          "app",
+          "ok"
+        ],
+        "title": "RawQueryResponse",
+        "description": "`ok=False` short-circuits the UI to the error band; `notes` is a\nlist of user-visible advisories (e.g. \"default size=20 synthesized\nbecause the request body omitted it\")."
+      },
       "entrypoints__api__v1__bd__distill__schemas__CancelResponse": {
         "properties": {
           "book_id": {
@@ -13266,6 +13919,110 @@
           "status"
         ],
         "title": "CancelResponse"
+      },
+      "entrypoints__api__v1__bd__query__schemas__RawQueryHit": {
+        "properties": {
+          "summary": {
+            "type": "string",
+            "title": "Summary",
+            "default": ""
+          },
+          "raw": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Raw"
+          }
+        },
+        "type": "object",
+        "title": "RawQueryHit"
+      },
+      "entrypoints__api__v1__bd__query__schemas__RawQueryRequest": {
+        "properties": {
+          "app": {
+            "type": "string",
+            "const": "bd",
+            "title": "App",
+            "default": "bd"
+          },
+          "body": {
+            "type": "string",
+            "maxLength": 100000,
+            "title": "Body",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "title": "RawQueryRequest"
+      },
+      "entrypoints__api__v1__bd__query__schemas__RawQueryResponse": {
+        "properties": {
+          "backend": {
+            "type": "string",
+            "enum": [
+              "elasticsearch",
+              "qdrant",
+              "neo4j"
+            ],
+            "title": "Backend"
+          },
+          "app": {
+            "type": "string",
+            "const": "bd",
+            "title": "App",
+            "default": "bd"
+          },
+          "ok": {
+            "type": "boolean",
+            "title": "Ok"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "notes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Notes"
+          },
+          "took_ms": {
+            "type": "integer",
+            "title": "Took Ms",
+            "default": 0
+          },
+          "total": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total"
+          },
+          "hits": {
+            "items": {
+              "$ref": "#/components/schemas/entrypoints__api__v1__bd__query__schemas__RawQueryHit"
+            },
+            "type": "array",
+            "title": "Hits"
+          }
+        },
+        "type": "object",
+        "required": [
+          "backend",
+          "ok"
+        ],
+        "title": "RawQueryResponse"
       }
     }
   }

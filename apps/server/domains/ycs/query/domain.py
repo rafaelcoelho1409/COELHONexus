@@ -157,7 +157,7 @@ def project_neo4j_row(row: dict[str, Any], app: str) -> dict[str, Any]:
 #                                               TRANSCRIPTIONS_MAPPING)
 #   Qdrant → domains.ycs.ingestion.domain     (build_payload — the
 #                                               writer's payload shape)
-#   Neo4j  → domains/ycs/graph_builder/*       + the entity-merger Cypher
+#   Neo4j  → domains/ycs/rag/source/indexes/neo4j_index/* + entity-merger Cypher
 #            (build_video_metadata_graph creates Video+Channel+BELONGS_TO;
 #             LLMGraphTransformer creates __Entity__ + Document with
 #             the .video_id tag).
@@ -232,7 +232,7 @@ def declared_neo4j_schema() -> dict[str, Any]:
       · build_video_metadata_graph → (:Video) + (:Channel) +
                                (Video)-[:BELONGS_TO]->(Channel)
 
-    Property names confirmed by reading `graph_builder/service.py`
+    Property names confirmed by reading the YCS Neo4j index service.
     (lines 804-823) + the retriever's Cypher (`retriever/neo4j.py`)."""
     return {
         "labels": ["__Entity__", "Document", "Video", "Channel"],

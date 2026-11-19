@@ -12,7 +12,7 @@ QDRANT_COLLECTION = "coelhonexus-ycs-rag"
 SCROLL_BATCH_SIZE = 50
 
 # Non-streaming fetch batch size — used by `fetch_transcripts_from_es`
-# (graph_builder reads transcripts that way).
+# (the RAG Neo4j index reads transcripts that way).
 FETCH_BATCH_SIZE = 100
 
 # canonical chunker defaults if not overridden by caller.

@@ -21,7 +21,14 @@ export type StepView = {
   hint: string | null;
 };
 
-export type Step = { key: string; title: string; defaultHint: string; view: StepView };
+export type Step = {
+  key: string;
+  title: string;
+  defaultHint: string;
+  reads: readonly string[];
+  writes: readonly string[];
+  view: StepView;
+};
 
 const FILL: Record<string, string> = {
   success: "bg-success",
@@ -66,7 +73,7 @@ export function PipelineSteps({
   onPlay?: (step: Step) => void;
 }): JSX.Element {
   return (
-    <ol aria-label="Pipeline phases" className="flex flex-col gap-1.5">
+    <ol aria-label="Agentic RAG stages" className="flex flex-col gap-1.5">
       {steps.map((step) => {
         const word = statusWord(step.view.state);
         const wordLabel = STATUS_WORD_LABEL[word];

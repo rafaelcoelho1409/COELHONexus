@@ -1,9 +1,10 @@
-from . import ask, distill, ingestion, rag, schemas
+from . import ask, distill, ingestion, query, rag, schemas
 
 __all__ = [
     "ask",
     "distill",
     "ingestion",
+    "query",
     "rag",
     "schemas",
 ]

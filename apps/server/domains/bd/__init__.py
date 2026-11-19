@@ -10,15 +10,15 @@ from typing import TYPE_CHECKING
 from . import ask, distill, ingestion
 
 if TYPE_CHECKING:
-    from . import rag
+    from . import query, rag
 
 
-__all__ = ["ask", "distill", "ingestion", "rag"]
+__all__ = ["ask", "distill", "ingestion", "query", "rag"]
 
 
 def __getattr__(name: str):
-    if name == "rag":
-        module = importlib.import_module(f"{__name__}.rag")
+    if name in {"query", "rag"}:
+        module = importlib.import_module(f"{__name__}.{name}")
         globals()[name] = module
         return module
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

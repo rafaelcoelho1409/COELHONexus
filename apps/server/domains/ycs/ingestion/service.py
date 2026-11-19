@@ -355,7 +355,7 @@ async def fetch_transcripts_from_es(
     video_ids: list[str] | None = None,
     batch_size: int = params.FETCH_BATCH_SIZE,
 ) -> list[dict]:
-    """Non-streaming bulk fetch — used by `graph_builder` for the
+    """Non-streaming bulk fetch — used by the RAG Neo4j index for the
     LLM-graph pass (small batches, full transcripts in memory)."""
     out: list[dict] = []
     async for transcript in _scroll_transcripts(es, video_ids, batch_size):

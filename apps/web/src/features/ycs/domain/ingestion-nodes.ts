@@ -23,7 +23,7 @@ const NODE_RESOURCES = {
     tools: ["Embedding service", "Qdrant upsert API"],
   },
   neo4j: {
-    agents: ["DeepAgent graph extraction (in-node)"],
+    agents: ["None (fixed extraction component)"],
     skills: ["Extract entities and relationships", "Validate transcript evidence", "Write graph data"],
     tools: ["LLMGraphTransformer", "Neo4j"],
   },

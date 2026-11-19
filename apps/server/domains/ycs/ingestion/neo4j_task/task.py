@@ -4,13 +4,13 @@ ONE task: `ingest_to_neo4j(video_ids?, batch_size=1, skip_resolution=False,
 extract_id=None)`. Two callers, two shapes:
   - Bulk/legacy (`skip_resolution=False`): `video_ids` is the WHOLE
     batch, `batch_size` defaults to 1 (per-video progress-bar
-    granularity; see `graph_builder.params.EXTRACT_CONCURRENCY` for the
+    granularity; see the RAG Neo4j index concurrency setting for the
     actual pool width used when `batch_size<=1`).
   - Streaming (`skip_resolution=True`, `extract_id` set,
     2026-09-13/14): `extract/service.py`'s `_on_video_indexed` calls this
     with a CHUNK of up to `EXTRACT_CONCURRENCY` video ids (accumulated
     as videos finish Phase 1, flushed once the chunk fills) and
-    `batch_size=len(chunk)`, so `domains.ycs.ingestion.graph_builder.service.extract_and_store_graph`'s internal
+    `batch_size=len(chunk)`, so `domains.ycs.rag.source.indexes.neo4j_index.service.extract_and_store_graph`'s internal
     pool width exactly matches the chunk — full concurrency within the
     chunk, starting well before the whole run's video batch clears
     Phase 1. (An earlier same-day version dispatched one Celery task
@@ -29,8 +29,8 @@ Internally:
      `record_ycs_neo4j_reward`/`release_ycs_provider_slot` calls — all
      three were confirmed no-ops. There is no local pool left to feed.
   4. Fetch transcripts + metadata from ES.
-  5. `domains.ycs.ingestion.graph_builder.service.build_video_metadata_graph` — Video/Channel nodes (no LLM cost).
-  6. `domains.ycs.ingestion.graph_builder.service.extract_and_store_graph` — LLM entity extraction, one real attempt
+  5. `domains.ycs.rag.source.indexes.neo4j_index.service.build_video_metadata_graph` — Video/Channel nodes (no LLM cost).
+  6. `domains.ycs.rag.source.indexes.neo4j_index.service.extract_and_store_graph` — LLM entity extraction, one real attempt
      per video. Videos that fail get retried (same connection, same
      model) up to `params.MAX_RETRY_PASSES` times — see that constant's
      comment for why this replaced the old "arm-swap" framing."""

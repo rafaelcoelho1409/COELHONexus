@@ -342,7 +342,7 @@ def fetch_entity_inventory(graph: infra.neo4j.service.Neo4jGraph) -> list[str]:
         return list(_inventory_cache["items"])
     try:
         rows = graph.query(
-            f"MATCH (e:__Entity__:{domains.ycs.ingestion.graph_builder.params.SOURCE_LABEL}) "
+            f"MATCH (e:__Entity__:{domains.ycs.rag.source.indexes.neo4j_index.params.SOURCE_LABEL}) "
             "WHERE e.id IS NOT NULL "
             "WITH CASE WHEN valueType(e.id) STARTS WITH 'LIST' "
             "THEN head(e.id) ELSE e.id END AS eid "
@@ -587,7 +587,7 @@ class Neo4jRetriever:
             ):
                 results = self.graph.query(
                 # 1) Direct entity match + source documents.
-                f"MATCH (e:__Entity__:{domains.ycs.ingestion.graph_builder.params.SOURCE_LABEL}) "
+                f"MATCH (e:__Entity__:{domains.ycs.rag.source.indexes.neo4j_index.params.SOURCE_LABEL}) "
                 "WHERE e.id IS NOT NULL "
                 f"WITH e, ({_NORMALIZE_ID}) AS eid "
                 f"{entity_pred}"
@@ -606,11 +606,11 @@ class Neo4jRetriever:
                 "LIMIT $limit "
                 "UNION "
                 # 2) One-hop neighbors: entities connected to matched ones.
-                f"MATCH (e:__Entity__:{domains.ycs.ingestion.graph_builder.params.SOURCE_LABEL}) "
+                f"MATCH (e:__Entity__:{domains.ycs.rag.source.indexes.neo4j_index.params.SOURCE_LABEL}) "
                 "WHERE e.id IS NOT NULL "
                 f"WITH e, ({_NORMALIZE_ID}) AS eid "
                 f"{entity_pred}"
-                f"MATCH (e)-[r]-(neighbor:__Entity__:{domains.ycs.ingestion.graph_builder.params.SOURCE_LABEL}) "
+                f"MATCH (e)-[r]-(neighbor:__Entity__:{domains.ycs.rag.source.indexes.neo4j_index.params.SOURCE_LABEL}) "
                 "WHERE e <> neighbor "
                 "OPTIONAL MATCH (neighbor)<--(doc:Document) "
                 "OPTIONAL MATCH (neighbor)<--(v:Video) "

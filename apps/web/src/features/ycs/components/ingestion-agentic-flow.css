@@ -1,4 +1,4 @@
-/* Read-only graph styling mirrors the Agentic AI stage graphs and uses the YCS theme tokens. */
+/* Read-only graph styling mirrors the Agentic RAG stage and uses the YCS theme tokens. */
 
 .ycs-ingestion-flow .react-flow {
   --xy-background-color: transparent;
