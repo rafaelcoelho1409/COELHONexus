@@ -32,8 +32,9 @@ BOOK_SYNTHESIS_TIMEOUT_S = 240.0
 RESEARCH_ENABLED = os.environ.get("BD_DISTILL_RESEARCH_ENABLED", "false").casefold() in {"1", "true", "yes"}
 # Keep LLM fan-out bounded; high parallelism caused repeated upstream 504s on long book runs.
 GRAPH_CONCURRENCY = 4
+# Keep extraction batches compact; chapter work gets its own graph task for per-chapter scheduling and progress.
 FANOUT_UNIT_BATCH_SIZE = 8
-FANOUT_CHAPTER_BATCH_SIZE = 4
+FANOUT_CHAPTER_BATCH_SIZE = 1
 # Retry transient provider failures at the graph node boundary as well as within each model call.
 AGENT_CALL_ATTEMPTS = 3
 AGENT_CALL_RETRY_WAIT_BASE_S = 5.0
@@ -52,6 +53,19 @@ GRAPH_NODES = (
     "research_context",
     "publish_report",
 )
+GRAPH_EDGES = (
+    ("prepare_units", "extract_unit"),
+    ("extract_unit", "verify_unit"),
+    ("verify_unit", "prepare_chapters"),
+    ("prepare_chapters", "synthesize_chapter"),
+    ("synthesize_chapter", "build_chapter_visuals"),
+    ("synthesize_chapter", "synthesize_book"),
+    ("synthesize_book", "write_decision_brief"),
+    ("synthesize_book", "research_context"),
+    ("build_chapter_visuals", "publish_report"),
+    ("write_decision_brief", "publish_report"),
+    ("research_context", "publish_report"),
+)
 LLM_COUNTER_NODES_BY_GRAPH_NODE = {
     "prepare_units": (),
     "extract_unit": ("learning_extractor",),
@@ -64,6 +78,29 @@ LLM_COUNTER_NODES_BY_GRAPH_NODE = {
     "research_context": ("research_analyst",),
     "publish_report": ("report_reviewer",),
 }
-REPLAY_DESCENDANTS = {node: GRAPH_NODES[index:] for index, node in enumerate(GRAPH_NODES)}
+
+
+def _reachable_nodes(start: str) -> tuple[str, ...]:
+    reachable = {start}
+    pending = [start]
+    while pending:
+        source = pending.pop()
+        for edge_source, target in GRAPH_EDGES:
+            if edge_source == source and target not in reachable:
+                reachable.add(target)
+                pending.append(target)
+    return tuple(node for node in GRAPH_NODES if node in reachable)
+
+
+# Replay checks all transitive dependencies, then resets only this node and its actual descendants.
+REPLAY_DESCENDANTS = {node: _reachable_nodes(node) for node in GRAPH_NODES}
+REPLAY_PREDECESSORS = {
+    node: tuple(
+        candidate
+        for candidate in GRAPH_NODES
+        if node in REPLAY_DESCENDANTS[candidate] and candidate != node
+    )
+    for node in GRAPH_NODES
+}
 TASK_NAME = "domains.bd.distill.task.run_distill"
 TERMINAL_STATUSES = frozenset({"done", "failed", "cancelled"})

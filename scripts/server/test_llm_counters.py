@@ -1,10 +1,10 @@
 """Offline check of the LLM-usage counters (`domains.settings.llm_counter`): the Redis hashes and the JSON shapes the
-Pipeline / Ask usage drawers render, for the `dd` and `ycs` namespaces.
+Book Distiller / Ask usage drawers render, for the `bd` and `ycs` namespaces.
 
     cd apps/server && .venv/bin/python ../../scripts/server/test_llm_counters.py
 
 An in-memory Redis stands in for the cluster (`infra.redis.service.new_redis` is patched), so the test pins the exact
-key strings, hash fields and read shapes — the contract the live drawers, the DD snapshots and in-flight counters depend on."""
+key strings, hash fields and read shapes — the contract the live drawers, book snapshots and in-flight counters depend on."""
 import asyncio
 import os
 import sys
@@ -94,40 +94,40 @@ ZERO = {"calls": 0, "tokens_in": 0, "tokens_out": 0, "reasoning_tokens": 0}
 
 
 async def run():
-    # ---------------- keys: the strings live counters and DD snapshots already use ----------------
-    ok("keys: dd + ycs counters / models / snapshot strings unchanged", (
-        lc.keys.counters_key("dd", "th") == "coelhonexus:dd:th:llm:counters"
-        and lc.keys.models_key("dd", "th", "n") == "coelhonexus:dd:th:llm:models:n"
-        and lc.keys.snapshot_key("dd", "a/b") == "observability/dd/llm-counters/a%2Fb.json"
+    # ---------------- keys: the strings live counters and Book Distiller snapshots use ----------------
+    ok("keys: bd + ycs counters / models / snapshot strings unchanged", (
+        lc.keys.counters_key("bd", "th") == "coelhonexus:bd:th:llm:counters"
+        and lc.keys.models_key("bd", "th", "n") == "coelhonexus:bd:th:llm:models:n"
+        and lc.keys.snapshot_key("bd", "a/b") == "observability/bd/llm-counters/a%2Fb.json"
         and lc.keys.counters_key("ycs", "ex") == "coelhonexus:ycs:ex:llm:counters"
         and lc.keys.models_key("ycs", "ex", "v") == "coelhonexus:ycs:ex:llm:models:v"))
 
-    # ---------------- DD ----------------
+    # ---------------- Book Distiller ----------------
     await LC.bump_response(RAW, deployment="x")
-    ok("dd: no context -> no-op", not STORE)
-    with LC.llm_context(ns="dd", run_id="th-1", node_id="node_a", stage="planner"):
+    ok("bd: no context -> no-op", not STORE)
+    with LC.llm_context(ns="bd", run_id="th-1", node_id="node_a", stage="distill"):
         await LC.bump_response(RAW, deployment="prov/m")
         await LC.bump_response(AI, deployment="prov/m")      # what the chat adapter passes: the bare AIMessage
         await LC.bump_current_failure(Exception("Error code: 504 gateway"))
         await LC.bump_current_failure(RuntimeError("429 rate limited"))
-    with LC.llm_context(ns="dd", run_id="th-1", node_id="node_b", stage="planner"):
+    with LC.llm_context(ns="bd", run_id="th-1", node_id="node_b", stage="distill"):
         await LC.bump_current_failure(domains.settings.chat.errors.ChatTimeoutError("hard backstop fired"))
-    ok("dd: context restored after the block", LC.get_context() is None)
-    with LC.llm_context(ns="dd", run_id="", node_id="n", stage="planner"):
+    ok("bd: context restored after the block", LC.get_context() is None)
+    with LC.llm_context(ns="bd", run_id="", node_id="n", stage="distill"):
         await LC.bump_response(RAW, deployment="prov/m")
-    ok("dd: empty run id -> no-op", "coelhonexus:dd::llm:counters" not in STORE)
-    hash_ = STORE["coelhonexus:dd:th-1:llm:counters"]
-    ok("dd: hash fields written", hash_ == {
-        "stage": "planner",
+    ok("bd: empty run id -> no-op", "coelhonexus:bd::llm:counters" not in STORE)
+    hash_ = STORE["coelhonexus:bd:th-1:llm:counters"]
+    ok("bd: hash fields written", hash_ == {
+        "stage": "distill",
         "node:node_a:calls": 2, "node:node_a:tokens_in": 14, "node:node_a:tokens_out": 11, "node:node_a:reasoning_tokens": 2,
         "total:calls": 2, "total:tokens_in": 14, "total:tokens_out": 11, "total:reasoning_tokens": 2,
         "node:node_a:errors": 2, "total:errors": 3, "errkind:504": 1, "errkind:rate_limit": 1,
         "node:node_b:errors": 1, "errkind:timeout": 1,
     }, str(hash_))
-    ok("dd: TTL applied", TTLS["coelhonexus:dd:th-1:llm:counters"] == lc.params.COUNTER_TTL_S)
-    got = await LC.read_counters("dd", "th-1")
-    ok("dd: read shape", got == {
-        "thread_id": "th-1", "stage": "planner",
+    ok("bd: TTL applied", TTLS["coelhonexus:bd:th-1:llm:counters"] == lc.params.COUNTER_TTL_S)
+    got = await LC.read_counters("bd", "th-1")
+    ok("bd: read shape", got == {
+        "thread_id": "th-1", "stage": "distill",
         "total": {"calls": 2, "tokens_in": 14, "tokens_out": 11, "reasoning_tokens": 2, "errors": 3},
         "error_kinds": {"504": 1, "rate_limit": 1, "timeout": 1},
         "by_node": {
@@ -138,15 +138,15 @@ async def run():
     }, str(got))
     storage = FakeStorage()
     infra.minio.service.get_storage = lambda: storage
-    ok("dd: snapshot persists the read payload", await LC.snapshot("dd", "th-1") is True
-       and next(iter(storage.written)) == "observability/dd/llm-counters/th-1.json")
-    ok("dd: snapshot skipped with zero calls", await LC.snapshot("dd", "th-empty") is False)
-    ok("dd: ycs has no snapshot", await LC.snapshot("ycs", "th-1") is False)
+    ok("bd: snapshot persists the read payload", await LC.snapshot("bd", "th-1") is True
+       and next(iter(storage.written)) == "observability/bd/llm-counters/th-1.json")
+    ok("bd: snapshot skipped with zero calls", await LC.snapshot("bd", "th-empty") is False)
+    ok("bd: ycs has no snapshot", await LC.snapshot("ycs", "th-1") is False)
     infra.minio.service.get_storage = lambda: FakeStorage('{"thread_id": "th-old", "total": {"calls": 9}}')
-    ok("dd: read falls back to the MinIO snapshot when Redis is empty", (await LC.read_counters("dd", "th-old"))["total"]["calls"] == 9)
-    ok("dd: ycs never reads a snapshot", (await LC.read_counters("ycs", "th-old"))["total"]["calls"] == 0)
+    ok("bd: read falls back to the MinIO snapshot when Redis is empty", (await LC.read_counters("bd", "th-old"))["total"]["calls"] == 9)
+    ok("bd: ycs never reads a snapshot", (await LC.read_counters("ycs", "th-old"))["total"]["calls"] == 0)
     infra.minio.service.get_storage = lambda: FakeStorage()
-    ok("dd: read with nothing anywhere is the empty shape", (await LC.read_counters("dd", "th-none")) == {
+    ok("bd: read with nothing anywhere is the empty shape", (await LC.read_counters("bd", "th-none")) == {
         "thread_id": "th-none", "stage": None, "total": {**ZERO, "errors": 0}, "error_kinds": {}, "by_node": {}})
 
     # ---------------- YCS ----------------
@@ -227,7 +227,7 @@ async def run():
     }, str(a))
     LC.clear_context()
 
-    # ---- the chat adapter (what DD calls): a reply is counted once, a failure once, per adapter call ----
+    # ---- the shared chat adapter: replies and failures are counted once per adapter call ----
     chat = domains.settings.chat.service
 
     class Schema(BaseModel):
@@ -253,7 +253,7 @@ async def run():
     chat._apply_endpoint = lambda *a, **k: False
     reply = AIMessage(content="ok", response_metadata={"model_name": "prov/m"},
                       usage_metadata={"input_tokens": 10, "output_tokens": 5, "total_tokens": 15})
-    with LC.llm_context(ns="dd", run_id="th-chat", node_id="n1", stage="synth"):
+    with LC.llm_context(ns="bd", run_id="th-chat", node_id="n1", stage="distill"):
         chat.build_chat_model = lambda **k: StubModel(reply)
         text, meta = await chat.chat_text_async("hi")
         parsed, _ = await chat.chat_structured_async("hi", Schema)
@@ -265,9 +265,9 @@ async def run():
             except chat.errors.ChatError:
                 pass
     ok("chat adapter: returns the reply untouched", text == "ok" and parsed == Schema(a=1) and meta["model"] == "prov/m")
-    c = await LC.read_counters("dd", "th-chat")
+    c = await LC.read_counters("bd", "th-chat")
     ok("chat adapter: 2 replies + 2 failures counted once each, under the model the reply names", c == {
-        "thread_id": "th-chat", "stage": "synth",
+        "thread_id": "th-chat", "stage": "distill",
         "total": {"calls": 2, "tokens_in": 20, "tokens_out": 10, "reasoning_tokens": 0, "errors": 2},
         "error_kinds": {"504": 2},
         "by_node": {"n1": {"calls": 2, "tokens_in": 20, "tokens_out": 10, "reasoning_tokens": 0, "errors": 2, "by_model": {

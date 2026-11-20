@@ -346,18 +346,45 @@ async def dispatch_streaming_totals(
             # — same class of risk the Qdrant drain above already
             # guards against, just missed here on the first pass.
             try:
-                neo4j_graph = infra.neo4j.service.new_graph(refresh_schema = True)
-                merged = await domains.ycs.rag.source.indexes.neo4j_index.service.resolve_entities(neo4j_graph)
-                logger.info(
-                    f"[extract_videos] {extract_id}: totals-correction "
-                    f"completed the Neo4j phase — resolution merged "
-                    f"{merged} node(s)"
+                phase_progress = await domains.ycs.ingestion.pipeline_task.service.get_phase_progress(
+                    redis, extract_id, "neo4j",
                 )
-                if merged and dispatched_ids:
-                    await domains.ycs.ingestion.pipeline_task.service.update_video_extra(
-                        redis, extract_id, "neo4j", dispatched_ids[-1],
-                        {"entities_merged": merged},
+                neo4j_totals = phase_progress.get("result") or {}
+                nodes_created = neo4j_totals.get("nodes_created", 0)
+                if nodes_created <= 0:
+                    logger.info(
+                        f"[extract_videos] {extract_id}: totals-correction "
+                        "found no Neo4j writes; skipping entity resolution"
                     )
+                elif "entities_merged" in neo4j_totals:
+                    logger.info(
+                        f"[extract_videos] {extract_id}: totals-correction "
+                        "found entity resolution already complete"
+                    )
+                else:
+                    async with domains.ycs.ingestion.pipeline_task.service.neo4j_resolution_guard(
+                        redis, extract_id,
+                    ) as resolution_lock:
+                        if not resolution_lock:
+                            logger.info(
+                                f"[extract_videos] {extract_id}: totals-correction "
+                                "entity resolution is already active; skipping duplicate"
+                            )
+                        else:
+                            neo4j_graph = infra.neo4j.service.new_graph(refresh_schema = False)
+                            merged = await domains.ycs.rag.source.indexes.neo4j_index.service.resolve_entities(
+                                neo4j_graph,
+                            )
+                            if dispatched_ids:
+                                await domains.ycs.ingestion.pipeline_task.service.update_video_extra(
+                                    redis, extract_id, "neo4j", dispatched_ids[-1],
+                                    {"entities_merged": merged},
+                                )
+                            logger.info(
+                                f"[extract_videos] {extract_id}: totals-correction "
+                                f"completed the Neo4j phase — resolution merged "
+                                f"{merged} node(s)"
+                            )
             except Exception as e:
                 logger.warning(
                     f"[extract_videos] {extract_id}: totals-correction "

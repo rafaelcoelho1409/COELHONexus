@@ -1,7 +1,6 @@
 "use client";
 
-/** The Query stage's top rows: the backend tabs, and under them the editor's header — which store, what it holds and
- * the run status (one polite live line) beside it, and the actions. */
+/** The Query stage's backend tabs, editor context, and full-width action row. */
 
 import { BookOpen, History, Play, RotateCcw } from "lucide-react";
 import type { JSX } from "react";
@@ -17,22 +16,24 @@ export function BackendTabs({
   onChange: (backend: QueryBackend) => void;
 }): JSX.Element {
   return (
-    <nav
-      aria-label="Query backend"
-      className="inline-flex max-w-full flex-nowrap overflow-x-auto rounded-sm border border-border bg-background"
-    >
+    <div aria-label="Query backend" role="tablist" className="ml-auto flex flex-wrap items-center">
       {QUERY_BACKENDS.map((entry) => (
-        <ActionButton
+        <button
           key={entry.id}
           type="button"
-          aria-pressed={entry.id === backend}
+          role="tab"
+          aria-selected={entry.id === backend}
           onClick={() => onChange(entry.id)}
-          className="min-h-9 shrink-0 rounded-none border-0 border-r border-r-border px-3 py-2 text-sm last:border-r-0"
+          className={`inline-flex h-9 items-center border-b-2 px-2 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 sm:px-3 ${
+            entry.id === backend
+              ? "border-primary font-semibold text-foreground"
+              : "border-transparent font-medium text-muted-foreground hover:border-border hover:text-foreground"
+          }`}
         >
           {entry.label}
-        </ActionButton>
+        </button>
       ))}
-    </nav>
+    </div>
   );
 }
 
@@ -40,60 +41,69 @@ export function EditorHeader({
   backend,
   caption,
   status,
-  running,
-  onRun,
-  onReset,
-  onSchema,
-  onHistory,
 }: {
   backend: QueryBackend;
   /** What the store holds for YCS ("YCS · metadata + transcripts"); empty until the server answers. */
   caption: string;
   status: string;
-  running: boolean;
-  onRun: () => void;
+}): JSX.Element {
+  const label = QUERY_BACKENDS.find((entry) => entry.id === backend)?.label ?? backend;
+  return (
+    <div className="min-w-0">
+      <h2 className="text-base font-semibold">{label}</h2>
+      <p className="flex flex-wrap items-center gap-x-1.5 text-xs text-muted-foreground">
+        {caption ? (
+          <>
+            <span>{caption}</span>
+            <span aria-hidden>·</span>
+          </>
+        ) : null}
+        <span role="status" className="tabular">
+          {status}
+        </span>
+      </p>
+    </div>
+  );
+}
+
+export function EditorActions({
+  backendLabel,
+  queryRunning,
+  queryDisabled,
+  onReset,
+  onSchema,
+  onHistory,
+  onRun,
+}: {
+  backendLabel: string;
+  queryRunning: boolean;
+  queryDisabled: boolean;
   onReset: () => void;
   onSchema: () => void;
   onHistory: () => void;
+  onRun: () => void;
 }): JSX.Element {
-  const label = QUERY_BACKENDS.find((entry) => entry.id === backend)?.label ?? backend;
-  // On a phone Run sits beside the title and the three secondary actions take the row below; from `sm` up everything
-  // shares one row with Run last.
+  const buttonClass = "w-full min-w-0 justify-center gap-2 whitespace-nowrap";
+
   return (
-    <div className="flex flex-wrap items-center gap-2">
-      <div className="order-1 mr-auto min-w-0">
-        <h2 className="text-base font-semibold">{label}</h2>
-        <p className="flex flex-wrap items-center gap-x-1.5 text-xs text-muted-foreground">
-          {caption ? (
-            <>
-              <span>{caption}</span>
-              <span aria-hidden>·</span>
-            </>
-          ) : null}
-          <span role="status" className="tabular">
-            {status}
-          </span>
-        </p>
-      </div>
+    <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+      <ActionButton onClick={onReset} title="Put the starting query back" className={buttonClass}>
+        <RotateCcw aria-hidden /> Reset
+      </ActionButton>
+      <ActionButton onClick={onSchema} className={buttonClass}>
+        <BookOpen aria-hidden /> Schema
+      </ActionButton>
+      <ActionButton onClick={onHistory} className={buttonClass}>
+        <History aria-hidden /> History
+      </ActionButton>
       <ActionButton
         onClick={onRun}
-        disabled={running}
-        title="Run the query (Ctrl/Cmd+Enter)"
-        className="order-2 sm:order-3"
+        disabled={queryRunning || queryDisabled}
+        title={`Run the ${backendLabel} query (Ctrl/Cmd+Enter)`}
+        className={buttonClass}
       >
-        <Play aria-hidden /> {running ? "Running…" : "Run"}
+        <Play aria-hidden /> {queryRunning ? "Running…" : "Run"}
       </ActionButton>
-      <div className="order-3 flex w-full flex-wrap gap-2 sm:order-2 sm:w-auto">
-        <ActionButton onClick={onReset} title="Put the starting query back">
-          <RotateCcw aria-hidden /> Reset
-        </ActionButton>
-        <ActionButton onClick={onSchema}>
-          <BookOpen aria-hidden /> Schema
-        </ActionButton>
-        <ActionButton onClick={onHistory}>
-          <History aria-hidden /> History
-        </ActionButton>
-      </div>
     </div>
   );
 }

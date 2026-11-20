@@ -175,7 +175,7 @@ def scripted_model(script: Script) -> ChatOpenAI:
 
 
 script = Script({"target_text": "https://www .site.com/a", "replacement": "https://www.site.com/a"})
-# Other code in the worker (a Docs Distiller role, say) may have registered an exclusion under the same model name; DeepAgents
+# Other code in the worker may have registered an exclusion under the same model name; DeepAgents
 # merges those, so without isolation it would hide read_file from this role too.
 register_harness_profile("openai:scripted-model", HarnessProfile(excluded_tools = frozenset({"read_file", "check_patches"})))
 agent = text_repair.agent.text_repair(scripted_model(script))

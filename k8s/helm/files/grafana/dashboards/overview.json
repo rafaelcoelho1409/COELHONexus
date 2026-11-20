@@ -4,7 +4,6 @@
   "tags": [
     "coelhonexus",
     "overview",
-    "dd",
     "ycs",
     "otel",
     "lgtm"
@@ -17,12 +16,6 @@
     "to": "now"
   },
   "links": [
-    {
-      "title": "DD Pipeline",
-      "type": "link",
-      "url": "/d/coelhonexus-dd-pipeline",
-      "targetBlank": false
-    },
     {
       "title": "YCS Ask",
       "type": "link",
@@ -50,78 +43,6 @@
   ],
   "panels": [
     {
-      "id": 1,
-      "type": "stat",
-      "title": "DD planners observed",
-      "description": "Docs Distiller planner runs observed over the selected period.",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "mimir"
-      },
-      "gridPos": {
-        "h": 5,
-        "w": 4,
-        "x": 0,
-        "y": 0
-      },
-      "targets": [
-        {
-          "expr": "sum(max_over_time(dd_planner_run_total[7d]))",
-          "legendFormat": "planner runs"
-        }
-      ]
-    },
-    {
-      "id": 2,
-      "type": "stat",
-      "title": "DD studies observed",
-      "description": "Docs Distiller study completions observed over the selected period.",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "mimir"
-      },
-      "gridPos": {
-        "h": 5,
-        "w": 4,
-        "x": 4,
-        "y": 0
-      },
-      "targets": [
-        {
-          "expr": "sum(max_over_time(dd_study_completion_seconds_count[7d]))",
-          "legendFormat": "studies"
-        }
-      ]
-    },
-    {
-      "id": 3,
-      "type": "stat",
-      "title": "DD planner p95",
-      "description": "Planner p95 latency. Use the DD dashboard for deeper breakdowns and exemplars.",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "mimir"
-      },
-      "gridPos": {
-        "h": 5,
-        "w": 4,
-        "x": 8,
-        "y": 0
-      },
-      "targets": [
-        {
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(dd_planner_run_duration_seconds_bucket[1h])))",
-          "legendFormat": "p95",
-          "exemplar": true
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "s"
-        }
-      }
-    },
-    {
       "id": 4,
       "type": "stat",
       "title": "YCS asks observed",
@@ -132,8 +53,8 @@
       },
       "gridPos": {
         "h": 5,
-        "w": 4,
-        "x": 12,
+        "w": 8,
+        "x": 0,
         "y": 0
       },
       "targets": [
@@ -154,8 +75,8 @@
       },
       "gridPos": {
         "h": 5,
-        "w": 4,
-        "x": 16,
+        "w": 8,
+        "x": 8,
         "y": 0
       },
       "targets": [
@@ -176,8 +97,8 @@
       },
       "gridPos": {
         "h": 5,
-        "w": 4,
-        "x": 20,
+        "w": 8,
+        "x": 16,
         "y": 0
       },
       "targets": [
@@ -272,35 +193,6 @@
       "fieldConfig": {
         "defaults": {
           "unit": "s"
-        }
-      }
-    },
-    {
-      "id": 13,
-      "type": "stat",
-      "title": "DD recent non-done share",
-      "description": "Recent planner failure symptom over the last hour.",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "mimir"
-      },
-      "gridPos": {
-        "h": 5,
-        "w": 4,
-        "x": 0,
-        "y": 21
-      },
-      "targets": [
-        {
-          "expr": "sum(rate(dd_planner_run_total{outcome!=\"done\"}[1h])) / clamp_min(sum(rate(dd_planner_run_total[1h])), 0.000001)",
-          "legendFormat": "non-done share"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "percentunit",
-          "min": 0,
-          "max": 1
         }
       }
     },
@@ -452,68 +344,6 @@
           "displayMode": "list",
           "placement": "bottom"
         }
-      }
-    },
-    {
-      "id": 18,
-      "type": "stat",
-      "title": "DD Planner p99 latency",
-      "description": "p99 planner wall time over the last hour. SLO target: <600s (10 min). Green=healthy, red=SLO breach.",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "mimir"
-      },
-      "gridPos": {
-        "h": 5,
-        "w": 12,
-        "x": 0,
-        "y": 31
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "mimir"
-          },
-          "expr": "histogram_quantile(0.99, sum by (le) (rate(dd_planner_run_duration_seconds_bucket[24h])))",
-          "legendFormat": "DD Planner p99 latency",
-          "refId": "A"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "s",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "yellow",
-                "value": 300
-              },
-              {
-                "color": "red",
-                "value": 600
-              }
-            ]
-          },
-          "color": {
-            "mode": "thresholds"
-          }
-        }
-      },
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ]
-        },
-        "orientation": "auto",
-        "textMode": "auto",
-        "colorMode": "background"
       }
     },
     {

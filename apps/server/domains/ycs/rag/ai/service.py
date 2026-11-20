@@ -83,6 +83,9 @@ def _is_structured_schema_error(error: Exception) -> bool:
         "function_calling",
         "function calling",
         "tool call schema",
+        # Some OpenAI-compatible gateways return this internal 500 while
+        # parsing structured graph output instead of reporting a schema error.
+        "nonetype' object has no attribute 'get'",
     ))
 
 

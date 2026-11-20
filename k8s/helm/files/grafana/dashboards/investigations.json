@@ -24,12 +24,6 @@
       "targetBlank": false
     },
     {
-      "title": "DD Pipeline",
-      "type": "link",
-      "url": "/d/coelhonexus-dd-pipeline",
-      "targetBlank": false
-    },
-    {
       "title": "YCS Ask",
       "type": "link",
       "url": "/d/coelhonexus-ycs-retrieval",
@@ -56,38 +50,6 @@
       "options": {
         "mode": "markdown",
         "content": "Start with the latency panels below and use exemplar-backed drilldowns where available. From Tempo, use the provisioned trace-to-logs and trace-to-metrics links. From Loki log rows, use the `TraceID` derived field when present. This dashboard is intentionally mixed: Mimir for symptoms, Loki for recent evidence, Tempo for request-level detail."
-      }
-    },
-    {
-      "id": 2,
-      "type": "timeseries",
-      "title": "Application p95 latency",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "mimir"
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 5
-      },
-      "targets": [
-        {
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(dd_planner_run_duration_seconds_bucket[30m])))",
-          "legendFormat": "DD planner p95",
-          "exemplar": true
-        },
-        {
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(ycs_ask_run_duration_seconds_bucket[30m])))",
-          "legendFormat": "YCS ask p95",
-          "exemplar": true
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "s"
-        }
       }
     },
     {
@@ -171,7 +133,7 @@
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "{namespace=~\"coelhonexus.*\",service_name=\"coelhonexus-celery\"} |~ \"(?i)(planner|synth|study|ycs|ask|scan|task|pipeline|trace_id=)\" | regexp \"(?P<trace_id>(?i)trace_id=[0-9a-f]{32})\" | regexp \"(?P<scan_id>[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\"",
+          "expr": "{namespace=~\"coelhonexus.*\",service_name=\"coelhonexus-celery\"} |~ \"(?i)(bd|distill|ycs|ask|scan|task|pipeline|trace_id=)\" | regexp \"(?P<trace_id>(?i)trace_id=[0-9a-f]{32})\" | regexp \"(?P<scan_id>[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\"",
           "refId": "A"
         }
       ],
@@ -254,7 +216,7 @@
       "id": 8,
       "type": "traces",
       "title": "LLM call traces (gen_ai.chat, last 3h)",
-      "description": "gen_ai.chat spans from Celery \u2014 one row per LLM completion. Sorted by duration to surface slow/stuck model calls. Click a row to see which rotator arm was selected and full token counts.",
+      "description": "gen_ai.chat spans from Celery — one row per LLM completion. Sorted by duration to surface slow/stuck model calls. Click a row to see which rotator arm was selected and full token counts.",
       "datasource": {
         "type": "tempo",
         "uid": "tempo"
@@ -283,7 +245,7 @@
       "id": 9,
       "type": "traces",
       "title": "Review-flagged spans",
-      "description": "Spans tagged by infra.langfuse.service.flag_for_review() — low-confidence outcomes a node explicitly asked a human to look at (e.g. chapter_assign rescue). Click a row to open the full trace and see review.reason / review.severity.",
+      "description": "Spans tagged by infra.langfuse.service.flag_for_review() — low-confidence outcomes a workflow node explicitly asked a human to review. Click a row to open the full trace and see review.reason / review.severity.",
       "datasource": {
         "type": "tempo",
         "uid": "tempo"

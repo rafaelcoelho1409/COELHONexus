@@ -1,7 +1,6 @@
 import type { NextConfig } from "next";
 
 import { env } from "./src/shared/config/env";
-import { buildRedirects } from "./src/shared/config/redirects";
 import { buildRewrites } from "./src/shared/config/rewrites";
 
 const nextConfig: NextConfig = {
@@ -17,9 +16,6 @@ const nextConfig: NextConfig = {
     proxyTimeout: 30 * 60 * 1000,
     // BD uploads are accepted up to 300 MB; leave room for multipart boundaries and headers.
     proxyClientMaxBodySize: "310mb",
-  },
-  async redirects() {
-    return buildRedirects();
   },
   async rewrites() {
     return buildRewrites(env);

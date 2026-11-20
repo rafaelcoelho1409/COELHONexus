@@ -10,21 +10,17 @@ Select the datasource from the top-left dropdown, paste the query, and hit Run.
 ## Table of Contents
 
 1. [Mimir — PromQL](#mimir--promql)
-   - [DD Planner](#dd-planner)
-   - [DD Synth](#dd-synth)
    - [YCS Retrieval](#ycs-retrieval)
    - [LLM Rotator](#llm-rotator)
    - [Service Graph](#service-graph)
    - [SLO / Health Snapshot](#slo--health-snapshot)
 2. [Loki — LogQL](#loki--logql)
    - [Cross-Domain](#cross-domain)
-   - [DD Planner & Synth](#dd-planner--synth)
    - [YCS](#ycs)
    - [LLM Rotator](#llm-rotator-1)
    - [Log Rates](#log-rates)
 3. [Tempo — TraceQL](#tempo--traceql)
    - [Cross-Domain](#cross-domain-1)
-   - [DD Planner & Synth](#dd-planner--synth-1)
    - [YCS Retrieval](#ycs-retrieval-1)
    - [LLM / Rotator](#llm--rotator)
    - [MCP Tools](#mcp-tools)
@@ -32,87 +28,6 @@ Select the datasource from the top-left dropdown, paste the query, and hit Run.
 ---
 
 ## Mimir — PromQL
-
-### DD Planner
-
-**Planner run rate by outcome**
-```promql
-sum by (outcome, framework) (rate(dd_planner_run_total[30m]))
-```
-
-**Planner p50 / p95 / p99 wall time**
-```promql
-histogram_quantile(0.95, sum by (le, framework) (rate(dd_planner_run_duration_seconds_bucket[1h])))
-```
-
-**Planner daily totals (survives pod restarts)**
-```promql
-sum by (outcome, framework) (max_over_time(dd_planner_run_total[24h]))
-```
-
-**Chapter count p95 per planner run**
-```promql
-histogram_quantile(0.95, sum by (le, framework) (rate(dd_planner_chapter_count_bucket[24h])))
-```
-
-**Non-done planner share (error / cancelled rate)**
-```promql
-sum(rate(dd_planner_run_total{outcome!="done"}[1h]))
-/ clamp_min(sum(rate(dd_planner_run_total[1h])), 0.001) * 100
-```
-
----
-
-### DD Synth
-
-**Chapter outcome rate (accept vs debt_below)**
-```promql
-sum by (outcome, framework) (rate(dd_chapter_outcome_total[30m]))
-```
-
-**Chapter synth p95 wall time**
-```promql
-histogram_quantile(0.95, sum by (le, framework) (rate(dd_chapter_synth_duration_seconds_bucket[1h])))
-```
-
-**Self-Refine iterations to accept — p50 / p95**
-```promql
-histogram_quantile(0.95, sum by (le, framework) (rate(dd_refiner_iters_to_accept_bucket[1h])))
-```
-
-**Grader score by dimension (mean)**
-```promql
-sum by (dim) (rate(dd_classical_grader_dim_score_sum[1h]))
-/ clamp_min(sum by (dim) (rate(dd_classical_grader_dim_score_count[1h])), 0.001)
-```
-
-**Classical patch applications by dimension**
-```promql
-sum by (dim, framework) (rate(dd_classical_patch_applied_total[1h]))
-```
-
-**Audit missing-hash ratio — mean per iteration**
-```promql
-sum by (framework) (rate(dd_audit_missing_hashes_ratio_sum[1h]))
-/ clamp_min(sum by (framework) (rate(dd_audit_missing_hashes_ratio_count[1h])), 0.001)
-```
-
-**Bucket split overflow events (section-cap breaches)**
-```promql
-sum by (framework, sections_dropped) (rate(dd_bucket_split_overflow_total[1h]))
-```
-
-**Study completion p95 (ingest → assembler, end-to-end)**
-```promql
-histogram_quantile(0.95, sum by (le, framework) (rate(dd_study_completion_seconds_bucket[1h])))
-```
-
-**Studies completed (daily)**
-```promql
-sum by (framework, outcome) (max_over_time(dd_study_completion_seconds_count[24h]))
-```
-
----
 
 ### YCS Retrieval
 
@@ -226,11 +141,6 @@ sum by (client, server) (rate(traces_service_graph_request_failed_total[5m]))
 
 > Instant values — paste one at a time in Explore for a quick health check.
 
-**DD Planner p99 latency (target: <600s)**
-```promql
-histogram_quantile(0.99, sum by (le) (rate(dd_planner_run_duration_seconds_bucket[24h])))
-```
-
 **YCS grounded rate (target: >80%)**
 ```promql
 sum(max_over_time(ycs_grounded_total[24h]))
@@ -265,7 +175,7 @@ sum(max_over_time(ycs_grounded_total[24h]))
 ```logql
 {namespace=~"coelhonexus.*",
  service_name=~"coelhonexus-celery|coelhonexus-fastmcp"}
-  |~ "(?i)(planner|synth|study|ycs|ask|scan|task|pipeline)"
+  |~ "(?i)(bd|distill|ycs|ask|scan|task|pipeline)"
 ```
 
 **Error rate over time (all services)**
@@ -275,69 +185,6 @@ sum by (service_name) (
     {namespace=~"coelhonexus.*",
      service_name=~"coelhonexus-server|coelhonexus-celery|coelhonexus-fastmcp"}
     |~ "(?i)(error|exception|traceback|critical)"
-    [5m]
-  )
-)
-```
-
----
-
-### DD Planner & Synth
-
-**Planner run completions (done / cancelled / failed)**
-```logql
-{namespace=~"coelhonexus.*", service_name="coelhonexus-celery"}
-  |~ "\\[planner\\]"
-  |~ "(?i)(done|cancelled|failed)"
-```
-
-**Planner node failures with error type**
-```logql
-{namespace=~"coelhonexus.*", service_name="coelhonexus-celery"}
-  |~ "\\[planner\\]"
-  |~ "run failed"
-```
-
-**Planner catch-up recovery events (missing nodes)**
-```logql
-{namespace=~"coelhonexus.*", service_name="coelhonexus-celery"}
-  |~ "catch-up ran missing node"
-```
-
-**Study orchestrator — chapter status stream**
-```logql
-{namespace=~"coelhonexus.*", service_name="coelhonexus-celery"}
-  |~ "\\[study-orchestrator\\]"
-```
-
-**Study completion summary (done + chapter counts)**
-```logql
-{namespace=~"coelhonexus.*", service_name="coelhonexus-celery"}
-  |~ "\\[study-orchestrator\\]"
-  |~ "done"
-  | regexp "(?P<slug>[a-z][a-z0-9_-]{2,}) n_completed=(?P<n_completed>\\d+)"
-```
-
-**book_harmonize cache hits (cross-chapter coherence)**
-```logql
-{namespace=~"coelhonexus.*", service_name="coelhonexus-celery"}
-  |~ "\\[book_harmonize\\]"
-  |~ "CACHE HIT"
-```
-
-**Synth chapter crash events**
-```logql
-{namespace=~"coelhonexus.*", service_name="coelhonexus-celery"}
-  |~ "\\[synth\\]"
-  |~ "run failed"
-```
-
-**DD chapter synth rate over time**
-```logql
-sum by (detected_level) (
-  count_over_time(
-    {namespace=~"coelhonexus.*", service_name="coelhonexus-celery"}
-    |~ "(?i)(planner|synth|study|chapter)"
     [5m]
   )
 )
@@ -471,55 +318,6 @@ sum by (service_name) (
 
 ---
 
-### DD Planner & Synth
-
-**All DD planner root spans**
-```traceql
-{ name="dd.planner.run" }
-```
-
-**DD planner node spans (individual LangGraph nodes)**
-```traceql
-{ name=~"dd.planner.node.*" }
-```
-
-**Failed DD planner node spans**
-```traceql
-{ name=~"dd.planner.node.*" && status=error }
-```
-
-**Planner spans for a specific framework** (replace slug)
-```traceql
-{ name="dd.planner.run" && span.planner.framework_slug="langchain-docs" }
-```
-
-**DD synth chapter root spans**
-```traceql
-{ name="dd.synth.chapter.run" }
-```
-
-**DD synth node spans — all nodes across chapters**
-```traceql
-{ name=~"dd.synth.node.*" }
-```
-
-**DD synth study root spans (multi-chapter orchestrator)**
-```traceql
-{ name="dd.synth.study.run" }
-```
-
-**book_harmonize spans (cross-chapter coherence pass)**
-```traceql
-{ name="dd.synth.node.book_harmonize" }
-```
-
-**Slow DD planner runs (>5 min)**
-```traceql
-{ name="dd.planner.run" && duration>5m }
-```
-
----
-
 ### YCS Retrieval
 
 **All YCS ask root spans**
@@ -571,7 +369,7 @@ sum by (service_name) (
 { name="gen_ai.chat" && duration>30s }
 ```
 
-**LLM calls from Celery only (DD domain)**
+**LLM calls from Celery only**
 ```traceql
 { resource.service.name="coelhonexus-celery" && name="gen_ai.chat" }
 ```

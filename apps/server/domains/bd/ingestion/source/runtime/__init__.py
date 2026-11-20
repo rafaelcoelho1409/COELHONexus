@@ -1,4 +1,4 @@
-"""Extraction runtime — cross-cutting machinery: cancel, dispatch, progress. Mirrors `domains.dd.pages.runtime`."""
+"""Extraction runtime — cross-cutting machinery: cancellation, dispatch, and progress."""
 from __future__ import annotations
 
 from . import cancel, dispatch, progress

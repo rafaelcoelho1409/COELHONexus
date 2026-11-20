@@ -2,22 +2,19 @@
 keyless MCP web-search fallback, shared by both the standard and
 adaptive graphs.
 
-`resilient_ainvoke`/`hedged_ainvoke` mirror the Docs Distiller Planner
-engine (`doc_distill` + `chat_text_async`): retry only
-genuinely transient errors (timeout/connection — never rate_limit,
+`resilient_ainvoke`/`hedged_ainvoke` retry only genuinely transient
+errors (timeout/connection — never rate_limit,
 which means the provider side is benched and a retry just burns
 budget), with jittered backoff so concurrent retries don't herd onto
 the same arm.
 
-Structure here is one layer simpler than DD's on purpose: every Ask
-node already wraps its call in `asyncio.wait_for(..., timeout=node_timeout)`
+Every Ask node wraps its call in `asyncio.wait_for(..., timeout=node_timeout)`
 where `node_timeout` (30-600s) sits well under the SDK client's own
 600s ceiling — so that wait_for IS the hard backstop over the SDK
 timeout (the httpx-gap fix: httpx read-timeout measures inter-chunk
 gaps, not total call time; a trickling or silently-stalled connection
 outlives it without raising, but it cannot outlive this wait_for). This
-module adds the missing piece DD has and Ask lacked: transparent
-retries *inside* that bound.
+module adds transparent retries *inside* that bound.
 
 Drop-in contract: `resilient_ainvoke(chain, payload, ...)` raises the
 LAST exception unchanged after exhausting attempts — so each node's
@@ -68,7 +65,7 @@ async def capture_llm_usage(response: object, *, duration_s: float | None = None
     fail the caller's real answer.
 
     2026-09-24: also records `gen_ai_call_total`/`gen_ai_call_duration`
-    (the same custom metric Docs Distiller's calls populate) — this was
+    (the custom metric used by application LLM calls) — this was
     a second, separate gap from the one above: LangFuse already tracks
     every Ask chat call as a `GENERATION` automatically (LangChain's own
     instrumentation), but nothing fed the Mimir-side metric, so
@@ -168,7 +165,7 @@ async def resilient_ainvoke(
             if not domain.is_transient(e) or attempt >= max_attempts:
                 break
             delay = backoff_s[min(attempt - 1, len(backoff_s) - 1)]
-            delay *= 1.0 + random.random() * 0.2  # DD-parity jitter
+            delay *= 1.0 + random.random() * 0.2
             logger.warning(
                 f"[ycs:rag:{operation}] transient "
                 f"{type(e).__name__} (attempt {attempt}/{max_attempts}) — "

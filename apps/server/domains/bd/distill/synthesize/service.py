@@ -1,11 +1,11 @@
 """Prepare chapter groups and load persisted learning-unit evidence."""
 from __future__ import annotations
 
-import domains
-
 import json
 from collections.abc import Awaitable, Callable
 from typing import Any
+
+import domains
 
 
 async def read_learning_units(
@@ -119,14 +119,21 @@ async def _write_chapter_input(
 async def prepare_chapters(
     storage: Any,
     state: dict[str, Any],
+    on_unit_progress: Callable[[str, str, int], Awaitable[None]] | None = None,
 ) -> dict[str, Any]:
     refs = []
-    for ref in state.get("completed_units", []):
+    completed_units = state.get("completed_units", [])
+    total_units = len(completed_units)
+    for ref in completed_units:
+        if on_unit_progress is not None:
+            await on_unit_progress(ref["unit_id"], "running", total_units)
         artifact_key = domains.bd.distill.keys.learning_unit_key(state["book_id"], state["run_id"], ref["unit_id"])
         artifact = json.loads(await storage.read_text(artifact_key))
         unit_ids = [item["learning_unit_id"] for item in artifact.get("lessons", [])]
         if unit_ids:
             refs.append({**ref, "learning_unit_ids": unit_ids})
+        if on_unit_progress is not None:
+            await on_unit_progress(ref["unit_id"], "done", total_units)
     refs.sort(key = lambda ref: (ref["page_number"], ref["char_start"], ref["unit_id"]))
     source_chapters = state.get("source_chapters", [])
     groups: list[dict[str, Any]] = []

@@ -1,11 +1,13 @@
 """Verify candidate lessons in bounded unit batches."""
 from __future__ import annotations
-import domains
-from . import service
-from .... import graphs
 
 from langgraph.runtime import Runtime
 from langgraph.types import Send
+
+import domains
+
+from .... import graphs
+from . import service
 
 
 def dispatch_units(state: graphs.distill.states.DistillRunState) -> list[Send] | str:
@@ -30,7 +32,19 @@ async def verify_unit(
     async def execute() -> dict:
         completed = []
         for ref in graph_state.get("unit_batch", []):
+            await graphs.service.report_node_item_progress(
+                dependencies.progress_callback,
+                "verify_unit",
+                ref["unit_id"],
+                "running",
+            )
             output = await service.verify_unit(dependencies, {**graph_state, "unit_ref": ref})
+            await graphs.service.report_node_item_progress(
+                dependencies.progress_callback,
+                "verify_unit",
+                ref["unit_id"],
+                "done",
+            )
             completed.extend(output.get("completed_units", []))
         return {"completed_units": completed}
 

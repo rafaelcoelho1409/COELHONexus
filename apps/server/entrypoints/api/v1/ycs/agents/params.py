@@ -25,8 +25,8 @@ ASTREAM_BOOTSTRAP_FALLBACK_TICKS = max(
 LANGGRAPH_WATCHDOG_S = 15 * 60.0
 
 # Global per-request deadlines by requested mode (2026-09-15): bounds
-# the total grind during provider outages — DD's backstop principle at
-# graph scope. Auto gets the roomy default since it may classify deep;
+# the total grind during provider outages. Auto gets the roomy default
+# since it may classify deep;
 # forced modes get exact budgets. On expiry the request serves ONE
 # bounded `fallback_answer` pass (general knowledge + whatever was
 # asked) instead of spinning until the client gives up.

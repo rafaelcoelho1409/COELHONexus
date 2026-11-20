@@ -12,6 +12,7 @@ import domains
 async def prepare_units(
     storage: Any,
     state: dict[str, Any],
+    on_page_progress: Callable[[int, str, int], Awaitable[None]] | None = None,
 ) -> dict[str, Any]:
     source_manifest = await domains.bd.ingestion.source.storage.service.read_manifest(storage, state["book_id"])
     if source_manifest is None or source_manifest.get("status") != domains.bd.ingestion.source.storage.params.STATUS_DONE:
@@ -101,7 +102,10 @@ async def prepare_units(
     qa_by_number = {page.page_number: page for page in qa_manifest.pages}
     source_pages = []
     unit_refs = []
+    total_pages = len(page_number_map)
     for source_page_number, processed_page_number in page_number_map:
+        if on_page_progress is not None:
+            await on_page_progress(source_page_number, "running", total_pages)
         qa_page = qa_by_number.get(source_page_number)
         if qa_page is None:
             raise ValueError(f"the processed book references unknown source page {source_page_number}")
@@ -109,6 +113,8 @@ async def prepare_units(
         if selection_by_page is not None and content_page is None:
             raise ValueError(f"content selection has no page {qa_page.page_number}")
         if content_page is not None and content_page.disposition == "exclude":
+            if on_page_progress is not None:
+                await on_page_progress(source_page_number, "done", total_pages)
             continue
         raw_page = page_by_number.get(qa_page.page_number)
         if raw_page is None:
@@ -131,6 +137,8 @@ async def prepare_units(
         }
         source_pages.append(source_page)
         if qa_page.delivery_disposition == "discarded_blank":
+            if on_page_progress is not None:
+                await on_page_progress(source_page_number, "done", total_pages)
             continue
         page_text = await storage.read_text(qa_page.normalized_key)
         if hashlib.sha256(page_text.encode("utf-8")).hexdigest() != qa_page.normalized_sha256:
@@ -165,6 +173,8 @@ async def prepare_units(
             else:
                 await storage.write(input_key, domains.bd.distill.domain.json_body(input_record), content_type = domains.bd.distill.params.JSON_TYPE)
             unit_refs.append(ref)
+        if on_page_progress is not None:
+            await on_page_progress(source_page_number, "done", total_pages)
 
     return {
         "source_pages": source_pages,

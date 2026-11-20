@@ -22,7 +22,6 @@ declare -A ICONS=(
   [argocd]="https://cdn.jsdelivr.net/gh/devicons/devicon/icons/argocd/argocd-original.svg"
   [neo4j]="https://cdn.jsdelivr.net/gh/devicons/devicon/icons/neo4j/neo4j-original.svg"
   [elasticsearch]="https://cdn.jsdelivr.net/gh/devicons/devicon/icons/elasticsearch/elasticsearch-original.svg"
-  [fasthtml]="https://www.fastht.ml/docs/logo.svg"
   [langfuse]="https://langfuse.com/langfuse-wordart.svg"
   # New icons not in devicons — sourced from project catalogs / brand CDNs
   # simpleicons version: fill="#DC244C" colored icon mark (qdrant.tech logo is white-on-white)

@@ -99,8 +99,9 @@ async def ingest_pipeline(
     progress_cb:     Callable[[dict[str, Any]], None],
 ) -> dict[str, Any]:
     es = infra.elasticsearch.service.new_es()
-    # Deprecated did NOT pass refresh_schema=False here — port-fidelity.
-    neo4j_graph = infra.neo4j.service.new_graph(refresh_schema = True)
+    # Ingestion uses explicit graph operations and does not need APOC
+    # schema reflection; keep startup bounded like BD Agentic RAG.
+    neo4j_graph = infra.neo4j.service.new_graph(refresh_schema = False)
     # 2026-09-14: initialized up here (not where the client is
     # created below) so the `finally` can always reference them,
     # including the early `return {"error": ...}` path.
@@ -114,9 +115,8 @@ async def ingest_pipeline(
     # a working default even with zero explicit Settings-page config —
     # there's no meaningful "unconfigured" state left to gate on. A
     # genuinely unreachable endpoint now surfaces as a real error from
-    # the actual call, same as everywhere else this session moved away
-    # from synthetic pre-flight checks (see the DD readiness-gate
-    # finding: a hardcoded-True check is worse than no check).
+    # the actual call, consistent with using backend responses as the
+    # source of truth instead of maintaining synthetic pre-flight checks.
     try:
         progress_cb({"phase": "fetching"})
         transcripts = await domains.ycs.ingestion.service.fetch_transcripts_from_es(es, video_ids)
@@ -321,8 +321,7 @@ async def ingest_pipeline(
                         f"{type(e).__name__}: {e}"
                     )
             if attempt > 0:
-                # Jittered backoff between passes (DD pattern,
-                # scaled for heavy calls): immediate retries hammer
+                # Jittered backoff between passes: immediate retries hammer
                 # an already-exhausted free-tier pool.
                 _lo, _hi = domains.ycs.rag.source.indexes.neo4j_index.params.RETRY_PASS_BACKOFF_S
                 _sleep_s = _lo + random.uniform(0, _hi - _lo)
@@ -375,8 +374,7 @@ async def ingest_pipeline(
                 extraction_stats.get("videos_completed", 0) or 0,
             )
             if videos_completed_this_pass == 0:
-                # Streak halt (DD's SUSTAINED_INFRA_OUTAGE_LIMIT,
-                # adapted to passes): consecutive all-failed INFRA
+                # Streak halt: consecutive all-failed INFRA
                 # passes stop early — the provider is down, not
                 # flaky. Non-infra zeros (model/silent-zero) break
                 # immediately: re-attempting won't heal those.
@@ -437,7 +435,7 @@ async def ingest_pipeline(
                 logger.error(
                     f"[ingest_to_neo4j] {pass_label} produced 0 "
                     f"successes out of {len(pending_transcripts)} "
-                    f"attempted — endpoint likely down, giving up on "
+                    f"attempted — giving up on "
                     f"the remaining {len(failed_ids)} video(s) for "
                     f"this run: {failed_ids[:10]} "
                     f"(breakdown={agg_error_breakdown})"
@@ -520,43 +518,43 @@ async def ingest_pipeline(
                             part_total = part_total_by_vid.get(vid),
                         )
                         if total is not None and finished is not None and finished >= total:
-                            logger.info(
-                                f"[ingest_to_neo4j] {extract_id}: last "
-                                f"video of the run's Neo4j phase "
-                                f"({finished}/{total}) — running entity "
-                                f"resolution once"
-                            )
-                            # 2026-09-15: `finished >= total` (just
-                            # above) already flips the poller-facing
-                            # state to SUCCESS/100% — but
-                            # `entities_merged` isn't known until
-                            # this whole-graph resolve pass finishes
-                            # (tens of seconds on a large graph).
-                            # `neo4j_resolving_key` tells
-                            # `get_phase_progress` to keep reporting
-                            # PROGRESS until it's actually written,
-                            # so the bar doesn't freeze at "0
-                            # merged". TTL is a backstop if this
-                            # process dies mid-resolution.
-                            await r.set(
-                                domains.ycs.ingestion.pipeline_task.keys.neo4j_resolving_key(extract_id), "1", ex = 300,
-                            )
-                            try:
-                                agg_merged = await domains.ycs.rag.source.indexes.neo4j_index.service.resolve_entities(neo4j_graph)
-                                # entities_merged is a WHOLE-RUN number,
-                                # only known now — patched onto the
-                                # DISPLAYED status entry: parent_vid, not
-                                # vid — a partition's own id never gets
-                                # its own phase_status_key entry (its
-                                # outcome lives in the partition-group
-                                # hash until the group completes and
-                                # folds into one entry under the parent).
-                                await domains.ycs.ingestion.pipeline_task.service.update_video_extra(
-                                    r, extract_id, "neo4j", parent_vid,
-                                    {"entities_merged": agg_merged},
-                                )
-                            finally:
-                                await r.delete(domains.ycs.ingestion.pipeline_task.keys.neo4j_resolving_key(extract_id))
+                            async with domains.ycs.ingestion.pipeline_task.service.neo4j_resolution_guard(
+                                r, extract_id,
+                            ) as resolution_lock:
+                                if not resolution_lock:
+                                    logger.info(
+                                        f"[ingest_to_neo4j] {extract_id}: entity "
+                                        "resolution is already active"
+                                    )
+                                else:
+                                    # The guard marks the phase active before
+                                    # reading totals and refreshes the marker
+                                    # while a long resolution pass is running.
+                                    phase_progress = await domains.ycs.ingestion.pipeline_task.service.get_phase_progress(
+                                        r, extract_id, "neo4j",
+                                    )
+                                    run_totals = phase_progress.get("result") or {}
+                                    run_nodes_created = run_totals.get("nodes_created", 0)
+                                    if run_nodes_created > 0:
+                                        logger.info(
+                                            f"[ingest_to_neo4j] {extract_id}: last "
+                                            f"video of the Neo4j phase "
+                                            f"({finished}/{total}); resolving entities "
+                                            f"after {run_nodes_created} node writes"
+                                        )
+                                        agg_merged = await domains.ycs.rag.source.indexes.neo4j_index.service.resolve_entities(
+                                            neo4j_graph,
+                                        )
+                                    else:
+                                        logger.info(
+                                            f"[ingest_to_neo4j] {extract_id}: no Neo4j "
+                                            "nodes were written; skipping whole-graph "
+                                            "entity resolution"
+                                        )
+                                    await domains.ycs.ingestion.pipeline_task.service.update_video_extra(
+                                        r, extract_id, "neo4j", parent_vid,
+                                        {"entities_merged": agg_merged},
+                                    )
                         await domains.ycs.ingestion.pipeline_task.service.maybe_finalize(r, extract_id)
                 finally:
                     await r.close()

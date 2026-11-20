@@ -16,7 +16,7 @@ export type AiGenerateRequest = {
     /**
      * App
      */
-    app?: 'dd' | 'ycs';
+    app?: 'ycs';
     /**
      * Prompt
      */
@@ -1260,6 +1260,54 @@ export type HttpValidationError = {
 };
 
 /**
+ * HistoryEntry
+ */
+export type HistoryEntry = {
+    /**
+     * Id
+     */
+    id: number;
+    /**
+     * Backend
+     */
+    backend: 'elasticsearch' | 'qdrant' | 'neo4j';
+    /**
+     * App
+     */
+    app: 'ycs';
+    /**
+     * Body
+     */
+    body: string;
+    /**
+     * Prompt
+     */
+    prompt?: string;
+    /**
+     * Created At
+     */
+    created_at?: string;
+    /**
+     * Favorite
+     */
+    favorite?: boolean;
+};
+
+/**
+ * HistoryResponse
+ */
+export type HistoryResponse = {
+    /**
+     * Items
+     */
+    items?: Array<HistoryEntry>;
+    /**
+     * Total
+     */
+    total?: number;
+};
+
+/**
  * IngestRequest
  *
  * Request to ingest transcripts from ES into Qdrant.
@@ -1950,7 +1998,7 @@ export type QueryRequest = {
     /**
      * App
      */
-    app?: 'dd' | 'ycs';
+    app?: 'ycs';
     /**
      * Q
      *
@@ -1983,7 +2031,7 @@ export type QueryResponse = {
     /**
      * App
      */
-    app: 'dd' | 'ycs';
+    app: 'ycs';
     /**
      * Supported
      */
@@ -2012,30 +2060,6 @@ export type QueryResponse = {
      * Error
      */
     error?: string | null;
-};
-
-/**
- * QuerySchemaResponse
- */
-export type QuerySchemaResponse = {
-    /**
-     * Backend
-     */
-    backend: 'elasticsearch' | 'qdrant' | 'neo4j';
-    /**
-     * App
-     */
-    app?: 'bd';
-    /**
-     * Cached At
-     */
-    cached_at?: number;
-    /**
-     * Schema
-     */
-    schema?: {
-        [key: string]: unknown;
-    };
 };
 
 /**
@@ -2469,6 +2493,10 @@ export type RetrievalIndexStatus = {
      */
     neo4j_pages_completed?: number;
     /**
+     * Neo4J Llm Calls Active
+     */
+    neo4j_llm_calls_active?: number | null;
+    /**
      * Neo4J Stage
      */
     neo4j_stage?: 'idle' | 'extracting' | 'building_graph' | 'clearing_graph' | 'preparing_writes' | 'writing_nodes' | 'writing_relationships' | 'complete';
@@ -2560,6 +2588,32 @@ export type RunStart = {
      * Run Id
      */
     run_id: string;
+};
+
+/**
+ * SaveHistoryRequest
+ */
+export type SaveHistoryRequest = {
+    /**
+     * Backend
+     */
+    backend: 'elasticsearch' | 'qdrant' | 'neo4j';
+    /**
+     * App
+     */
+    app?: 'ycs';
+    /**
+     * Body
+     */
+    body: string;
+    /**
+     * Prompt
+     */
+    prompt?: string;
+    /**
+     * Favorite
+     */
+    favorite?: boolean;
 };
 
 /**
@@ -2920,20 +2974,6 @@ export type StartResponse = {
 };
 
 /**
- * StartRunBody
- */
-export type StartRunBody = {
-    /**
-     * Slug
-     */
-    slug: string;
-    /**
-     * Refresh
-     */
-    refresh?: boolean;
-};
-
-/**
  * StudyGuideDocument
  */
 export type StudyGuideDocument = {
@@ -3059,20 +3099,6 @@ export type StudyGuideDocument = {
      * Review Required
      */
     review_required: boolean;
-};
-
-/**
- * TierBenchmarkBody
- */
-export type TierBenchmarkBody = {
-    /**
-     * Tier
-     */
-    tier: 1 | 2 | 3 | 4;
-    /**
-     * Round Id
-     */
-    round_id: string;
 };
 
 /**
@@ -3239,98 +3265,6 @@ export type WipeResponse = {
 };
 
 /**
- * RawQueryHit
- *
- * Renderer-friendly projection of one row, generic across backends.
- *
- * Each backend's `service.raw_*` writes the FULL store-side record
- * here under `raw`; `summary` is a short label so the right-pane
- * renderers don't have to know each backend's payload shape just
- * to print a fallback title.
- */
-export type DomainsYcsQuerySchemasRawQueryHit = {
-    /**
-     * Summary
-     */
-    summary?: string;
-    /**
-     * Raw
-     */
-    raw?: {
-        [key: string]: unknown;
-    };
-};
-
-/**
- * RawQueryRequest
- *
- * Raw DSL/Cypher/JSON typed by the user in the CodeMirror editor.
- *
- * `app` is currently pinned to `"ycs"` by the frontend but threads
- * through the same matrix so re-enabling the cross-app pivot is one
- * JS line + a router-side payload.
- *
- * The `body` is the editor's text content verbatim:
- * - Elasticsearch → JSON request-body for `_search`
- * - Qdrant        → JSON `{"op": ..., ...}` (see domain.parse_qdrant_body)
- * - Neo4j         → Cypher source
- */
-export type DomainsYcsQuerySchemasRawQueryRequest = {
-    /**
-     * App
-     */
-    app?: 'dd' | 'ycs';
-    /**
-     * Body
-     *
-     * Editor content.
-     */
-    body?: string;
-};
-
-/**
- * RawQueryResponse
- *
- * `ok=False` short-circuits the UI to the error band; `notes` is a
- * list of user-visible advisories (e.g. "default size=20 synthesized
- * because the request body omitted it").
- */
-export type DomainsYcsQuerySchemasRawQueryResponse = {
-    /**
-     * Backend
-     */
-    backend: 'elasticsearch' | 'qdrant' | 'neo4j';
-    /**
-     * App
-     */
-    app: 'dd' | 'ycs';
-    /**
-     * Ok
-     */
-    ok: boolean;
-    /**
-     * Error
-     */
-    error?: string | null;
-    /**
-     * Notes
-     */
-    notes?: Array<string>;
-    /**
-     * Took Ms
-     */
-    took_ms?: number;
-    /**
-     * Total
-     */
-    total?: number | null;
-    /**
-     * Hits
-     */
-    hits?: Array<DomainsYcsQuerySchemasRawQueryHit>;
-};
-
-/**
  * CancelResponse
  */
 export type EntrypointsApiV1BdDistillSchemasCancelResponse = {
@@ -3360,6 +3294,30 @@ export type EntrypointsApiV1BdIngestionSchemasCancelResponse = {
      * Status
      */
     status: string;
+};
+
+/**
+ * QuerySchemaResponse
+ */
+export type EntrypointsApiV1BdQuerySchemasQuerySchemaResponse = {
+    /**
+     * Backend
+     */
+    backend: 'elasticsearch' | 'qdrant' | 'neo4j';
+    /**
+     * App
+     */
+    app?: 'bd';
+    /**
+     * Cached At
+     */
+    cached_at?: number;
+    /**
+     * Schema
+     */
+    schema?: {
+        [key: string]: unknown;
+    };
 };
 
 /**
@@ -3428,6 +3386,122 @@ export type EntrypointsApiV1BdQuerySchemasRawQueryResponse = {
      * Hits
      */
     hits?: Array<EntrypointsApiV1BdQuerySchemasRawQueryHit>;
+};
+
+/**
+ * QuerySchemaResponse
+ */
+export type EntrypointsApiV1YcsQuerySchemasQuerySchemaResponse = {
+    /**
+     * Backend
+     */
+    backend: 'elasticsearch' | 'qdrant' | 'neo4j';
+    /**
+     * App
+     */
+    app?: 'ycs';
+    /**
+     * Cached At
+     */
+    cached_at?: number;
+    /**
+     * Schema
+     */
+    schema?: {
+        [key: string]: unknown;
+    };
+};
+
+/**
+ * RawQueryHit
+ *
+ * Renderer-friendly projection of one row, generic across backends.
+ *
+ * Each backend's `service.raw_*` writes the FULL store-side record
+ * here under `raw`; `summary` is a short label so the right-pane
+ * renderers don't have to know each backend's payload shape just
+ * to print a fallback title.
+ */
+export type EntrypointsApiV1YcsQuerySchemasRawQueryHit = {
+    /**
+     * Summary
+     */
+    summary?: string;
+    /**
+     * Raw
+     */
+    raw?: {
+        [key: string]: unknown;
+    };
+};
+
+/**
+ * RawQueryRequest
+ *
+ * Raw DSL/Cypher/JSON typed by the user in the CodeMirror editor.
+ *
+ * `app` is currently pinned to `"ycs"` by the frontend but threads
+ * through the same matrix so re-enabling the cross-app pivot is one
+ * JS line + a router-side payload.
+ *
+ * The `body` is the editor's text content verbatim:
+ * - Elasticsearch → JSON request-body for `_search`
+ * - Qdrant        → JSON `{"op": ..., ...}` (see domain.parse_qdrant_body)
+ * - Neo4j         → Cypher source
+ */
+export type EntrypointsApiV1YcsQuerySchemasRawQueryRequest = {
+    /**
+     * App
+     */
+    app?: 'ycs';
+    /**
+     * Body
+     *
+     * Editor content.
+     */
+    body?: string;
+};
+
+/**
+ * RawQueryResponse
+ *
+ * `ok=False` short-circuits the UI to the error band; `notes` is a
+ * list of user-visible advisories (e.g. "default size=20 synthesized
+ * because the request body omitted it").
+ */
+export type EntrypointsApiV1YcsQuerySchemasRawQueryResponse = {
+    /**
+     * Backend
+     */
+    backend: 'elasticsearch' | 'qdrant' | 'neo4j';
+    /**
+     * App
+     */
+    app: 'ycs';
+    /**
+     * Ok
+     */
+    ok: boolean;
+    /**
+     * Error
+     */
+    error?: string | null;
+    /**
+     * Notes
+     */
+    notes?: Array<string>;
+    /**
+     * Took Ms
+     */
+    took_ms?: number;
+    /**
+     * Total
+     */
+    total?: number | null;
+    /**
+     * Hits
+     */
+    hits?: Array<EntrypointsApiV1YcsQuerySchemasRawQueryHit>;
 };
 
 export type GetHealthData = {
@@ -5341,1902 +5415,10 @@ export type GetBdQuerySchemaBackendResponses = {
     /**
      * Successful Response
      */
-    200: QuerySchemaResponse;
+    200: EntrypointsApiV1BdQuerySchemasQuerySchemaResponse;
 };
 
 export type GetBdQuerySchemaBackendResponse = GetBdQuerySchemaBackendResponses[keyof GetBdQuerySchemaBackendResponses];
-
-export type GetDdCatalogData = {
-    body?: never;
-    path?: never;
-    query?: never;
-    url: '/api/v1/dd/catalog';
-};
-
-export type GetDdCatalogResponses = {
-    /**
-     * Response Get Dd Catalog
-     *
-     * Successful Response
-     */
-    200: Array<{
-        [key: string]: unknown;
-    }>;
-};
-
-export type GetDdCatalogResponse = GetDdCatalogResponses[keyof GetDdCatalogResponses];
-
-export type GetDdCatalogSlugData = {
-    body?: never;
-    path: {
-        /**
-         * Slug
-         */
-        slug: string;
-    };
-    query?: never;
-    url: '/api/v1/dd/catalog/{slug}';
-};
-
-export type GetDdCatalogSlugErrors = {
-    /**
-     * Validation Error
-     */
-    422: HttpValidationError;
-};
-
-export type GetDdCatalogSlugError = GetDdCatalogSlugErrors[keyof GetDdCatalogSlugErrors];
-
-export type GetDdCatalogSlugResponses = {
-    /**
-     * Response Get Dd Catalog Slug
-     *
-     * Successful Response
-     */
-    200: {
-        [key: string]: unknown;
-    };
-};
-
-export type GetDdCatalogSlugResponse = GetDdCatalogSlugResponses[keyof GetDdCatalogSlugResponses];
-
-export type GetDdDebugBenchmarksRoundIdData = {
-    body?: never;
-    path: {
-        /**
-         * Round Id
-         */
-        round_id: string;
-    };
-    query?: never;
-    url: '/api/v1/dd/debug/benchmarks/{round_id}';
-};
-
-export type GetDdDebugBenchmarksRoundIdErrors = {
-    /**
-     * Validation Error
-     */
-    422: HttpValidationError;
-};
-
-export type GetDdDebugBenchmarksRoundIdError = GetDdDebugBenchmarksRoundIdErrors[keyof GetDdDebugBenchmarksRoundIdErrors];
-
-export type GetDdDebugBenchmarksRoundIdResponses = {
-    /**
-     * Response Get Dd Debug Benchmarks Round Id
-     *
-     * Successful Response
-     */
-    200: {
-        [key: string]: unknown;
-    };
-};
-
-export type GetDdDebugBenchmarksRoundIdResponse = GetDdDebugBenchmarksRoundIdResponses[keyof GetDdDebugBenchmarksRoundIdResponses];
-
-export type GetDdDebugBenchmarksRoundIdRunIdData = {
-    body?: never;
-    path: {
-        /**
-         * Round Id
-         */
-        round_id: string;
-        /**
-         * Run Id
-         */
-        run_id: string;
-    };
-    query?: never;
-    url: '/api/v1/dd/debug/benchmarks/{round_id}/{run_id}';
-};
-
-export type GetDdDebugBenchmarksRoundIdRunIdErrors = {
-    /**
-     * Validation Error
-     */
-    422: HttpValidationError;
-};
-
-export type GetDdDebugBenchmarksRoundIdRunIdError = GetDdDebugBenchmarksRoundIdRunIdErrors[keyof GetDdDebugBenchmarksRoundIdRunIdErrors];
-
-export type GetDdDebugBenchmarksRoundIdRunIdResponses = {
-    /**
-     * Response Get Dd Debug Benchmarks Round Id Run Id
-     *
-     * Successful Response
-     */
-    200: {
-        [key: string]: unknown;
-    };
-};
-
-export type GetDdDebugBenchmarksRoundIdRunIdResponse = GetDdDebugBenchmarksRoundIdRunIdResponses[keyof GetDdDebugBenchmarksRoundIdRunIdResponses];
-
-export type PostDdDebugBenchmarksSlugData = {
-    body: TierBenchmarkBody;
-    path: {
-        /**
-         * Slug
-         */
-        slug: string;
-    };
-    query?: never;
-    url: '/api/v1/dd/debug/benchmarks/{slug}';
-};
-
-export type PostDdDebugBenchmarksSlugErrors = {
-    /**
-     * Validation Error
-     */
-    422: HttpValidationError;
-};
-
-export type PostDdDebugBenchmarksSlugError = PostDdDebugBenchmarksSlugErrors[keyof PostDdDebugBenchmarksSlugErrors];
-
-export type PostDdDebugBenchmarksSlugResponses = {
-    /**
-     * Response Post Dd Debug Benchmarks Slug
-     *
-     * Successful Response
-     */
-    200: {
-        [key: string]: unknown;
-    };
-};
-
-export type PostDdDebugBenchmarksSlugResponse = PostDdDebugBenchmarksSlugResponses[keyof PostDdDebugBenchmarksSlugResponses];
-
-export type PostDdDebugFinalizeSlugData = {
-    body?: never;
-    path: {
-        /**
-         * Slug
-         */
-        slug: string;
-    };
-    query?: never;
-    url: '/api/v1/dd/debug/finalize/{slug}';
-};
-
-export type PostDdDebugFinalizeSlugErrors = {
-    /**
-     * Validation Error
-     */
-    422: HttpValidationError;
-};
-
-export type PostDdDebugFinalizeSlugError = PostDdDebugFinalizeSlugErrors[keyof PostDdDebugFinalizeSlugErrors];
-
-export type PostDdDebugFinalizeSlugResponses = {
-    /**
-     * Response Post Dd Debug Finalize Slug
-     *
-     * Successful Response
-     */
-    200: {
-        [key: string]: unknown;
-    };
-};
-
-export type PostDdDebugFinalizeSlugResponse = PostDdDebugFinalizeSlugResponses[keyof PostDdDebugFinalizeSlugResponses];
-
-export type PostDdDebugIngestSlugData = {
-    body?: never;
-    path: {
-        /**
-         * Slug
-         */
-        slug: string;
-    };
-    query: {
-        /**
-         * Tier
-         */
-        tier: number;
-        /**
-         * Language
-         */
-        language?: string | null;
-    };
-    url: '/api/v1/dd/debug/ingest/{slug}';
-};
-
-export type PostDdDebugIngestSlugErrors = {
-    /**
-     * Validation Error
-     */
-    422: HttpValidationError;
-};
-
-export type PostDdDebugIngestSlugError = PostDdDebugIngestSlugErrors[keyof PostDdDebugIngestSlugErrors];
-
-export type PostDdDebugIngestSlugResponses = {
-    /**
-     * Response Post Dd Debug Ingest Slug
-     *
-     * Successful Response
-     */
-    200: {
-        [key: string]: unknown;
-    };
-};
-
-export type PostDdDebugIngestSlugResponse = PostDdDebugIngestSlugResponses[keyof PostDdDebugIngestSlugResponses];
-
-export type PostDdDebugPostSlugData = {
-    body?: never;
-    path: {
-        /**
-         * Slug
-         */
-        slug: string;
-    };
-    query?: never;
-    url: '/api/v1/dd/debug/post/{slug}';
-};
-
-export type PostDdDebugPostSlugErrors = {
-    /**
-     * Validation Error
-     */
-    422: HttpValidationError;
-};
-
-export type PostDdDebugPostSlugError = PostDdDebugPostSlugErrors[keyof PostDdDebugPostSlugErrors];
-
-export type PostDdDebugPostSlugResponses = {
-    /**
-     * Response Post Dd Debug Post Slug
-     *
-     * Successful Response
-     */
-    200: {
-        [key: string]: unknown;
-    };
-};
-
-export type PostDdDebugPostSlugResponse = PostDdDebugPostSlugResponses[keyof PostDdDebugPostSlugResponses];
-
-export type PostDdDebugResolveSlugData = {
-    body?: never;
-    path: {
-        /**
-         * Slug
-         */
-        slug: string;
-    };
-    query?: never;
-    url: '/api/v1/dd/debug/resolve/{slug}';
-};
-
-export type PostDdDebugResolveSlugErrors = {
-    /**
-     * Validation Error
-     */
-    422: HttpValidationError;
-};
-
-export type PostDdDebugResolveSlugError = PostDdDebugResolveSlugErrors[keyof PostDdDebugResolveSlugErrors];
-
-export type PostDdDebugResolveSlugResponses = {
-    /**
-     * Response Post Dd Debug Resolve Slug
-     *
-     * Successful Response
-     */
-    200: {
-        [key: string]: unknown;
-    };
-};
-
-export type PostDdDebugResolveSlugResponse = PostDdDebugResolveSlugResponses[keyof PostDdDebugResolveSlugResponses];
-
-export type PostDdDebugRestoreSlugData = {
-    body?: never;
-    path: {
-        /**
-         * Slug
-         */
-        slug: string;
-    };
-    query: {
-        /**
-         * Ts
-         */
-        ts: string;
-    };
-    url: '/api/v1/dd/debug/restore/{slug}';
-};
-
-export type PostDdDebugRestoreSlugErrors = {
-    /**
-     * Validation Error
-     */
-    422: HttpValidationError;
-};
-
-export type PostDdDebugRestoreSlugError = PostDdDebugRestoreSlugErrors[keyof PostDdDebugRestoreSlugErrors];
-
-export type PostDdDebugRestoreSlugResponses = {
-    /**
-     * Response Post Dd Debug Restore Slug
-     *
-     * Successful Response
-     */
-    200: {
-        [key: string]: unknown;
-    };
-};
-
-export type PostDdDebugRestoreSlugResponse = PostDdDebugRestoreSlugResponses[keyof PostDdDebugRestoreSlugResponses];
-
-export type DeleteDdDebugSnapshotSlugData = {
-    body?: never;
-    path: {
-        /**
-         * Slug
-         */
-        slug: string;
-    };
-    query: {
-        /**
-         * Ts
-         */
-        ts: string;
-    };
-    url: '/api/v1/dd/debug/snapshot/{slug}';
-};
-
-export type DeleteDdDebugSnapshotSlugErrors = {
-    /**
-     * Validation Error
-     */
-    422: HttpValidationError;
-};
-
-export type DeleteDdDebugSnapshotSlugError = DeleteDdDebugSnapshotSlugErrors[keyof DeleteDdDebugSnapshotSlugErrors];
-
-export type DeleteDdDebugSnapshotSlugResponses = {
-    /**
-     * Response Delete Dd Debug Snapshot Slug
-     *
-     * Successful Response
-     */
-    200: {
-        [key: string]: unknown;
-    };
-};
-
-export type DeleteDdDebugSnapshotSlugResponse = DeleteDdDebugSnapshotSlugResponses[keyof DeleteDdDebugSnapshotSlugResponses];
-
-export type PostDdDebugSnapshotSlugData = {
-    body?: never;
-    path: {
-        /**
-         * Slug
-         */
-        slug: string;
-    };
-    query?: {
-        /**
-         * Label
-         */
-        label?: string | null;
-    };
-    url: '/api/v1/dd/debug/snapshot/{slug}';
-};
-
-export type PostDdDebugSnapshotSlugErrors = {
-    /**
-     * Validation Error
-     */
-    422: HttpValidationError;
-};
-
-export type PostDdDebugSnapshotSlugError = PostDdDebugSnapshotSlugErrors[keyof PostDdDebugSnapshotSlugErrors];
-
-export type PostDdDebugSnapshotSlugResponses = {
-    /**
-     * Response Post Dd Debug Snapshot Slug
-     *
-     * Successful Response
-     */
-    200: {
-        [key: string]: unknown;
-    };
-};
-
-export type PostDdDebugSnapshotSlugResponse = PostDdDebugSnapshotSlugResponses[keyof PostDdDebugSnapshotSlugResponses];
-
-export type GetDdDebugSnapshotsSlugData = {
-    body?: never;
-    path: {
-        /**
-         * Slug
-         */
-        slug: string;
-    };
-    query?: never;
-    url: '/api/v1/dd/debug/snapshots/{slug}';
-};
-
-export type GetDdDebugSnapshotsSlugErrors = {
-    /**
-     * Validation Error
-     */
-    422: HttpValidationError;
-};
-
-export type GetDdDebugSnapshotsSlugError = GetDdDebugSnapshotsSlugErrors[keyof GetDdDebugSnapshotsSlugErrors];
-
-export type GetDdDebugSnapshotsSlugResponses = {
-    /**
-     * Response Get Dd Debug Snapshots Slug
-     *
-     * Successful Response
-     */
-    200: {
-        [key: string]: unknown;
-    };
-};
-
-export type GetDdDebugSnapshotsSlugResponse = GetDdDebugSnapshotsSlugResponses[keyof GetDdDebugSnapshotsSlugResponses];
-
-export type GetDdPagesData = {
-    body?: never;
-    path?: never;
-    query?: never;
-    url: '/api/v1/dd/pages';
-};
-
-export type GetDdPagesResponses = {
-    /**
-     * Response Get Dd Pages
-     *
-     * Successful Response
-     */
-    200: Array<{
-        [key: string]: unknown;
-    }>;
-};
-
-export type GetDdPagesResponse = GetDdPagesResponses[keyof GetDdPagesResponses];
-
-export type PostDdPagesRunsData = {
-    body: StartRunBody;
-    path?: never;
-    query?: never;
-    url: '/api/v1/dd/pages/runs';
-};
-
-export type PostDdPagesRunsErrors = {
-    /**
-     * Validation Error
-     */
-    422: HttpValidationError;
-};
-
-export type PostDdPagesRunsError = PostDdPagesRunsErrors[keyof PostDdPagesRunsErrors];
-
-export type PostDdPagesRunsResponses = {
-    /**
-     * Response Post Dd Pages Runs
-     *
-     * Successful Response
-     */
-    200: {
-        [key: string]: unknown;
-    };
-};
-
-export type PostDdPagesRunsResponse = PostDdPagesRunsResponses[keyof PostDdPagesRunsResponses];
-
-export type GetDdPagesRunsActiveData = {
-    body?: never;
-    path?: never;
-    query?: never;
-    url: '/api/v1/dd/pages/runs/active';
-};
-
-export type GetDdPagesRunsActiveResponses = {
-    /**
-     * Response Get Dd Pages Runs Active
-     *
-     * Successful Response
-     */
-    200: {
-        [key: string]: unknown;
-    };
-};
-
-export type GetDdPagesRunsActiveResponse = GetDdPagesRunsActiveResponses[keyof GetDdPagesRunsActiveResponses];
-
-export type GetDdPagesRunsRunIdData = {
-    body?: never;
-    path: {
-        /**
-         * Run Id
-         */
-        run_id: string;
-    };
-    query?: never;
-    url: '/api/v1/dd/pages/runs/{run_id}';
-};
-
-export type GetDdPagesRunsRunIdErrors = {
-    /**
-     * Validation Error
-     */
-    422: HttpValidationError;
-};
-
-export type GetDdPagesRunsRunIdError = GetDdPagesRunsRunIdErrors[keyof GetDdPagesRunsRunIdErrors];
-
-export type GetDdPagesRunsRunIdResponses = {
-    /**
-     * Response Get Dd Pages Runs Run Id
-     *
-     * Successful Response
-     */
-    200: {
-        [key: string]: unknown;
-    };
-};
-
-export type GetDdPagesRunsRunIdResponse = GetDdPagesRunsRunIdResponses[keyof GetDdPagesRunsRunIdResponses];
-
-export type PostDdPagesRunsRunIdCancelData = {
-    body?: never;
-    path: {
-        /**
-         * Run Id
-         */
-        run_id: string;
-    };
-    query?: never;
-    url: '/api/v1/dd/pages/runs/{run_id}/cancel';
-};
-
-export type PostDdPagesRunsRunIdCancelErrors = {
-    /**
-     * Validation Error
-     */
-    422: HttpValidationError;
-};
-
-export type PostDdPagesRunsRunIdCancelError = PostDdPagesRunsRunIdCancelErrors[keyof PostDdPagesRunsRunIdCancelErrors];
-
-export type PostDdPagesRunsRunIdCancelResponses = {
-    /**
-     * Response Post Dd Pages Runs Run Id Cancel
-     *
-     * Successful Response
-     */
-    200: {
-        [key: string]: unknown;
-    };
-};
-
-export type PostDdPagesRunsRunIdCancelResponse = PostDdPagesRunsRunIdCancelResponses[keyof PostDdPagesRunsRunIdCancelResponses];
-
-export type GetDdPagesRunsRunIdLlmCountersData = {
-    body?: never;
-    path: {
-        /**
-         * Run Id
-         */
-        run_id: string;
-    };
-    query?: never;
-    url: '/api/v1/dd/pages/runs/{run_id}/llm-counters';
-};
-
-export type GetDdPagesRunsRunIdLlmCountersErrors = {
-    /**
-     * Validation Error
-     */
-    422: HttpValidationError;
-};
-
-export type GetDdPagesRunsRunIdLlmCountersError = GetDdPagesRunsRunIdLlmCountersErrors[keyof GetDdPagesRunsRunIdLlmCountersErrors];
-
-export type GetDdPagesRunsRunIdLlmCountersResponses = {
-    /**
-     * Response Get Dd Pages Runs Run Id Llm Counters
-     *
-     * Successful Response
-     */
-    200: {
-        [key: string]: unknown;
-    };
-};
-
-export type GetDdPagesRunsRunIdLlmCountersResponse = GetDdPagesRunsRunIdLlmCountersResponses[keyof GetDdPagesRunsRunIdLlmCountersResponses];
-
-export type GetDdPagesRunsRunIdPagesIdxData = {
-    body?: never;
-    path: {
-        /**
-         * Run Id
-         */
-        run_id: string;
-        /**
-         * Idx
-         */
-        idx: number;
-    };
-    query?: {
-        /**
-         * Version
-         */
-        version?: 'processed' | 'original';
-    };
-    url: '/api/v1/dd/pages/runs/{run_id}/pages/{idx}';
-};
-
-export type GetDdPagesRunsRunIdPagesIdxErrors = {
-    /**
-     * Validation Error
-     */
-    422: HttpValidationError;
-};
-
-export type GetDdPagesRunsRunIdPagesIdxError = GetDdPagesRunsRunIdPagesIdxErrors[keyof GetDdPagesRunsRunIdPagesIdxErrors];
-
-export type GetDdPagesRunsRunIdPagesIdxResponses = {
-    /**
-     * Response Get Dd Pages Runs Run Id Pages Idx
-     *
-     * Successful Response
-     */
-    200: {
-        [key: string]: unknown;
-    };
-};
-
-export type GetDdPagesRunsRunIdPagesIdxResponse = GetDdPagesRunsRunIdPagesIdxResponses[keyof GetDdPagesRunsRunIdPagesIdxResponses];
-
-export type GetDdPagesRunsRunIdUrlRecordsData = {
-    body?: never;
-    path: {
-        /**
-         * Run Id
-         */
-        run_id: string;
-    };
-    query?: never;
-    url: '/api/v1/dd/pages/runs/{run_id}/url-records';
-};
-
-export type GetDdPagesRunsRunIdUrlRecordsErrors = {
-    /**
-     * Validation Error
-     */
-    422: HttpValidationError;
-};
-
-export type GetDdPagesRunsRunIdUrlRecordsError = GetDdPagesRunsRunIdUrlRecordsErrors[keyof GetDdPagesRunsRunIdUrlRecordsErrors];
-
-export type GetDdPagesRunsRunIdUrlRecordsResponses = {
-    /**
-     * Response Get Dd Pages Runs Run Id Url Records
-     *
-     * Successful Response
-     */
-    200: Array<{
-        [key: string]: unknown;
-    }>;
-};
-
-export type GetDdPagesRunsRunIdUrlRecordsResponse = GetDdPagesRunsRunIdUrlRecordsResponses[keyof GetDdPagesRunsRunIdUrlRecordsResponses];
-
-export type DeleteDdPagesSlugData = {
-    body?: never;
-    path: {
-        /**
-         * Slug
-         */
-        slug: string;
-    };
-    query?: never;
-    url: '/api/v1/dd/pages/{slug}';
-};
-
-export type DeleteDdPagesSlugErrors = {
-    /**
-     * Validation Error
-     */
-    422: HttpValidationError;
-};
-
-export type DeleteDdPagesSlugError = DeleteDdPagesSlugErrors[keyof DeleteDdPagesSlugErrors];
-
-export type DeleteDdPagesSlugResponses = {
-    /**
-     * Response Delete Dd Pages Slug
-     *
-     * Successful Response
-     */
-    200: {
-        [key: string]: unknown;
-    };
-};
-
-export type DeleteDdPagesSlugResponse = DeleteDdPagesSlugResponses[keyof DeleteDdPagesSlugResponses];
-
-export type GetDdPagesSlugArtifactsNameData = {
-    body?: never;
-    path: {
-        /**
-         * Slug
-         */
-        slug: string;
-        /**
-         * Name
-         */
-        name: string;
-    };
-    query?: never;
-    url: '/api/v1/dd/pages/{slug}/artifacts/{name}';
-};
-
-export type GetDdPagesSlugArtifactsNameErrors = {
-    /**
-     * Validation Error
-     */
-    422: HttpValidationError;
-};
-
-export type GetDdPagesSlugArtifactsNameError = GetDdPagesSlugArtifactsNameErrors[keyof GetDdPagesSlugArtifactsNameErrors];
-
-export type GetDdPagesSlugArtifactsNameResponses = {
-    /**
-     * Successful Response
-     */
-    200: unknown;
-};
-
-export type GetDdPagesSlugManifestData = {
-    body?: never;
-    path: {
-        /**
-         * Slug
-         */
-        slug: string;
-    };
-    query?: never;
-    url: '/api/v1/dd/pages/{slug}/manifest';
-};
-
-export type GetDdPagesSlugManifestErrors = {
-    /**
-     * Validation Error
-     */
-    422: HttpValidationError;
-};
-
-export type GetDdPagesSlugManifestError = GetDdPagesSlugManifestErrors[keyof GetDdPagesSlugManifestErrors];
-
-export type GetDdPagesSlugManifestResponses = {
-    /**
-     * Response Get Dd Pages Slug Manifest
-     *
-     * Successful Response
-     */
-    200: {
-        [key: string]: unknown;
-    };
-};
-
-export type GetDdPagesSlugManifestResponse = GetDdPagesSlugManifestResponses[keyof GetDdPagesSlugManifestResponses];
-
-export type GetDdPagesSlugPagesIdxData = {
-    body?: never;
-    path: {
-        /**
-         * Slug
-         */
-        slug: string;
-        /**
-         * Idx
-         */
-        idx: number;
-    };
-    query?: {
-        /**
-         * Version
-         */
-        version?: 'processed' | 'original';
-    };
-    url: '/api/v1/dd/pages/{slug}/pages/{idx}';
-};
-
-export type GetDdPagesSlugPagesIdxErrors = {
-    /**
-     * Validation Error
-     */
-    422: HttpValidationError;
-};
-
-export type GetDdPagesSlugPagesIdxError = GetDdPagesSlugPagesIdxErrors[keyof GetDdPagesSlugPagesIdxErrors];
-
-export type GetDdPagesSlugPagesIdxResponses = {
-    /**
-     * Response Get Dd Pages Slug Pages Idx
-     *
-     * Successful Response
-     */
-    200: {
-        [key: string]: unknown;
-    };
-};
-
-export type GetDdPagesSlugPagesIdxResponse = GetDdPagesSlugPagesIdxResponses[keyof GetDdPagesSlugPagesIdxResponses];
-
-export type GetDdPipelineActiveData = {
-    body?: never;
-    path?: never;
-    query?: never;
-    url: '/api/v1/dd/pipeline/active';
-};
-
-export type GetDdPipelineActiveResponses = {
-    /**
-     * Response Get Dd Pipeline Active
-     *
-     * Successful Response
-     */
-    200: {
-        [key: string]: unknown;
-    };
-};
-
-export type GetDdPipelineActiveResponse = GetDdPipelineActiveResponses[keyof GetDdPipelineActiveResponses];
-
-export type GetDdPipelinePlannerDebugGraphThreadIdHistoryData = {
-    body?: never;
-    path: {
-        /**
-         * Thread Id
-         */
-        thread_id: string;
-    };
-    query?: never;
-    url: '/api/v1/dd/pipeline/planner/debug/graph/{thread_id}/history';
-};
-
-export type GetDdPipelinePlannerDebugGraphThreadIdHistoryErrors = {
-    /**
-     * Validation Error
-     */
-    422: HttpValidationError;
-};
-
-export type GetDdPipelinePlannerDebugGraphThreadIdHistoryError = GetDdPipelinePlannerDebugGraphThreadIdHistoryErrors[keyof GetDdPipelinePlannerDebugGraphThreadIdHistoryErrors];
-
-export type GetDdPipelinePlannerDebugGraphThreadIdHistoryResponses = {
-    /**
-     * Response Get Dd Pipeline Planner Debug Graph Thread Id History
-     *
-     * Successful Response
-     */
-    200: {
-        [key: string]: unknown;
-    };
-};
-
-export type GetDdPipelinePlannerDebugGraphThreadIdHistoryResponse = GetDdPipelinePlannerDebugGraphThreadIdHistoryResponses[keyof GetDdPipelinePlannerDebugGraphThreadIdHistoryResponses];
-
-export type GetDdPipelinePlannerDebugGraphThreadIdLlmCountersData = {
-    body?: never;
-    path: {
-        /**
-         * Thread Id
-         */
-        thread_id: string;
-    };
-    query?: never;
-    url: '/api/v1/dd/pipeline/planner/debug/graph/{thread_id}/llm-counters';
-};
-
-export type GetDdPipelinePlannerDebugGraphThreadIdLlmCountersErrors = {
-    /**
-     * Validation Error
-     */
-    422: HttpValidationError;
-};
-
-export type GetDdPipelinePlannerDebugGraphThreadIdLlmCountersError = GetDdPipelinePlannerDebugGraphThreadIdLlmCountersErrors[keyof GetDdPipelinePlannerDebugGraphThreadIdLlmCountersErrors];
-
-export type GetDdPipelinePlannerDebugGraphThreadIdLlmCountersResponses = {
-    /**
-     * Response Get Dd Pipeline Planner Debug Graph Thread Id Llm Counters
-     *
-     * Successful Response
-     */
-    200: {
-        [key: string]: unknown;
-    };
-};
-
-export type GetDdPipelinePlannerDebugGraphThreadIdLlmCountersResponse = GetDdPipelinePlannerDebugGraphThreadIdLlmCountersResponses[keyof GetDdPipelinePlannerDebugGraphThreadIdLlmCountersResponses];
-
-export type GetDdPipelinePlannerDebugGraphThreadIdStateData = {
-    body?: never;
-    path: {
-        /**
-         * Thread Id
-         */
-        thread_id: string;
-    };
-    query?: never;
-    url: '/api/v1/dd/pipeline/planner/debug/graph/{thread_id}/state';
-};
-
-export type GetDdPipelinePlannerDebugGraphThreadIdStateErrors = {
-    /**
-     * Validation Error
-     */
-    422: HttpValidationError;
-};
-
-export type GetDdPipelinePlannerDebugGraphThreadIdStateError = GetDdPipelinePlannerDebugGraphThreadIdStateErrors[keyof GetDdPipelinePlannerDebugGraphThreadIdStateErrors];
-
-export type GetDdPipelinePlannerDebugGraphThreadIdStateResponses = {
-    /**
-     * Response Get Dd Pipeline Planner Debug Graph Thread Id State
-     *
-     * Successful Response
-     */
-    200: {
-        [key: string]: unknown;
-    };
-};
-
-export type GetDdPipelinePlannerDebugGraphThreadIdStateResponse = GetDdPipelinePlannerDebugGraphThreadIdStateResponses[keyof GetDdPipelinePlannerDebugGraphThreadIdStateResponses];
-
-export type GetDdPipelinePlannerInfoData = {
-    body?: never;
-    path?: never;
-    query?: never;
-    url: '/api/v1/dd/pipeline/planner/info';
-};
-
-export type GetDdPipelinePlannerInfoResponses = {
-    /**
-     * Response Get Dd Pipeline Planner Info
-     *
-     * Successful Response
-     */
-    200: {
-        [key: string]: unknown;
-    };
-};
-
-export type GetDdPipelinePlannerInfoResponse = GetDdPipelinePlannerInfoResponses[keyof GetDdPipelinePlannerInfoResponses];
-
-export type PostDdPipelinePlannerPruneData = {
-    body?: never;
-    path?: never;
-    query?: {
-        /**
-         * Older Than Days
-         */
-        older_than_days?: number;
-        /**
-         * Dry Run
-         */
-        dry_run?: boolean;
-    };
-    url: '/api/v1/dd/pipeline/planner/prune';
-};
-
-export type PostDdPipelinePlannerPruneErrors = {
-    /**
-     * Validation Error
-     */
-    422: HttpValidationError;
-};
-
-export type PostDdPipelinePlannerPruneError = PostDdPipelinePlannerPruneErrors[keyof PostDdPipelinePlannerPruneErrors];
-
-export type PostDdPipelinePlannerPruneResponses = {
-    /**
-     * Response Post Dd Pipeline Planner Prune
-     *
-     * Successful Response
-     */
-    200: {
-        [key: string]: unknown;
-    };
-};
-
-export type PostDdPipelinePlannerPruneResponse = PostDdPipelinePlannerPruneResponses[keyof PostDdPipelinePlannerPruneResponses];
-
-export type GetDdPipelinePlannerRecentData = {
-    body?: never;
-    path?: never;
-    query?: never;
-    url: '/api/v1/dd/pipeline/planner/recent';
-};
-
-export type GetDdPipelinePlannerRecentResponses = {
-    /**
-     * Response Get Dd Pipeline Planner Recent
-     *
-     * Successful Response
-     */
-    200: {
-        [key: string]: unknown;
-    };
-};
-
-export type GetDdPipelinePlannerRecentResponse = GetDdPipelinePlannerRecentResponses[keyof GetDdPipelinePlannerRecentResponses];
-
-export type PostDdPipelinePlannerSlugData = {
-    body?: never;
-    path: {
-        /**
-         * Slug
-         */
-        slug: string;
-    };
-    query?: {
-        /**
-         * Mode
-         */
-        mode?: string;
-        /**
-         * Thread Id
-         */
-        thread_id?: string | null;
-    };
-    url: '/api/v1/dd/pipeline/planner/{slug}';
-};
-
-export type PostDdPipelinePlannerSlugErrors = {
-    /**
-     * Validation Error
-     */
-    422: HttpValidationError;
-};
-
-export type PostDdPipelinePlannerSlugError = PostDdPipelinePlannerSlugErrors[keyof PostDdPipelinePlannerSlugErrors];
-
-export type PostDdPipelinePlannerSlugResponses = {
-    /**
-     * Response Post Dd Pipeline Planner Slug
-     *
-     * Successful Response
-     */
-    200: {
-        [key: string]: unknown;
-    };
-};
-
-export type PostDdPipelinePlannerSlugResponse = PostDdPipelinePlannerSlugResponses[keyof PostDdPipelinePlannerSlugResponses];
-
-export type GetDdPipelinePlannerSlugActiveData = {
-    body?: never;
-    path: {
-        /**
-         * Slug
-         */
-        slug: string;
-    };
-    query?: never;
-    url: '/api/v1/dd/pipeline/planner/{slug}/active';
-};
-
-export type GetDdPipelinePlannerSlugActiveErrors = {
-    /**
-     * Validation Error
-     */
-    422: HttpValidationError;
-};
-
-export type GetDdPipelinePlannerSlugActiveError = GetDdPipelinePlannerSlugActiveErrors[keyof GetDdPipelinePlannerSlugActiveErrors];
-
-export type GetDdPipelinePlannerSlugActiveResponses = {
-    /**
-     * Response Get Dd Pipeline Planner Slug Active
-     *
-     * Successful Response
-     */
-    200: {
-        [key: string]: unknown;
-    };
-};
-
-export type GetDdPipelinePlannerSlugActiveResponse = GetDdPipelinePlannerSlugActiveResponses[keyof GetDdPipelinePlannerSlugActiveResponses];
-
-export type GetDdPipelinePlannerSlugHealthData = {
-    body?: never;
-    path: {
-        /**
-         * Slug
-         */
-        slug: string;
-    };
-    query?: never;
-    url: '/api/v1/dd/pipeline/planner/{slug}/health';
-};
-
-export type GetDdPipelinePlannerSlugHealthErrors = {
-    /**
-     * Validation Error
-     */
-    422: HttpValidationError;
-};
-
-export type GetDdPipelinePlannerSlugHealthError = GetDdPipelinePlannerSlugHealthErrors[keyof GetDdPipelinePlannerSlugHealthErrors];
-
-export type GetDdPipelinePlannerSlugHealthResponses = {
-    /**
-     * Response Get Dd Pipeline Planner Slug Health
-     *
-     * Successful Response
-     */
-    200: {
-        [key: string]: unknown;
-    };
-};
-
-export type GetDdPipelinePlannerSlugHealthResponse = GetDdPipelinePlannerSlugHealthResponses[keyof GetDdPipelinePlannerSlugHealthResponses];
-
-export type GetDdPipelinePlannerSlugTimingData = {
-    body?: never;
-    path: {
-        /**
-         * Slug
-         */
-        slug: string;
-    };
-    query?: never;
-    url: '/api/v1/dd/pipeline/planner/{slug}/timing';
-};
-
-export type GetDdPipelinePlannerSlugTimingErrors = {
-    /**
-     * Validation Error
-     */
-    422: HttpValidationError;
-};
-
-export type GetDdPipelinePlannerSlugTimingError = GetDdPipelinePlannerSlugTimingErrors[keyof GetDdPipelinePlannerSlugTimingErrors];
-
-export type GetDdPipelinePlannerSlugTimingResponses = {
-    /**
-     * Response Get Dd Pipeline Planner Slug Timing
-     *
-     * Successful Response
-     */
-    200: {
-        [key: string]: unknown;
-    };
-};
-
-export type GetDdPipelinePlannerSlugTimingResponse = GetDdPipelinePlannerSlugTimingResponses[keyof GetDdPipelinePlannerSlugTimingResponses];
-
-export type DeleteDdPipelinePlannerSlugWipeData = {
-    body?: never;
-    path: {
-        /**
-         * Slug
-         */
-        slug: string;
-    };
-    query?: never;
-    url: '/api/v1/dd/pipeline/planner/{slug}/wipe';
-};
-
-export type DeleteDdPipelinePlannerSlugWipeErrors = {
-    /**
-     * Validation Error
-     */
-    422: HttpValidationError;
-};
-
-export type DeleteDdPipelinePlannerSlugWipeError = DeleteDdPipelinePlannerSlugWipeErrors[keyof DeleteDdPipelinePlannerSlugWipeErrors];
-
-export type DeleteDdPipelinePlannerSlugWipeResponses = {
-    /**
-     * Response Delete Dd Pipeline Planner Slug Wipe
-     *
-     * Successful Response
-     */
-    200: {
-        [key: string]: unknown;
-    };
-};
-
-export type DeleteDdPipelinePlannerSlugWipeResponse = DeleteDdPipelinePlannerSlugWipeResponses[keyof DeleteDdPipelinePlannerSlugWipeResponses];
-
-export type PostDdPipelinePlannerThreadIdCancelData = {
-    body?: never;
-    path: {
-        /**
-         * Thread Id
-         */
-        thread_id: string;
-    };
-    query?: never;
-    url: '/api/v1/dd/pipeline/planner/{thread_id}/cancel';
-};
-
-export type PostDdPipelinePlannerThreadIdCancelErrors = {
-    /**
-     * Validation Error
-     */
-    422: HttpValidationError;
-};
-
-export type PostDdPipelinePlannerThreadIdCancelError = PostDdPipelinePlannerThreadIdCancelErrors[keyof PostDdPipelinePlannerThreadIdCancelErrors];
-
-export type PostDdPipelinePlannerThreadIdCancelResponses = {
-    /**
-     * Response Post Dd Pipeline Planner Thread Id Cancel
-     *
-     * Successful Response
-     */
-    200: {
-        [key: string]: unknown;
-    };
-};
-
-export type PostDdPipelinePlannerThreadIdCancelResponse = PostDdPipelinePlannerThreadIdCancelResponses[keyof PostDdPipelinePlannerThreadIdCancelResponses];
-
-export type GetDdPipelinePlannerThreadIdEventsData = {
-    body?: never;
-    path: {
-        /**
-         * Thread Id
-         */
-        thread_id: string;
-    };
-    query?: never;
-    url: '/api/v1/dd/pipeline/planner/{thread_id}/events';
-};
-
-export type GetDdPipelinePlannerThreadIdEventsErrors = {
-    /**
-     * Validation Error
-     */
-    422: HttpValidationError;
-};
-
-export type GetDdPipelinePlannerThreadIdEventsError = GetDdPipelinePlannerThreadIdEventsErrors[keyof GetDdPipelinePlannerThreadIdEventsErrors];
-
-export type GetDdPipelinePlannerThreadIdEventsResponses = {
-    /**
-     * Successful Response
-     */
-    200: unknown;
-};
-
-export type PostDdPipelinePlannerThreadIdReplayNodeIdData = {
-    body?: never;
-    path: {
-        /**
-         * Thread Id
-         */
-        thread_id: string;
-        /**
-         * Node Id
-         */
-        node_id: string;
-    };
-    query?: never;
-    url: '/api/v1/dd/pipeline/planner/{thread_id}/replay/{node_id}';
-};
-
-export type PostDdPipelinePlannerThreadIdReplayNodeIdErrors = {
-    /**
-     * Validation Error
-     */
-    422: HttpValidationError;
-};
-
-export type PostDdPipelinePlannerThreadIdReplayNodeIdError = PostDdPipelinePlannerThreadIdReplayNodeIdErrors[keyof PostDdPipelinePlannerThreadIdReplayNodeIdErrors];
-
-export type PostDdPipelinePlannerThreadIdReplayNodeIdResponses = {
-    /**
-     * Response Post Dd Pipeline Planner Thread Id Replay Node Id
-     *
-     * Successful Response
-     */
-    200: {
-        [key: string]: unknown;
-    };
-};
-
-export type PostDdPipelinePlannerThreadIdReplayNodeIdResponse = PostDdPipelinePlannerThreadIdReplayNodeIdResponses[keyof PostDdPipelinePlannerThreadIdReplayNodeIdResponses];
-
-export type PostDdPipelinePlannerThreadIdResumeData = {
-    body?: never;
-    path: {
-        /**
-         * Thread Id
-         */
-        thread_id: string;
-    };
-    query?: never;
-    url: '/api/v1/dd/pipeline/planner/{thread_id}/resume';
-};
-
-export type PostDdPipelinePlannerThreadIdResumeErrors = {
-    /**
-     * Validation Error
-     */
-    422: HttpValidationError;
-};
-
-export type PostDdPipelinePlannerThreadIdResumeError = PostDdPipelinePlannerThreadIdResumeErrors[keyof PostDdPipelinePlannerThreadIdResumeErrors];
-
-export type PostDdPipelinePlannerThreadIdResumeResponses = {
-    /**
-     * Response Post Dd Pipeline Planner Thread Id Resume
-     *
-     * Successful Response
-     */
-    200: {
-        [key: string]: unknown;
-    };
-};
-
-export type PostDdPipelinePlannerThreadIdResumeResponse = PostDdPipelinePlannerThreadIdResumeResponses[keyof PostDdPipelinePlannerThreadIdResumeResponses];
-
-export type GetDdPipelineSynthDebugGraphThreadIdHistoryData = {
-    body?: never;
-    path: {
-        /**
-         * Thread Id
-         */
-        thread_id: string;
-    };
-    query?: never;
-    url: '/api/v1/dd/pipeline/synth/debug/graph/{thread_id}/history';
-};
-
-export type GetDdPipelineSynthDebugGraphThreadIdHistoryErrors = {
-    /**
-     * Validation Error
-     */
-    422: HttpValidationError;
-};
-
-export type GetDdPipelineSynthDebugGraphThreadIdHistoryError = GetDdPipelineSynthDebugGraphThreadIdHistoryErrors[keyof GetDdPipelineSynthDebugGraphThreadIdHistoryErrors];
-
-export type GetDdPipelineSynthDebugGraphThreadIdHistoryResponses = {
-    /**
-     * Response Get Dd Pipeline Synth Debug Graph Thread Id History
-     *
-     * Successful Response
-     */
-    200: {
-        [key: string]: unknown;
-    };
-};
-
-export type GetDdPipelineSynthDebugGraphThreadIdHistoryResponse = GetDdPipelineSynthDebugGraphThreadIdHistoryResponses[keyof GetDdPipelineSynthDebugGraphThreadIdHistoryResponses];
-
-export type GetDdPipelineSynthDebugGraphThreadIdLlmCountersData = {
-    body?: never;
-    path: {
-        /**
-         * Thread Id
-         */
-        thread_id: string;
-    };
-    query?: never;
-    url: '/api/v1/dd/pipeline/synth/debug/graph/{thread_id}/llm-counters';
-};
-
-export type GetDdPipelineSynthDebugGraphThreadIdLlmCountersErrors = {
-    /**
-     * Validation Error
-     */
-    422: HttpValidationError;
-};
-
-export type GetDdPipelineSynthDebugGraphThreadIdLlmCountersError = GetDdPipelineSynthDebugGraphThreadIdLlmCountersErrors[keyof GetDdPipelineSynthDebugGraphThreadIdLlmCountersErrors];
-
-export type GetDdPipelineSynthDebugGraphThreadIdLlmCountersResponses = {
-    /**
-     * Response Get Dd Pipeline Synth Debug Graph Thread Id Llm Counters
-     *
-     * Successful Response
-     */
-    200: {
-        [key: string]: unknown;
-    };
-};
-
-export type GetDdPipelineSynthDebugGraphThreadIdLlmCountersResponse = GetDdPipelineSynthDebugGraphThreadIdLlmCountersResponses[keyof GetDdPipelineSynthDebugGraphThreadIdLlmCountersResponses];
-
-export type GetDdPipelineSynthDebugGraphThreadIdStateData = {
-    body?: never;
-    path: {
-        /**
-         * Thread Id
-         */
-        thread_id: string;
-    };
-    query?: never;
-    url: '/api/v1/dd/pipeline/synth/debug/graph/{thread_id}/state';
-};
-
-export type GetDdPipelineSynthDebugGraphThreadIdStateErrors = {
-    /**
-     * Validation Error
-     */
-    422: HttpValidationError;
-};
-
-export type GetDdPipelineSynthDebugGraphThreadIdStateError = GetDdPipelineSynthDebugGraphThreadIdStateErrors[keyof GetDdPipelineSynthDebugGraphThreadIdStateErrors];
-
-export type GetDdPipelineSynthDebugGraphThreadIdStateResponses = {
-    /**
-     * Response Get Dd Pipeline Synth Debug Graph Thread Id State
-     *
-     * Successful Response
-     */
-    200: {
-        [key: string]: unknown;
-    };
-};
-
-export type GetDdPipelineSynthDebugGraphThreadIdStateResponse = GetDdPipelineSynthDebugGraphThreadIdStateResponses[keyof GetDdPipelineSynthDebugGraphThreadIdStateResponses];
-
-export type GetDdPipelineSynthInfoData = {
-    body?: never;
-    path?: never;
-    query?: never;
-    url: '/api/v1/dd/pipeline/synth/info';
-};
-
-export type GetDdPipelineSynthInfoResponses = {
-    /**
-     * Response Get Dd Pipeline Synth Info
-     *
-     * Successful Response
-     */
-    200: {
-        [key: string]: unknown;
-    };
-};
-
-export type GetDdPipelineSynthInfoResponse = GetDdPipelineSynthInfoResponses[keyof GetDdPipelineSynthInfoResponses];
-
-export type GetDdPipelineSynthRecentData = {
-    body?: never;
-    path?: never;
-    query?: never;
-    url: '/api/v1/dd/pipeline/synth/recent';
-};
-
-export type GetDdPipelineSynthRecentResponses = {
-    /**
-     * Response Get Dd Pipeline Synth Recent
-     *
-     * Successful Response
-     */
-    200: {
-        [key: string]: unknown;
-    };
-};
-
-export type GetDdPipelineSynthRecentResponse = GetDdPipelineSynthRecentResponses[keyof GetDdPipelineSynthRecentResponses];
-
-export type PostDdPipelineSynthSlugData = {
-    body?: never;
-    path: {
-        /**
-         * Slug
-         */
-        slug: string;
-    };
-    query?: {
-        /**
-         * Chapter Id
-         */
-        chapter_id?: string | null;
-        /**
-         * Mode
-         */
-        mode?: string;
-        /**
-         * Thread Id
-         */
-        thread_id?: string | null;
-    };
-    url: '/api/v1/dd/pipeline/synth/{slug}';
-};
-
-export type PostDdPipelineSynthSlugErrors = {
-    /**
-     * Validation Error
-     */
-    422: HttpValidationError;
-};
-
-export type PostDdPipelineSynthSlugError = PostDdPipelineSynthSlugErrors[keyof PostDdPipelineSynthSlugErrors];
-
-export type PostDdPipelineSynthSlugResponses = {
-    /**
-     * Response Post Dd Pipeline Synth Slug
-     *
-     * Successful Response
-     */
-    200: {
-        [key: string]: unknown;
-    };
-};
-
-export type PostDdPipelineSynthSlugResponse = PostDdPipelineSynthSlugResponses[keyof PostDdPipelineSynthSlugResponses];
-
-export type GetDdPipelineSynthSlugActiveData = {
-    body?: never;
-    path: {
-        /**
-         * Slug
-         */
-        slug: string;
-    };
-    query?: never;
-    url: '/api/v1/dd/pipeline/synth/{slug}/active';
-};
-
-export type GetDdPipelineSynthSlugActiveErrors = {
-    /**
-     * Validation Error
-     */
-    422: HttpValidationError;
-};
-
-export type GetDdPipelineSynthSlugActiveError = GetDdPipelineSynthSlugActiveErrors[keyof GetDdPipelineSynthSlugActiveErrors];
-
-export type GetDdPipelineSynthSlugActiveResponses = {
-    /**
-     * Response Get Dd Pipeline Synth Slug Active
-     *
-     * Successful Response
-     */
-    200: {
-        [key: string]: unknown;
-    };
-};
-
-export type GetDdPipelineSynthSlugActiveResponse = GetDdPipelineSynthSlugActiveResponses[keyof GetDdPipelineSynthSlugActiveResponses];
-
-export type GetDdPipelineSynthSlugStudyChaptersData = {
-    body?: never;
-    path: {
-        /**
-         * Slug
-         */
-        slug: string;
-    };
-    query?: never;
-    url: '/api/v1/dd/pipeline/synth/{slug}/study/chapters';
-};
-
-export type GetDdPipelineSynthSlugStudyChaptersErrors = {
-    /**
-     * Validation Error
-     */
-    422: HttpValidationError;
-};
-
-export type GetDdPipelineSynthSlugStudyChaptersError = GetDdPipelineSynthSlugStudyChaptersErrors[keyof GetDdPipelineSynthSlugStudyChaptersErrors];
-
-export type GetDdPipelineSynthSlugStudyChaptersResponses = {
-    /**
-     * Response Get Dd Pipeline Synth Slug Study Chapters
-     *
-     * Successful Response
-     */
-    200: {
-        [key: string]: unknown;
-    };
-};
-
-export type GetDdPipelineSynthSlugStudyChaptersResponse = GetDdPipelineSynthSlugStudyChaptersResponses[keyof GetDdPipelineSynthSlugStudyChaptersResponses];
-
-export type GetDdPipelineSynthSlugStudyChapterIdArtifactArtifactNameData = {
-    body?: never;
-    path: {
-        /**
-         * Slug
-         */
-        slug: string;
-        /**
-         * Chapter Id
-         */
-        chapter_id: string;
-        /**
-         * Artifact Name
-         */
-        artifact_name: string;
-    };
-    query?: never;
-    url: '/api/v1/dd/pipeline/synth/{slug}/study/{chapter_id}/artifact/{artifact_name}';
-};
-
-export type GetDdPipelineSynthSlugStudyChapterIdArtifactArtifactNameErrors = {
-    /**
-     * Validation Error
-     */
-    422: HttpValidationError;
-};
-
-export type GetDdPipelineSynthSlugStudyChapterIdArtifactArtifactNameError = GetDdPipelineSynthSlugStudyChapterIdArtifactArtifactNameErrors[keyof GetDdPipelineSynthSlugStudyChapterIdArtifactArtifactNameErrors];
-
-export type GetDdPipelineSynthSlugStudyChapterIdArtifactArtifactNameResponses = {
-    /**
-     * Successful Response
-     */
-    200: unknown;
-};
-
-export type GetDdPipelineSynthSlugStudyChapterIdCodeZipData = {
-    body?: never;
-    path: {
-        /**
-         * Slug
-         */
-        slug: string;
-        /**
-         * Chapter Id
-         */
-        chapter_id: string;
-    };
-    query?: never;
-    url: '/api/v1/dd/pipeline/synth/{slug}/study/{chapter_id}/code.zip';
-};
-
-export type GetDdPipelineSynthSlugStudyChapterIdCodeZipErrors = {
-    /**
-     * Validation Error
-     */
-    422: HttpValidationError;
-};
-
-export type GetDdPipelineSynthSlugStudyChapterIdCodeZipError = GetDdPipelineSynthSlugStudyChapterIdCodeZipErrors[keyof GetDdPipelineSynthSlugStudyChapterIdCodeZipErrors];
-
-export type GetDdPipelineSynthSlugStudyChapterIdCodeZipResponses = {
-    /**
-     * Successful Response
-     */
-    200: unknown;
-};
-
-export type DeleteDdPipelineSynthSlugWipeData = {
-    body?: never;
-    path: {
-        /**
-         * Slug
-         */
-        slug: string;
-    };
-    query?: {
-        /**
-         * Chapter Id
-         */
-        chapter_id?: string | null;
-    };
-    url: '/api/v1/dd/pipeline/synth/{slug}/wipe';
-};
-
-export type DeleteDdPipelineSynthSlugWipeErrors = {
-    /**
-     * Validation Error
-     */
-    422: HttpValidationError;
-};
-
-export type DeleteDdPipelineSynthSlugWipeError = DeleteDdPipelineSynthSlugWipeErrors[keyof DeleteDdPipelineSynthSlugWipeErrors];
-
-export type DeleteDdPipelineSynthSlugWipeResponses = {
-    /**
-     * Response Delete Dd Pipeline Synth Slug Wipe
-     *
-     * Successful Response
-     */
-    200: {
-        [key: string]: unknown;
-    };
-};
-
-export type DeleteDdPipelineSynthSlugWipeResponse = DeleteDdPipelineSynthSlugWipeResponses[keyof DeleteDdPipelineSynthSlugWipeResponses];
-
-export type PostDdPipelineSynthThreadIdCancelData = {
-    body?: never;
-    path: {
-        /**
-         * Thread Id
-         */
-        thread_id: string;
-    };
-    query?: never;
-    url: '/api/v1/dd/pipeline/synth/{thread_id}/cancel';
-};
-
-export type PostDdPipelineSynthThreadIdCancelErrors = {
-    /**
-     * Validation Error
-     */
-    422: HttpValidationError;
-};
-
-export type PostDdPipelineSynthThreadIdCancelError = PostDdPipelineSynthThreadIdCancelErrors[keyof PostDdPipelineSynthThreadIdCancelErrors];
-
-export type PostDdPipelineSynthThreadIdCancelResponses = {
-    /**
-     * Response Post Dd Pipeline Synth Thread Id Cancel
-     *
-     * Successful Response
-     */
-    200: {
-        [key: string]: unknown;
-    };
-};
-
-export type PostDdPipelineSynthThreadIdCancelResponse = PostDdPipelineSynthThreadIdCancelResponses[keyof PostDdPipelineSynthThreadIdCancelResponses];
-
-export type GetDdPipelineSynthThreadIdEventsData = {
-    body?: never;
-    path: {
-        /**
-         * Thread Id
-         */
-        thread_id: string;
-    };
-    query?: never;
-    url: '/api/v1/dd/pipeline/synth/{thread_id}/events';
-};
-
-export type GetDdPipelineSynthThreadIdEventsErrors = {
-    /**
-     * Validation Error
-     */
-    422: HttpValidationError;
-};
-
-export type GetDdPipelineSynthThreadIdEventsError = GetDdPipelineSynthThreadIdEventsErrors[keyof GetDdPipelineSynthThreadIdEventsErrors];
-
-export type GetDdPipelineSynthThreadIdEventsResponses = {
-    /**
-     * Successful Response
-     */
-    200: unknown;
-};
-
-export type PostDdPipelineSynthThreadIdReplayNodeIdData = {
-    body?: never;
-    path: {
-        /**
-         * Thread Id
-         */
-        thread_id: string;
-        /**
-         * Node Id
-         */
-        node_id: string;
-    };
-    query?: never;
-    url: '/api/v1/dd/pipeline/synth/{thread_id}/replay/{node_id}';
-};
-
-export type PostDdPipelineSynthThreadIdReplayNodeIdErrors = {
-    /**
-     * Validation Error
-     */
-    422: HttpValidationError;
-};
-
-export type PostDdPipelineSynthThreadIdReplayNodeIdError = PostDdPipelineSynthThreadIdReplayNodeIdErrors[keyof PostDdPipelineSynthThreadIdReplayNodeIdErrors];
-
-export type PostDdPipelineSynthThreadIdReplayNodeIdResponses = {
-    /**
-     * Response Post Dd Pipeline Synth Thread Id Replay Node Id
-     *
-     * Successful Response
-     */
-    200: {
-        [key: string]: unknown;
-    };
-};
-
-export type PostDdPipelineSynthThreadIdReplayNodeIdResponse = PostDdPipelineSynthThreadIdReplayNodeIdResponses[keyof PostDdPipelineSynthThreadIdReplayNodeIdResponses];
-
-export type PostDdPipelineSynthThreadIdResumeData = {
-    body?: never;
-    path: {
-        /**
-         * Thread Id
-         */
-        thread_id: string;
-    };
-    query?: never;
-    url: '/api/v1/dd/pipeline/synth/{thread_id}/resume';
-};
-
-export type PostDdPipelineSynthThreadIdResumeErrors = {
-    /**
-     * Validation Error
-     */
-    422: HttpValidationError;
-};
-
-export type PostDdPipelineSynthThreadIdResumeError = PostDdPipelineSynthThreadIdResumeErrors[keyof PostDdPipelineSynthThreadIdResumeErrors];
-
-export type PostDdPipelineSynthThreadIdResumeResponses = {
-    /**
-     * Response Post Dd Pipeline Synth Thread Id Resume
-     *
-     * Successful Response
-     */
-    200: {
-        [key: string]: unknown;
-    };
-};
-
-export type PostDdPipelineSynthThreadIdResumeResponse = PostDdPipelineSynthThreadIdResumeResponses[keyof PostDdPipelineSynthThreadIdResumeResponses];
-
-export type GetDdPipelineSlugStateData = {
-    body?: never;
-    path: {
-        /**
-         * Slug
-         */
-        slug: string;
-    };
-    query?: never;
-    url: '/api/v1/dd/pipeline/{slug}/state';
-};
-
-export type GetDdPipelineSlugStateErrors = {
-    /**
-     * Validation Error
-     */
-    422: HttpValidationError;
-};
-
-export type GetDdPipelineSlugStateError = GetDdPipelineSlugStateErrors[keyof GetDdPipelineSlugStateErrors];
-
-export type GetDdPipelineSlugStateResponses = {
-    /**
-     * Response Get Dd Pipeline Slug State
-     *
-     * Successful Response
-     */
-    200: {
-        [key: string]: unknown;
-    };
-};
-
-export type GetDdPipelineSlugStateResponse = GetDdPipelineSlugStateResponses[keyof GetDdPipelineSlugStateResponses];
 
 export type GetSettingsEmbeddingData = {
     body?: never;
@@ -8655,7 +6837,7 @@ export type PostYcsQueryAiBackendData = {
         /**
          * Backend
          */
-        backend: string;
+        backend: 'elasticsearch' | 'qdrant' | 'neo4j';
     };
     query?: never;
     url: '/api/v1/ycs/query/ai/{backend}';
@@ -8709,11 +6891,11 @@ export type GetYcsQueryHistoryData = {
         /**
          * Backend
          */
-        backend?: string | null;
+        backend?: 'elasticsearch' | 'qdrant' | 'neo4j' | null;
         /**
          * App
          */
-        app?: string | null;
+        app?: 'ycs' | null;
         /**
          * Limit
          */
@@ -8733,23 +6915,28 @@ export type GetYcsQueryHistoryError = GetYcsQueryHistoryErrors[keyof GetYcsQuery
 
 export type GetYcsQueryHistoryResponses = {
     /**
-     * Response Get Ycs Query History
-     *
      * Successful Response
      */
-    200: {
-        [key: string]: unknown;
-    };
+    200: HistoryResponse;
 };
 
 export type GetYcsQueryHistoryResponse = GetYcsQueryHistoryResponses[keyof GetYcsQueryHistoryResponses];
 
 export type PostYcsQueryHistoryData = {
-    body?: never;
+    body: SaveHistoryRequest;
     path?: never;
     query?: never;
     url: '/api/v1/ycs/query/history';
 };
+
+export type PostYcsQueryHistoryErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type PostYcsQueryHistoryError = PostYcsQueryHistoryErrors[keyof PostYcsQueryHistoryErrors];
 
 export type PostYcsQueryHistoryResponses = {
     /**
@@ -8865,7 +7052,7 @@ export type PostYcsQueryQdrantResponses = {
 export type PostYcsQueryQdrantResponse = PostYcsQueryQdrantResponses[keyof PostYcsQueryQdrantResponses];
 
 export type PostYcsQueryRawElasticsearchData = {
-    body: DomainsYcsQuerySchemasRawQueryRequest;
+    body: EntrypointsApiV1YcsQuerySchemasRawQueryRequest;
     path?: never;
     query?: never;
     url: '/api/v1/ycs/query/raw/elasticsearch';
@@ -8884,13 +7071,13 @@ export type PostYcsQueryRawElasticsearchResponses = {
     /**
      * Successful Response
      */
-    200: DomainsYcsQuerySchemasRawQueryResponse;
+    200: EntrypointsApiV1YcsQuerySchemasRawQueryResponse;
 };
 
 export type PostYcsQueryRawElasticsearchResponse = PostYcsQueryRawElasticsearchResponses[keyof PostYcsQueryRawElasticsearchResponses];
 
 export type PostYcsQueryRawNeo4jData = {
-    body: DomainsYcsQuerySchemasRawQueryRequest;
+    body: EntrypointsApiV1YcsQuerySchemasRawQueryRequest;
     path?: never;
     query?: never;
     url: '/api/v1/ycs/query/raw/neo4j';
@@ -8909,13 +7096,13 @@ export type PostYcsQueryRawNeo4jResponses = {
     /**
      * Successful Response
      */
-    200: DomainsYcsQuerySchemasRawQueryResponse;
+    200: EntrypointsApiV1YcsQuerySchemasRawQueryResponse;
 };
 
 export type PostYcsQueryRawNeo4jResponse = PostYcsQueryRawNeo4jResponses[keyof PostYcsQueryRawNeo4jResponses];
 
 export type PostYcsQueryRawQdrantData = {
-    body: DomainsYcsQuerySchemasRawQueryRequest;
+    body: EntrypointsApiV1YcsQuerySchemasRawQueryRequest;
     path?: never;
     query?: never;
     url: '/api/v1/ycs/query/raw/qdrant';
@@ -8934,7 +7121,7 @@ export type PostYcsQueryRawQdrantResponses = {
     /**
      * Successful Response
      */
-    200: DomainsYcsQuerySchemasRawQueryResponse;
+    200: EntrypointsApiV1YcsQuerySchemasRawQueryResponse;
 };
 
 export type PostYcsQueryRawQdrantResponse = PostYcsQueryRawQdrantResponses[keyof PostYcsQueryRawQdrantResponses];
@@ -8945,7 +7132,7 @@ export type GetYcsQuerySchemaBackendData = {
         /**
          * Backend
          */
-        backend: string;
+        backend: 'elasticsearch' | 'qdrant' | 'neo4j';
     };
     query?: {
         /**
@@ -8967,13 +7154,9 @@ export type GetYcsQuerySchemaBackendError = GetYcsQuerySchemaBackendErrors[keyof
 
 export type GetYcsQuerySchemaBackendResponses = {
     /**
-     * Response Get Ycs Query Schema Backend
-     *
      * Successful Response
      */
-    200: {
-        [key: string]: unknown;
-    };
+    200: EntrypointsApiV1YcsQuerySchemasQuerySchemaResponse;
 };
 
 export type GetYcsQuerySchemaBackendResponse = GetYcsQuerySchemaBackendResponses[keyof GetYcsQuerySchemaBackendResponses];

@@ -1,8 +1,7 @@
 """llm_counter service — per-run LLM call / token counters in Redis (one hash per run, one per node), the usage-drawer
 reader, the MinIO snapshot of a finished run and the LangChain usage callback. One module for every bounded context:
-a context only sets its attribution (`llm_context`, or `set_context` + `set_node`) and the namespace (`dd`, `ycs`) picks
-the keys and the payload shape (`params.NAMESPACES`). Redis serves the live drawer; the DD snapshot in MinIO avoids
-live Langfuse queries for a finished run.
+a context only sets its attribution (`llm_context`, or `set_context` + `set_node`) and the namespace picks the keys
+and payload shape (`params.NAMESPACES`). Redis serves the live drawer; a MinIO snapshot is available for finished runs.
 
 Attribution is a `ContextVar`, so concurrent asyncio tasks (YCS extracts N videos at once) each keep their own; a call
 made outside any context is not counted rather than mis-attributed. Counting is best-effort: it never raises.
@@ -176,7 +175,7 @@ async def _read_snapshot(ns: str, run_id: str) -> dict[str, Any] | None:
 
 async def read_counters(ns: str, run_id: str) -> dict[str, Any]:
     """The usage payload of one run, in its namespace's shape — what the Pipeline / Ask usage drawer renders. Redis first;
-    a namespace with a snapshot (DD) falls back to it once Redis has expired the run."""
+    a namespace with snapshots enabled falls back to it once Redis has expired the run."""
     spec = params.NAMESPACES.get(ns, params.DEFAULT_NAMESPACE)
     empty = domain.empty_payload(spec, run_id)
     if not run_id:

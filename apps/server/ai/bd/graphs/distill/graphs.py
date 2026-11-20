@@ -1,14 +1,15 @@
 """Distill workflow with separate extraction, verification, synthesis, and publication stages."""
 from __future__ import annotations
-import domains
-from . import entities, states
-from ... import nodes
-
 
 from typing import Any
 
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import RetryPolicy
+
+import domains
+
+from ... import nodes
+from . import entities, states
 
 
 def distill_graph(
@@ -97,12 +98,14 @@ def distill_graph(
     )
     workflow.add_conditional_edges(
         "synthesize_chapter",
-        nodes.distill.build_chapter_visuals.node.dispatch_chapters,
+        nodes.distill.synthesize_chapter.node.dispatch_parallel_stages,
         ["build_chapter_visuals", "synthesize_book"],
     )
-    workflow.add_edge("build_chapter_visuals", "synthesize_book")
     workflow.add_edge("synthesize_book", "write_decision_brief")
-    workflow.add_edge("write_decision_brief", "research_context")
-    workflow.add_edge("research_context", "publish_report")
+    workflow.add_edge("synthesize_book", "research_context")
+    workflow.add_edge(
+        ["build_chapter_visuals", "write_decision_brief", "research_context"],
+        "publish_report",
+    )
     workflow.add_edge("publish_report", END)
     return workflow.compile(checkpointer = checkpointer)

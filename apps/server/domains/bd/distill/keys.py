@@ -66,3 +66,7 @@ def synthesis_key(book_id: str, run_id: str, level: int, batch: int) -> str:
 
 def research_context_key(book_id: str, run_id: str) -> str:
     return f"{run_prefix(book_id, run_id)}synthesis/research-context.json"
+
+
+def decision_brief_key(book_id: str, run_id: str) -> str:
+    return f"{run_prefix(book_id, run_id)}synthesis/decision-brief.json"

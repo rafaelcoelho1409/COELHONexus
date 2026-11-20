@@ -8,7 +8,7 @@ export function Products() {
       <div className="mx-auto max-w-screen-2xl px-4 py-16 sm:px-6 md:py-24">
         <p className="mono-label">Products</p>
         <h2 id="products-title" className="mt-4 max-w-2xl text-balance text-3xl font-semibold tracking-tight">
-          Three tools, one platform.
+          Two tools, one platform.
         </h2>
         <ul className="mt-12 grid grid-cols-1 gap-px border border-border bg-border lg:grid-cols-3">
           {PRODUCTS.map((product) => (

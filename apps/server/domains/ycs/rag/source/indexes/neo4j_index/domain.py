@@ -14,7 +14,27 @@ import unicodedata
 from collections.abc import Sequence
 from typing import Any
 
-from . import params, patterns
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+
+from . import config, params, patterns
+
+
+def graph_chunks(content: str, *, chunk_size: int | None = None) -> list[str]:
+    """Split transcript text into bounded, slightly overlapping graph inputs."""
+    if not content.strip():
+        return []
+    size = chunk_size or config.GRAPH_CHUNK.input_chars
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size = size,
+        chunk_overlap = min(config.GRAPH_CHUNK.overlap_chars, size - 1),
+        add_start_index = True,
+        separators = ["\n\n", "\n", " ", ""],
+    )
+    return [
+        chunk.page_content.strip()
+        for chunk in splitter.create_documents([content])
+        if chunk.page_content.strip()
+    ]
 
 
 def pick_canonical(name_a: str, name_b: str) -> tuple[str, str]:
@@ -180,30 +200,36 @@ def is_infra_error(err: str | None) -> bool:
     """True for provider/infra failures worth retrying (timeouts, 5xx,
     rate limits, connection/overload). Everything else — auth,
     context-length, schema/validation, code bugs — will not heal on an
-    immediate re-attempt (DD's classifier split, adapted). Pure so both
+    immediate re-attempt. Pure so both
     `service.py` (logging) and `neo4j_task/task.py` (streak halt) share
     one definition."""
     m = (err or "").lower()
+    # Honor the HTTP status before inspecting the provider's response body:
+    # gateways may return an internal 500 whose body mentions AttributeError,
+    # which is not an application code failure and should still be retried.
+    if re.search(r"\b(?:429|500|502|503|504)\b", m):
+        return True
     if any(s in m for s in (
         "context", "auth", "401", "403", "filter", "schema",
         "valid", "attributerror", "keyerror", "typeerror",
     )):
         return False
     return (
-        "timeout" in m or "504" in m or "503" in m or "502" in m
-        or "429" in m or "rate" in m or "connection" in m
+        "timeout" in m or "rate" in m or "connection" in m
         or "overload" in m or "unavailable" in m
     )
 
 
 def is_overflow_error(err: str | None) -> bool:
-    """True when the failure signals context-window overflow (split the
-    input and retry per segment instead of hammering the full doc)."""
+    """True when an LLM length limit calls for splitting and retrying input."""
     m = (err or "").lower()
     return (
         ("context" in m and "length" in m)
         or "too many tokens" in m or "max_tokens" in m
         or "context_length" in m or "contextwindow" in m
+        or "lengthfinishreasonerror" in m
+        or "length limit was reached" in m
+        or "finish_reason=length" in m
     )
 
 

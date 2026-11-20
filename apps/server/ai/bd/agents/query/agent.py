@@ -1,5 +1,8 @@
 """DeepAgent construction for read-only BD query drafting."""
 from __future__ import annotations
+import domains
+from . import config, params
+from ... import middlewares, prompts
 
 from deepagents import (
     FilesystemPermission,
@@ -12,11 +15,6 @@ from deepagents.backends import StateBackend
 from deepagents.profiles.harness import harness_profiles
 from langchain.agents.middleware import ModelCallLimitMiddleware
 from langchain_openai import ChatOpenAI
-
-import domains
-
-from ... import middlewares, prompts
-from . import config, params
 
 
 def query_agent(model = None):

@@ -133,6 +133,7 @@ export function initialDistillRunState(run: DistillRun | DistillRunStart): Disti
         : {
             current_node: null,
             current_task: null,
+            active_tasks: {},
             node_status: {},
             completed_extractions: 0,
             completed_units: 0,

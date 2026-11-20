@@ -25,7 +25,7 @@ class Namespace:
 @dataclass(frozen = True, slots = True)
 class Attribution:
     """Who the LLM calls made in the current async task are billed to: counters live under `(ns, run_id)`,
-    split by `node_id`; `stage` (DD: planner / synth) is stored next to them."""
+    split by `node_id`; an optional stage label is stored next to them."""
     ns:      str
     run_id:  str
     node_id: str | None = None

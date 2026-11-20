@@ -1,7 +1,7 @@
 """ycs/source/content — PURE functions (no I/O, no async, no clocks).
 
 Cosmic Python "Functional Core" for the content-search subsystem. The
-LLM-stage equivalent of `ai/dd/nodes/pipeline/synth/sawc/domain.py`.
+Pure content transformations used by the search workflow.
 
 What lives here:
 - `build_string_filter` — operator-aware string match-filter formatter

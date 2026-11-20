@@ -11,7 +11,7 @@ test.describe("home", () => {
 
     await expect(page.getByRole("heading", { level: 1 })).toContainText("Framework docs, distilled");
     for (const section of [
-      "Three tools, one platform.",
+      "Two tools, one platform.",
       "Six layers",
       "How it is built.",
       "Run it yourself.",
@@ -23,11 +23,11 @@ test.describe("home", () => {
     await expect(panel.getByText("1,204")).toBeVisible();
   });
 
-  test("the header leads into Docs Distiller and Settings", async ({ page, api }) => {
+  test("the header leads into active products and Settings", async ({ page, api }) => {
     await api("healthy");
     await page.goto("/");
     const console = page.getByRole("navigation", { name: "Console" });
-    await expect(console.getByRole("link", { name: "Docs Distiller" })).toBeVisible();
+    await expect(console.getByRole("link", { name: "YouTube Content Search" })).toBeVisible();
     await expect(console.getByRole("link", { name: "Book Distiller" })).toBeVisible();
     await expect(console.getByRole("link", { name: "Settings" })).toBeVisible();
 
@@ -38,18 +38,8 @@ test.describe("home", () => {
       page.getByRole("navigation", { name: "Primary" }).getByRole("link", { name: "Settings" }),
     ).toHaveAttribute("aria-current", "page");
 
-    await page
-      .getByRole("navigation", { name: "Primary" })
-      .getByRole("link", { name: "Docs Distiller" })
-      .click();
-    await expect(page).toHaveURL(/\/dd$/);
-  });
-
-  test("the hero opens Docs Distiller", async ({ page, api }) => {
-    await api("healthy");
-    await page.goto("/");
-    await page.getByRole("link", { name: "Open Docs Distiller" }).first().click();
-    await expect(page).toHaveURL(/\/dd$/);
+    await page.getByRole("navigation", { name: "Primary" }).getByRole("link", { name: "YouTube Content Search" }).click();
+    await expect(page).toHaveURL(/\/ycs$/);
   });
 
   test("says so when the API is unreachable", async ({ page, api }) => {

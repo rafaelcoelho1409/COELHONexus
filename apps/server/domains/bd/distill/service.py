@@ -87,6 +87,8 @@ def _normalize_progress(manifest: dict[str, Any]) -> dict[str, Any]:
     if "research_context" not in old_status and old_status.get("synthesize_book") == "done":
         node_status["research_context"] = "done"
     progress_state.setdefault("current_task", None)
+    progress_state.setdefault("active_tasks", {})
+    progress_state.setdefault("node_progress", {})
     for field in (
         "completed_extractions",
         "completed_units",
@@ -98,6 +100,13 @@ def _normalize_progress(manifest: dict[str, Any]) -> dict[str, Any]:
     ):
         progress_state.setdefault(field, 0)
     return progress_state
+
+
+def _clear_active_node_progress(progress_state: dict[str, Any]) -> None:
+    """Clear in-flight counts when a run reaches a terminal state."""
+    for node_progress in progress_state.get("node_progress", {}).values():
+        if isinstance(node_progress, dict):
+            node_progress["active_count"] = 0
 
 
 async def _persisted_artifact_ids(
@@ -136,7 +145,7 @@ async def _reset_chapter_visuals(storage: infra.minio.service.MinIOStorage, pref
         artifact = json.loads(await storage.read_text(key))
         synthesis = artifact.get("synthesis")
         if not isinstance(synthesis, dict):
-            raise ValueError("a persisted chapter guide has no synthesis object")
+            raise TypeError("a persisted chapter guide has no synthesis object")
         for field in ("diagrams", "equations", "charts", "timelines", "maps"):
             synthesis[field] = []
         artifact.update({
@@ -427,6 +436,7 @@ async def queue_resume(book_id: str, run_id: str) -> dict[str, Any]:
         manifest["updated_at"] = time.time()
         manifest["progress"]["current_node"] = None
         manifest["progress"]["current_task"] = None
+        manifest["progress"]["active_tasks"] = {}
         for node, status in manifest["progress"]["node_status"].items():
             if status in {"running", "failed"}:
                 manifest["progress"]["node_status"][node] = "pending"
@@ -455,12 +465,12 @@ async def queue_node_replay(book_id: str, run_id: str, node_id: str) -> dict[str
         if active_runs:
             raise ValueError("stop the active Distill run before replaying a node")
         progress_state = _normalize_progress(manifest)
-        node_index = params.GRAPH_NODES.index(node_id)
         node_status = progress_state["node_status"]
+        predecessors = set(params.REPLAY_PREDECESSORS[node_id])
         incomplete_predecessors = [
             predecessor
-            for predecessor in params.GRAPH_NODES[:node_index]
-            if node_status.get(predecessor) != "done"
+            for predecessor in params.GRAPH_NODES
+            if predecessor in predecessors and node_status.get(predecessor) != "done"
         ]
         if incomplete_predecessors:
             predecessor = incomplete_predecessors[0]
@@ -499,11 +509,12 @@ async def queue_node_replay(book_id: str, run_id: str, node_id: str) -> dict[str
             "verify_unit",
             "prepare_chapters",
             "synthesize_chapter",
-            "build_chapter_visuals",
             "synthesize_book",
         }:
             await storage.delete_prefix(prefix + "synthesis/")
-        elif node_id in {"write_decision_brief", "research_context"}:
+        elif node_id == "write_decision_brief":
+            await storage.delete_prefix(prefix + "synthesis/decision-brief.json")
+        elif node_id == "research_context":
             await storage.delete_prefix(prefix + "synthesis/research-context.json")
         await storage.delete_prefix(prefix + "report.json")
         await storage.delete_prefix(prefix + "report.html")
@@ -511,7 +522,8 @@ async def queue_node_replay(book_id: str, run_id: str, node_id: str) -> dict[str
 
         retained_llm_nodes = {
             usage_node
-            for graph_node in params.GRAPH_NODES[:node_index]
+            for graph_node in params.GRAPH_NODES
+            if graph_node not in params.REPLAY_DESCENDANTS[node_id]
             for usage_node in params.LLM_COUNTER_NODES_BY_GRAPH_NODE[graph_node]
         }
         await domains.settings.llm_counter.service.retain_nodes("bd", run_id, retained_llm_nodes)
@@ -521,6 +533,9 @@ async def queue_node_replay(book_id: str, run_id: str, node_id: str) -> dict[str
             progress_state["node_status"][downstream_node] = "pending"
         progress_state["current_node"] = None
         progress_state["current_task"] = None
+        progress_state["active_tasks"] = {}
+        for downstream_node in downstream | {node_id}:
+            progress_state.setdefault("node_progress", {}).pop(downstream_node, None)
         artifact_ids = await _persisted_artifact_ids(storage, prefix)
         progress_state["completed_extractions"] = len(artifact_ids["extractions"])
         progress_state["completed_units"] = len(artifact_ids["units"])
@@ -581,6 +596,9 @@ async def request_cancel(book_id: str, run_id: str) -> dict[str, Any]:
             manifest["finished_at"] = max(time.time(), manifest["created_at"])
             manifest["error"] = None
             manifest["progress"]["current_node"] = None
+            manifest["progress"]["current_task"] = None
+            manifest["progress"]["active_tasks"] = {}
+            _clear_active_node_progress(manifest["progress"])
             manifest = await _write_manifest(storage, manifest)
             await progress.service.emit(
                 book_id,
@@ -664,6 +682,8 @@ async def mark_failed(book_id: str, run_id: str, error: Exception) -> dict[str, 
     manifest["finished_at"] = max(time.time(), manifest["created_at"])
     manifest["error"] = _failure_message(error)
     manifest["progress"]["current_node"] = None
+    manifest["progress"]["current_task"] = None
+    manifest["progress"]["active_tasks"] = {}
     await _write_manifest(infra.minio.service.get_storage(), manifest)
     await progress.service.emit(book_id, run_id, "run_failed", status = manifest["status"], error = manifest["error"])
     return manifest
@@ -848,7 +868,7 @@ async def run_distill(
     qa_content = await storage.read_text(manifest["ingestion_ai_manifest_key"])
     if hashlib.sha256(qa_content.encode("utf-8")).hexdigest() != manifest["ingestion_ai_manifest_sha256"]:
         raise ValueError("the ingestion QA manifest changed after this Distill run was created")
-    if manifest.get("schema_version") in {"1.1", "1.2", "1.3", "1.4"}:
+    if manifest.get("schema_version") in {"1.1", "1.2", "1.3", "1.4", "1.5"}:
         selection_content = await storage.read_text(manifest["content_selection_key"])
         if hashlib.sha256(selection_content.encode("utf-8")).hexdigest() != manifest["content_selection_sha256"]:
             raise ValueError("the content-selection revision changed after this Distill run was created")
@@ -864,7 +884,7 @@ async def run_distill(
             )
         ):
             raise ValueError("the pinned content-selection revision does not match this Distill run")
-    if manifest.get("schema_version") in {"1.2", "1.3", "1.4"}:
+    if manifest.get("schema_version") in {"1.2", "1.3", "1.4", "1.5"}:
         processed_content = await storage.read_text(manifest["processed_book_key"])
         if hashlib.sha256(processed_content.encode("utf-8")).hexdigest() != manifest["processed_book_sha256"]:
             raise ValueError("the pinned processed-book manifest failed its integrity check")
@@ -918,6 +938,33 @@ async def run_distill(
         completed_chapter_visuals = len(completed_chapter_visual_ids),
         completed_chapters = len(completed_chapter_visual_ids),
     )
+    node_work_completed: dict[str, set[str]] = {
+        "extract_unit": set(extracted_unit_ids),
+        "verify_unit": set(completed_unit_ids),
+        "synthesize_chapter": set(completed_chapter_guide_ids),
+        "build_chapter_visuals": set(completed_chapter_visual_ids),
+    }
+    node_work_active: dict[str, set[str]] = {}
+    node_work_totals: dict[str, int] = {}
+
+    def update_node_progress(node: str, total_count: int | None = None) -> None:
+        if total_count is not None:
+            node_work_totals[node] = total_count
+        total = node_work_totals.get(node, 0)
+        current_progress = manifest["progress"].setdefault("node_progress", {})
+        current_progress[node] = {
+            "completed_count": min(len(node_work_completed.get(node, set())), total) if total else 0,
+            "total_count": total,
+            "active_count": len(node_work_active.get(node, set())),
+        }
+
+    for node, total in (
+        ("extract_unit", progress_state["total_units"]),
+        ("verify_unit", progress_state["total_units"]),
+        ("synthesize_chapter", progress_state["total_chapters"]),
+        ("build_chapter_visuals", progress_state["total_chapters"]),
+    ):
+        update_node_progress(node, total)
     manifest = await _write_manifest(storage, manifest)
     progress_lock = asyncio.Lock()
     cancellation_observed = False
@@ -929,7 +976,14 @@ async def run_distill(
         status = event.get("status")
         should_check_cancel = (kind == "node" and status == "running") or (
             kind == "activity" and isinstance(event.get("current_task"), str)
-        ) or kind in {"unit", "chapter", "unit_extraction", "unit_verification", "chapter_guide", "chapter_visuals"}
+        ) or (kind == "node_item_progress" and status == "running") or kind in {
+            "unit",
+            "chapter",
+            "unit_extraction",
+            "unit_verification",
+            "chapter_guide",
+            "chapter_visuals",
+        }
         if should_check_cancel and await progress.service.cancel_requested(cancel_redis, book_id, run_id):
             cancellation_observed = True
             raise asyncio.CancelledError
@@ -946,32 +1000,85 @@ async def run_distill(
                     if status == "running":
                         current["current_node"] = node
                         current["current_task"] = None
-                    elif current.get("current_node") == node:
-                        current["current_node"] = None
-                        current["current_task"] = None
+                        current.setdefault("active_tasks", {}).pop(node, None)
+                    else:
+                        node_work_active.setdefault(node, set()).clear()
+                        update_node_progress(node)
+                        active_tasks = current.setdefault("active_tasks", {})
+                        active_tasks.pop(node, None)
+                        if current.get("current_node") == node:
+                            focus_node = next(reversed(active_tasks), None) if active_tasks else None
+                            current["current_node"] = focus_node
+                            current["current_task"] = active_tasks.get(focus_node) if focus_node else None
             elif kind == "activity":
                 task = event.get("current_task")
-                if isinstance(task, str) and event.get("node") == current.get("current_node"):
+                node = event.get("node")
+                if isinstance(task, str) and isinstance(node, str) and node in current["node_status"]:
+                    active_tasks = current.setdefault("active_tasks", {})
+                    active_tasks[node] = task[:240]
+                    current["current_node"] = node
                     current["current_task"] = task[:240]
+            elif kind == "node_work_plan":
+                node = event.get("node")
+                total_count = event.get("total_count")
+                if (
+                    isinstance(node, str)
+                    and node in current["node_status"]
+                    and type(total_count) is int
+                    and total_count >= 0
+                ):
+                    update_node_progress(node, total_count)
+            elif kind == "node_item_progress":
+                node = event.get("node")
+                item_id = event.get("item_id")
+                total_count = event.get("total_count")
+                if isinstance(node, str) and node in current["node_status"] and isinstance(item_id, str):
+                    if type(total_count) is int and total_count >= 0:
+                        node_work_totals[node] = total_count
+                    active_items = node_work_active.setdefault(node, set())
+                    completed_items = node_work_completed.setdefault(node, set())
+                    if status == "running":
+                        completed_items.discard(item_id)
+                        active_items.add(item_id)
+                    elif status == "done":
+                        active_items.discard(item_id)
+                        completed_items.add(item_id)
+                    elif status in {"failed", "cancelled"}:
+                        active_items.discard(item_id)
+                    update_node_progress(node)
+            elif kind == "node_page_progress":
+                node = event.get("node")
+                completed_count = event.get("completed_count")
+                total_count = event.get("total_count")
+                active_count = event.get("active_count")
+                if (
+                    isinstance(node, str)
+                    and node in current["node_status"]
+                    and all(type(value) is int and value >= 0 for value in (completed_count, total_count, active_count))
+                ):
+                    current.setdefault("node_progress", {})[node] = {
+                        "completed_count": min(completed_count, total_count),
+                        "total_count": total_count,
+                        "active_count": active_count,
+                    }
             elif kind == "unit_plan":
                 current["total_units"] = int(event.get("total_units", 0))
+                update_node_progress("extract_unit", current["total_units"])
+                update_node_progress("verify_unit", current["total_units"])
             elif kind == "unit_extraction" and status == "done":
                 unit_id = event.get("unit_id")
                 if isinstance(unit_id, str):
                     extracted_unit_ids.add(unit_id)
                 current["completed_extractions"] = len(extracted_unit_ids)
-            elif kind == "unit_verification" and status == "done":
-                unit_id = event.get("unit_id")
-                if isinstance(unit_id, str):
-                    completed_unit_ids.add(unit_id)
-                current["completed_units"] = len(completed_unit_ids)
-            elif kind == "unit" and status == "done":
+            elif kind in {"unit_verification", "unit"} and status == "done":
                 unit_id = event.get("unit_id")
                 if isinstance(unit_id, str):
                     completed_unit_ids.add(unit_id)
                 current["completed_units"] = len(completed_unit_ids)
             elif kind == "chapter_plan":
                 current["total_chapters"] = int(event.get("total_chapters", 0))
+                update_node_progress("synthesize_chapter", current["total_chapters"])
+                update_node_progress("build_chapter_visuals", current["total_chapters"])
             elif kind == "chapter_guide" and status == "done":
                 chapter_id = event.get("chapter_id")
                 if isinstance(chapter_id, str):
@@ -1042,6 +1149,7 @@ async def run_distill(
             "completed_units": [],
             "synthesized_chapters": [],
             "completed_chapters": [],
+            "decision_brief_key": None,
         }
         graph_config = {
             "configurable": {"thread_id": f"bd-distill:{book_id}:{manifest['extraction_run_id']}:{run_id}"},
@@ -1062,17 +1170,12 @@ async def run_distill(
                     "review_required": True,
                     "structural_quality": None,
                 }
-                if replay_from_node in {
-                    "prepare_units",
-                    "extract_unit",
-                    "verify_unit",
-                    "prepare_chapters",
-                    "synthesize_chapter",
-                    "build_chapter_visuals",
-                    "synthesize_book",
-                }:
+                replay_descendants = set(params.REPLAY_DESCENDANTS[replay_from_node])
+                if "synthesize_book" in replay_descendants:
                     reset_patch["book_synthesis_key"] = None
-                if replay_from_node != "publish_report":
+                if "write_decision_brief" in replay_descendants:
+                    reset_patch["decision_brief_key"] = None
+                if "research_context" in replay_descendants:
                     reset_patch["research_context_key"] = None
                 if replay_from_node == "prepare_units":
                     reset_patch.update(
@@ -1238,6 +1341,8 @@ async def run_distill(
         manifest["error"] = None
         manifest["progress"]["current_node"] = None
         manifest["progress"]["current_task"] = None
+        manifest["progress"]["active_tasks"] = {}
+        _clear_active_node_progress(manifest["progress"])
         manifest = await _write_manifest(storage, manifest)
         await progress.service.emit(book_id, run_id, "run_cancelled", status = "cancelled", progress = manifest["progress"])
         return manifest
@@ -1247,6 +1352,8 @@ async def run_distill(
         manifest["error"] = _failure_message(error)
         manifest["progress"]["current_node"] = None
         manifest["progress"]["current_task"] = None
+        manifest["progress"]["active_tasks"] = {}
+        _clear_active_node_progress(manifest["progress"])
         manifest = await _write_manifest(storage, manifest)
         logger.exception("[bd-distill] run failed book=%s run=%s", book_id, run_id)
         await domains.settings.llm_counter.service.snapshot("bd", run_id)

@@ -7,7 +7,6 @@ from typing import Any
 
 from langgraph.config import get_stream_writer
 
-
 ProgressReporter = Callable[[dict[str, Any]], Any]
 
 
@@ -48,6 +47,39 @@ async def report_node_page_progress(
         completed_count = completed_count,
         total_count = total_count,
         active_count = active_count,
+    )
+
+
+async def report_node_work_plan(
+    progress_callback: ProgressReporter | None,
+    node: str,
+    total_count: int,
+) -> None:
+    """Report the total number of work items a graph node will process."""
+    await report(
+        progress_callback,
+        kind = "node_work_plan",
+        node = node,
+        total_count = total_count,
+    )
+
+
+async def report_node_item_progress(
+    progress_callback: ProgressReporter | None,
+    node: str,
+    item_id: str,
+    status: str,
+    *,
+    total_count: int | None = None,
+) -> None:
+    """Report one page, unit, chapter, or batch entering or leaving node work."""
+    await report(
+        progress_callback,
+        kind = "node_item_progress",
+        node = node,
+        item_id = item_id,
+        status = status,
+        total_count = total_count,
     )
 
 

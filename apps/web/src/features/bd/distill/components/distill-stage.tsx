@@ -197,6 +197,15 @@ function DistillWorkspaceView({
   const [stoppingRunId, setStoppingRunId] = useState<string | null>(null);
   const [restartingQueuedRun, setRestartingQueuedRun] = useState(false);
   const [distillProgressOpen, setDistillProgressOpen] = useState(false);
+  const [startFeedback, setStartFeedback] = useState<{
+    kind: "status" | "error";
+    text: string;
+  } | null>(null);
+  const [replayPendingNodeId, setReplayPendingNodeId] = useState<string | null>(null);
+  const [replayMessage, setReplayMessage] = useState<{
+    kind: "status" | "error";
+    text: string;
+  } | null>(null);
   const readiness = distillReadiness(book, contentSelection.data ?? null, contentSelection.isError);
   const selected = selectDistillRun(runs.data ?? [], requestedRunId);
   const activeRun = (runs.data ?? []).find((run) => isDistillLive(run.status)) ?? null;
@@ -218,18 +227,32 @@ function DistillWorkspaceView({
   const progressStreamStatus =
     controlRun && selected?.run_id === controlRun.run_id ? stream.status : "closed";
   const resumable = progressStatus === "failed" || progressStatus === "cancelled";
+  const canReplay = Boolean(controlRun && ["done", "failed", "cancelled"].includes(progressStatus ?? ""));
   const stopping = activeRun !== null && stoppingRunId === activeRun.run_id;
   const actionPending =
     actions.start.isPending || actions.resume.isPending || actions.cancel.isPending || actions.wipe.isPending;
   const canExecute = capabilities.data?.execution_enabled === true;
   const canReplaceQueuedRun = activeRun?.status === "queued";
-  const startDisabled =
-    !canExecute ||
-    !readiness.ready ||
-    (activeRun !== null && !canReplaceQueuedRun) ||
-    actionPending ||
-    runs.isPending ||
-    runs.isError;
+  const startDisabledReason = capabilities.isPending
+    ? "Checking Distill availability…"
+    : capabilities.isError
+      ? "Distill availability could not be checked. Reload the page to try again."
+      : !canExecute
+        ? "Distill runs are unavailable in this environment."
+        : runs.isPending
+          ? "Loading Distill runs…"
+          : runs.isError
+            ? "Distill run history could not be loaded. Reload the page to try again."
+            : !readiness.ready
+              ? (readiness.steps.find((step) => step.status !== "complete")?.detail ?? readiness.reason)
+              : !book.agentic || !contentSelection.data
+                ? "The Ingestion run or page selection is no longer available. Reload the page to try again."
+                : activeRun !== null && !canReplaceQueuedRun
+                  ? "A Distill run is already active. Stop it before starting another run."
+                  : actionPending
+                    ? "Another Distill action is in progress."
+                    : null;
+  const startDisabled = startDisabledReason !== null;
   const resumeDisabled =
     !canExecute ||
     !resumable ||
@@ -242,36 +265,59 @@ function DistillWorkspaceView({
   const wipeDisabled =
     selected === null || isDistillLive(selected.status) || activeRun !== null || actionPending;
   const queueFreshRun = () => {
-    if (!book.agentic || !contentSelection.data) return;
+    if (!book.agentic || !contentSelection.data) {
+      setStartFeedback({
+        kind: "error",
+        text: "The Ingestion run or page selection is no longer available. Reload the page and try again.",
+      });
+      return;
+    }
+    setStartFeedback({ kind: "status", text: "Starting Distill…" });
     actions.start.mutate(book.agentic.agentic_run_id, {
       onSuccess: (result) => {
         setRestartingQueuedRun(false);
         setStoppingRunId(null);
         router.push(distillHref(bookId, result.run_id));
+        setStartFeedback({ kind: "status", text: "Distill run queued. Loading progress…" });
         notice("Distill run queued.");
       },
       onError: (error) => {
         setRestartingQueuedRun(false);
-        notice(apiErrorMessage(error), "error");
+        const message = apiErrorMessage(error);
+        setStartFeedback({ kind: "error", text: `Could not start Distill — ${message}` });
+        notice(message, "error");
       },
     });
   };
   const startRun = () => {
-    if (startDisabled || !book.agentic || !contentSelection.data) return;
+    if (startDisabled || !book.agentic || !contentSelection.data) {
+      setStartFeedback({
+        kind: "error",
+        text:
+          startDisabledReason ??
+          "The Ingestion run or page selection is no longer available. Reload the page and try again.",
+      });
+      return;
+    }
     if (canReplaceQueuedRun && activeRun) {
       setRestartingQueuedRun(true);
+      setStartFeedback({ kind: "status", text: "Replacing the queued Distill run…" });
       actions.cancel.mutate(activeRun.run_id, {
         onSuccess: (result) => {
           if (result.status !== "cancelled") {
             setRestartingQueuedRun(false);
-            notice("The queued Distill run became active. Stop it before starting a fresh run.", "info");
+            const message = "The queued Distill run became active. Stop it before starting a fresh run.";
+            setStartFeedback({ kind: "error", text: message });
+            notice(message, "info");
             return;
           }
           queueFreshRun();
         },
         onError: (error) => {
           setRestartingQueuedRun(false);
-          notice(apiErrorMessage(error), "error");
+          const message = apiErrorMessage(error);
+          setStartFeedback({ kind: "error", text: `Could not replace the queued run — ${message}` });
+          notice(message, "error");
         },
       });
       return;
@@ -337,27 +383,49 @@ function DistillWorkspaceView({
     });
   };
   const replayDistillNode = async (nodeId: string) => {
-    if (!controlRun || progressStatus === "queued" || progressStatus === "running") return;
+    if (!controlRun || !canReplay || actions.replay.isPending) return;
     const confirmed = await confirm({
       title: "Replay from this stage?",
       message: `Clears Distill results from “${nodeId}” and every later stage, then reruns them. Earlier stage results are kept. This cannot be undone.`,
       confirmLabel: "Replay stage",
     });
     if (!confirmed) return;
+    setReplayMessage(null);
+    setReplayPendingNodeId(nodeId);
     actions.replay.mutate(
       { runId: controlRun.run_id, nodeId },
       {
-        onSuccess: () => notice(`Distill replay queued from ${nodeId}.`),
-        onError: (error) => notice(apiErrorMessage(error), "error"),
+        onSuccess: () => {
+          setReplayPendingNodeId(null);
+          const text = `Replay queued from ${nodeId}.`;
+          setReplayMessage({ kind: "status", text });
+          notice(`Distill ${text}`);
+        },
+        onError: (error) => {
+          setReplayPendingNodeId(null);
+          const message = apiErrorMessage(error);
+          setReplayMessage({ kind: "error", text: `Replay failed — ${message}` });
+          notice(message, "error");
+        },
       },
     );
   };
   const progressActions = (
     <>
       <ActionButton
+        type="button"
         className="w-full min-w-0 justify-center px-1"
         onClick={resumable ? resumeRun : startRun}
         disabled={resumable ? resumeDisabled : startDisabled}
+        aria-describedby={
+          !resumable
+            ? startFeedback
+              ? "distill-start-feedback"
+              : startDisabledReason
+                ? "distill-start-disabled-reason"
+                : undefined
+            : undefined
+        }
         aria-busy={restartingQueuedRun || actions.start.isPending || actions.resume.isPending}
         aria-label={
           restartingQueuedRun
@@ -397,6 +465,7 @@ function DistillWorkspaceView({
                 : "Start"}
       </ActionButton>
       <ActionButton
+        type="button"
         className="w-full min-w-0 justify-center px-1"
         onClick={stopRun}
         disabled={stopDisabled}
@@ -413,6 +482,7 @@ function DistillWorkspaceView({
         {actions.cancel.isPending || stopping ? "Stopping…" : "Stop"}
       </ActionButton>
       <ActionButton
+        type="button"
         className="w-full min-w-0 justify-center px-1"
         onClick={() => void wipeRun()}
         disabled={wipeDisabled}
@@ -521,30 +591,30 @@ function DistillWorkspaceView({
         <div className="min-w-0">{outputPanel}</div>
       ) : (
         <div className="mt-4 min-w-0 space-y-4">
-          <div className="grid min-w-0 grid-cols-1 items-start gap-4">
-            <DistillProcessProgress
-              status={progressStatus}
-              progress={progress}
-              statusText={progressStatusText}
-              error={progressError}
-              controls={progressActions}
-              onOpenInfo={() => setDistillProgressOpen(true)}
-            />
-          </div>
           <DistillNodeBoard
             bookId={bookId}
             status={progressStatus}
             progress={progress}
             statusText={progressStatusText}
             runId={controlRun?.run_id ?? null}
+            processProgress={
+              <DistillProcessProgress
+                statusText={progressStatusText}
+                error={progressError}
+                actionFeedback={startFeedback}
+                startDisabledReason={resumable ? null : startDisabledReason}
+                controls={progressActions}
+                onOpenInfo={() => setDistillProgressOpen(true)}
+              />
+            }
             progressDetails={progressPanel}
             progressOpen={distillProgressOpen}
             onProgressOpenChange={setDistillProgressOpen}
-            onPlayNode={
-              controlRun && progressStatus !== "queued" && progressStatus !== "running"
-                ? (nodeId) => void replayDistillNode(nodeId)
-                : undefined
-            }
+            onPlayNode={(nodeId) => void replayDistillNode(nodeId)}
+            replayDisabled={!canReplay || actionPending}
+            replayPending={actions.replay.isPending}
+            replayPendingNodeId={replayPendingNodeId}
+            replayMessage={replayMessage}
           />
           {runHistory}
         </div>

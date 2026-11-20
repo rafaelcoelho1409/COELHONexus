@@ -3,7 +3,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { ChartNoAxesColumn, X } from "lucide-react";
 import dynamic from "next/dynamic";
-import { useState, type ReactNode } from "react";
+import { type ReactNode, useState } from "react";
 import { apiErrorMessage } from "@/shared/lib/api-error";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/shared/ui/tabs";
 import { ActionButton } from "../../components/action-button";
@@ -20,7 +20,9 @@ import { fetchPipelineUsage } from "../../rag/api";
 import { PipelineUsageBreakdown, PipelineUsageSheet } from "../../rag/components/pipeline-usage-sheet";
 import { SideSheet } from "../../rag/components/side-sheet";
 import {
+  DISTILL_CONNECTIONS,
   DISTILL_NODES,
+  DISTILL_POSITIONS,
   DISTILL_USAGE_COUNTERS,
   distillBoardCaption,
   distillNodeStatus,
@@ -52,20 +54,30 @@ export function DistillNodeBoard({
   progress,
   statusText,
   runId,
+  processProgress,
   progressDetails,
   progressOpen,
   onProgressOpenChange,
   onPlayNode,
+  replayDisabled,
+  replayPending,
+  replayPendingNodeId,
+  replayMessage,
 }: {
   bookId: string;
   status: DistillRun["status"] | null;
   progress: DistillRun["progress"] | null;
   statusText: string;
   runId: string | null;
+  processProgress: ReactNode;
   progressDetails: ReactNode;
   progressOpen: boolean;
   onProgressOpenChange: (open: boolean) => void;
   onPlayNode?: (nodeId: string) => void;
+  replayDisabled: boolean;
+  replayPending: boolean;
+  replayPendingNodeId: string | null;
+  replayMessage: { kind: "status" | "error"; text: string } | null;
 }) {
   const [mode, setMode] = useState<(typeof MODES)[number]["id"]>("graph");
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
@@ -93,15 +105,30 @@ export function DistillNodeBoard({
             </span>
           </div>
         </header>
+        {replayMessage ? (
+          <p
+            role={replayMessage.kind === "error" ? "alert" : "status"}
+            className={`mt-3 break-words text-sm ${
+              replayMessage.kind === "error" ? "text-destructive-text" : "text-muted-foreground"
+            }`}
+          >
+            {replayMessage.text}
+          </p>
+        ) : null}
 
-        <div className="mt-3 grid min-w-0 grid-cols-1 items-start gap-3 xl:grid-cols-[minmax(0,7fr)_minmax(0,3fr)]">
+        <div className="mt-3 grid min-w-0 grid-cols-1 items-start gap-3 xl:grid-cols-[minmax(0,4fr)_minmax(0,1fr)]">
           <div className="min-w-0 overflow-hidden rounded-sm border border-border bg-background">
             {mode === "graph" ? (
               <AgenticFlow
                 views={views}
                 onOpenNode={setSelectedNodeId}
                 onPlayNode={onPlayNode}
+                replayDisabled={replayDisabled}
+                replayPending={replayPending}
+                replayPendingNodeId={replayPendingNodeId}
                 ariaLabel="Distill pipeline graph"
+                connections={DISTILL_CONNECTIONS}
+                positions={DISTILL_POSITIONS}
               />
             ) : mode === "list" ? (
               <div className="p-3">
@@ -109,12 +136,16 @@ export function DistillNodeBoard({
                   rows={views}
                   onOpen={setSelectedNodeId}
                   onPlay={onPlayNode}
+                  replayDisabled={replayDisabled}
+                  replayPending={replayPending}
+                  replayPendingNodeId={replayPendingNodeId}
                   label="Distill pipeline nodes"
                 />
               </div>
             ) : null}
           </div>
           <div className="flex min-w-0 flex-col gap-3">
+            {processProgress}
             <div className="flex min-w-0 flex-col gap-2">
               <ActionButton
                 className="w-full justify-center whitespace-nowrap px-2"
@@ -238,7 +269,10 @@ function LearningProgressSheet({
                 />
               </div>
             </section>
-            <section aria-label="Chapter stage progress" className="rounded-sm border border-border bg-card p-4">
+            <section
+              aria-label="Chapter stage progress"
+              className="rounded-sm border border-border bg-card p-4"
+            >
               <div className="flex flex-col gap-3">
                 <ProgressMetric
                   label="Chapter guides written"

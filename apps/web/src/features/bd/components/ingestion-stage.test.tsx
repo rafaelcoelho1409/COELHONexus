@@ -1007,7 +1007,7 @@ describe("A book being extracted", () => {
     const pipeline = screen.getByRole("region", { name: "Agentic pipeline stages" });
     const usage = within(pipeline).getByRole("button", { name: "LLM usage" });
     const graph = within(pipeline).getByRole("button", { name: "Graph" });
-    // One row, as on the Docs Distiller's Ingestion pipeline: the usage button first, the switch after it.
+    // One row: the usage button first, the view switch after it.
     expect(usage.parentElement).toBe(graph.closest("fieldset")?.parentElement);
     expect(usage.compareDocumentPosition(graph) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 

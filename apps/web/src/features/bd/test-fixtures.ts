@@ -1,5 +1,5 @@
 /** Fixtures that look like real data (long titles, nested section paths, a table, an untagged code fence), shared by
- * the unit tests. The e2e spec carries its own copy, as the DD one does. */
+ * the unit tests. The e2e spec carries its own copy as well. */
 
 import { HttpResponse } from "msw";
 

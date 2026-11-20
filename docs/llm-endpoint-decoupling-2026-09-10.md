@@ -8,7 +8,7 @@ dependency, so:
 - The Settings page becomes a single OpenAI-compatible endpoint field (URL + key +
   model) instead of per-provider BYOK management.
 - Eventually: delete the bundled `llm-rotator` subchart and the provider-key
-  settings from COELHONexus entirely, once every app (Planner, Synth, YCS agents) is
+  settings from COELHONexus entirely, once every app (BD and YCS agents) is
   proven against an external LLM Rotator.
 
 ## Current integration (as of `51e20d2` rotator / this Nexus tree)
@@ -25,8 +25,6 @@ dependency, so:
 - **Second coupling point:** `domains.llm.rotator.discovery` / `.benchmarks` are
   imported *in-process* by:
   - `api/v1/llm/settings/router.py` (the settings page backend)
-  - `api/v1/dd/planner/router.py` + `synth/router.py` — `missing_required_keys` (the
-    readiness gate that blocks DD runs when a provider key is missing)
   - `api/v1/ycs/agents/router.py` + `.../byok/domain.py` — `PROVIDERS`, `rank_for_step`
   - `api/v1/llm/openai/router.py` — `PROVIDERS`, `list_all_alive_models`
 
@@ -119,7 +117,7 @@ All Python compiles; JS passes `node --check`.
   for the bundled rotator — consider hiding it when the URL points away from
   `llm-rotator-fastapi` (Phase 3 territory).
 - `~10s` convergence for the celery worker on an endpoint change (throttled store
-  re-read). A settings change mid-planner-run won't retro-apply to in-flight calls;
+  re-read). A settings change mid-workflow won't retro-apply to in-flight calls;
   fine for an ops action.
 
 ---
@@ -134,7 +132,7 @@ before the destructive Phase 3c.
   from `chain/__init__.py`.
 - `rotator/discovery/service.py` — `missing_required_keys()` returns `[]` early when
   `is_external_endpoint()` (lazy import, no cycle — `chain` doesn't import `discovery`).
-  This satisfies the planner/synth run-start gates, the settings `/readiness` banner,
+  This satisfies feature run-start gates, the settings `/readiness` banner,
   and `/providers` `ready` flag in one place.
 - `fasthtml/static/js/settings_endpoint.js` — sets
   `#settings-root[data-llm-external="1"]` from the configured URL.
@@ -149,11 +147,11 @@ Verified: `is_bundled_rotator()` True on the default URL; import clean, no cycle
 1. `skaffold dev` the rotator standalone (or use OpenAI).
 2. Settings → LLM Endpoint → set URL (+ key), Save, Test → expect OK.
 3. Confirm `/settings` readiness banner goes green with no NIM key set.
-4. Run a Planner + a Synth end to end. Check YCS agents too.
+4. Run a representative long-running job end to end. Check YCS agents too.
 
 ## Phase 3c-lite — Delete the bundled subchart itself  ✅ DONE (2026-09-11)
 
-Triggered by a real incident: a Planner run silently served on a 20h-stale
+Triggered by a real incident: an agent run silently served on a 20h-stale
 rotator build because plain `skaffold dev` on Nexus deploys the bundled
 `llm-rotator` subchart from a pinned registry image, while the F–L
 wave batch was only ever built by the rotator's *own* `skaffold dev` into
@@ -198,7 +196,7 @@ loop. No production rotator currently runs anywhere, so `llm.endpoint.url`'s
 default only resolves inside the local dev cluster — a real prod deploy needs
 an explicit override once a prod rotator exists.
 
-## Phase 3c — Delete the vendored bandit/discovery/benchmarks + provider settings UI  ⬜ TODO (after a green Planner run against the current external rotator)
+## Phase 3c — Delete the vendored bandit/discovery/benchmarks + provider settings UI  ⬜ TODO (after a successful representative job against the current external rotator)
 
 Only once every app is proven against an external endpoint:
 
@@ -206,7 +204,7 @@ Only once every app is proven against an external endpoint:
    hit must have migrated. Known hits: settings router (`PROVIDERS`,
    `list_provider_free_models`, `probe_provider_key`), `api/v1/llm/openai/router.py`,
    `api/v1/ycs/agents/router.py` (`rank_for_step` + discovery), `.../byok/domain.py`.
-   The planner/synth readiness gates are already handled (3a).
+   The feature readiness gates are already handled (3a).
 2. Delete `domains/llm/rotator/{bandit,discovery,benchmarks}` from Nexus (keep `chain/`).
 3. Delete the provider-key / free-model-selection routes + UI from the settings page;
    keep only the endpoint card. Drop the `[data-llm-external]` dimming CSS with it.

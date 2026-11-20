@@ -1,8 +1,8 @@
 "use client";
 
-/** The YCS retrieval workflow in a graph/list with BD-style node details and run controls. */
+/** The YCS retrieval workflow in a graph/list with BD-style node details; run dispatch stays on Source. */
 
-import { ChartNoAxesColumn } from "lucide-react";
+import { ChartNoAxesColumn, ListChecks } from "lucide-react";
 import dynamic from "next/dynamic";
 import type { JSX } from "react";
 import { useState } from "react";
@@ -31,44 +31,37 @@ const MODES = [
   { id: "list", label: "List" },
 ] as const;
 
-export type IngestionWorkflowAction = {
-  label: string;
-  pendingLabel: string;
-  pending?: boolean;
-  disabled?: boolean;
-  title?: string;
-  onClick: () => void;
-};
-
-export type IngestionWorkflowActions = {
-  start: IngestionWorkflowAction;
-  stop: IngestionWorkflowAction;
-  wipe: IngestionWorkflowAction;
-};
-
 const DEFAULT_CAPTION =
   "Playwright retrieves transcripts → Elasticsearch indexes them → Qdrant writes vectors while Neo4j extracts the retrieval graph.";
 
 export function IngestionAgenticStructure({
   steps,
-  actions,
   onOpenUsage,
+  onOpenVideos,
+  videoCount = 0,
   usage = null,
   usageLoading = false,
   usageError = null,
   ariaLabel = "Agentic RAG pipeline",
   caption = DEFAULT_CAPTION,
   onPlayNode,
+  replayDisabled = false,
+  replayPending = false,
+  replayPendingNodeId = null,
 }: {
   steps: ReadonlyArray<Step>;
-  actions: IngestionWorkflowActions;
   onOpenUsage: () => void;
+  onOpenVideos?: () => void;
+  videoCount?: number;
   usage?: AskUsage | null;
   usageLoading?: boolean;
   usageError?: string | null;
   ariaLabel?: string;
   caption?: string;
   onPlayNode?: (nodeId: string) => void;
+  replayDisabled?: boolean;
+  replayPending?: boolean;
+  replayPendingNodeId?: string | null;
 }): JSX.Element {
   const [mode, setMode] = useState<(typeof MODES)[number]["id"]>("graph");
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
@@ -77,35 +70,28 @@ export function IngestionAgenticStructure({
   return (
     <>
       <div className="flex min-w-0 flex-col gap-3">
-        <fieldset className="m-0 grid min-w-0 grid-cols-3 gap-2 border-0 p-0">
-          <legend className="sr-only">Agentic RAG run controls</legend>
-          {(["start", "stop", "wipe"] as const).map((key) => {
-            const action = actions[key];
-            return (
-              <ActionButton
-                key={key}
-                type="button"
-                onClick={action.onClick}
-                disabled={action.disabled}
-                aria-busy={action.pending}
-                title={action.title}
-                className="min-w-0 justify-center whitespace-nowrap px-2"
-              >
-                {action.pending ? action.pendingLabel : action.label}
-              </ActionButton>
-            );
-          })}
-        </fieldset>
-
-        <ActionButton
-          type="button"
-          aria-haspopup="dialog"
-          onClick={onOpenUsage}
-          className="w-full justify-center whitespace-nowrap px-2"
-        >
-          <ChartNoAxesColumn aria-hidden />
-          LLM usage
-        </ActionButton>
+        <div className={`grid min-w-0 gap-2 ${onOpenVideos ? "grid-cols-2" : "grid-cols-1"}`}>
+          <ActionButton
+            type="button"
+            aria-haspopup="dialog"
+            onClick={onOpenUsage}
+            className="w-full justify-center whitespace-nowrap px-2"
+          >
+            <ChartNoAxesColumn aria-hidden />
+            LLM usage
+          </ActionButton>
+          {onOpenVideos ? (
+            <ActionButton
+              type="button"
+              aria-haspopup="dialog"
+              onClick={onOpenVideos}
+              className="w-full justify-center whitespace-nowrap px-2"
+            >
+              <ListChecks aria-hidden />
+              {`Videos (${videoCount})`}
+            </ActionButton>
+          ) : null}
+        </div>
 
         <section
           aria-label={ariaLabel}
@@ -134,12 +120,22 @@ export function IngestionAgenticStructure({
           </fieldset>
 
           {mode === "graph" ? (
-            <IngestionAgenticFlow steps={steps} onOpen={setSelectedKey} onPlay={onPlayNode} />
+            <IngestionAgenticFlow
+              steps={steps}
+              onOpen={setSelectedKey}
+              onPlay={onPlayNode}
+              replayDisabled={replayDisabled}
+              replayPending={replayPending}
+              replayPendingNodeId={replayPendingNodeId}
+            />
           ) : mode === "list" ? (
             <PipelineSteps
               steps={steps}
               onOpen={(step) => setSelectedKey(step.key)}
               onPlay={onPlayNode ? (step) => onPlayNode(step.key) : undefined}
+              replayDisabled={replayDisabled}
+              replayPending={replayPending}
+              replayPendingStepKey={replayPendingNodeId}
             />
           ) : null}
         </section>

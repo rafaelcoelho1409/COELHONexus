@@ -8,7 +8,7 @@
  * the plain table model. */
 
 import { ArrowDown, ArrowUp, ArrowUpDown, Columns3, Filter } from "lucide-react";
-import { type JSX, useMemo, useState } from "react";
+import { type JSX, useEffect, useMemo, useState } from "react";
 
 import { useYcsOverlays } from "../hooks/use-overlays";
 import { QUERY_ID_CLIP, QUERY_ROWS_STEP } from "../params";
@@ -55,6 +55,9 @@ const CELL_WIDTH: Record<ColumnKind, string> = {
   plain: "min-w-24 max-w-xs",
 };
 
+const TABLE_ACTION_CLASS =
+  "w-full min-w-0 justify-center whitespace-normal xl:flex-col xl:gap-1 xl:px-1 xl:text-xs 2xl:flex-row 2xl:gap-2 2xl:px-3 2xl:text-sm";
+
 function Cell({
   column,
   kind,
@@ -71,14 +74,14 @@ function Cell({
   if (shape === "empty") return <span className="text-muted-foreground">&quot;&quot;</span>;
   if (shape === "array" || shape === "object") {
     return (
-      <button
+      <ActionButton
         type="button"
         onClick={onOpen}
         aria-label={`Open ${column}, ${nestedLabel(value)}`}
-        className="min-h-9 rounded-sm border border-border px-2 font-mono text-xs hover:border-neutral-8 hover:bg-background focus-visible:outline-2 focus-visible:outline-ring"
+        className="h-auto min-h-9 font-mono text-xs"
       >
         {nestedLabel(value)}
-      </button>
+      </ActionButton>
     );
   }
   const text = cellText(value);
@@ -93,7 +96,13 @@ function Cell({
   return <div className="line-clamp-3 break-words">{clip(text)}</div>;
 }
 
-export function QueryTable({ rows }: { rows: ReadonlyArray<Row> }): JSX.Element {
+export function QueryTable({
+  rows,
+  onVisibleCountChange,
+}: {
+  rows: ReadonlyArray<Row>;
+  onVisibleCountChange: (count: number) => void;
+}): JSX.Element {
   const { toast } = useYcsOverlays();
   const plan = useMemo(() => planColumns(rows), [rows]);
   const [sort, setSort] = useState<Sort>(null);
@@ -112,6 +121,10 @@ export function QueryTable({ rows }: { rows: ReadonlyArray<Row> }): JSX.Element 
   // The row's place in the current order is its identity (result rows carry no id of their own).
   const painted = visible.slice(0, shown).map((row, position) => ({ row, position }));
 
+  useEffect(() => {
+    onVisibleCountChange(visible.length);
+  }, [onVisibleCountChange, visible.length]);
+
   const copyAll = () => {
     navigator.clipboard.writeText(toCsv(exportColumns, visible)).then(
       () => toast(`Copied ${visible.length} rows as CSV`),
@@ -129,32 +142,34 @@ export function QueryTable({ rows }: { rows: ReadonlyArray<Row> }): JSX.Element 
 
   return (
     <div className="flex flex-col gap-3">
-      <div className="flex flex-wrap items-center gap-2">
-        <p role="status" className="tabular mr-auto text-sm text-muted-foreground">
-          {visible.length === rows.length
-            ? `${rows.length.toLocaleString("en-US")} rows`
-            : `${visible.length.toLocaleString("en-US")} of ${rows.length.toLocaleString("en-US")} rows match`}
-        </p>
-        <ActionButton aria-pressed={picking} onClick={() => setPicking((was) => !was)}>
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
+        <ActionButton
+          aria-pressed={picking}
+          onClick={() => setPicking((was) => !was)}
+          className={TABLE_ACTION_CLASS}
+        >
           <Columns3 aria-hidden /> Columns
         </ActionButton>
         <ActionButton
           aria-pressed={filtering}
           onClick={() => setFiltering((was) => !was)}
+          className={TABLE_ACTION_CLASS}
         >
           <Filter aria-hidden /> Filter columns
         </ActionButton>
         <ActionButton
           onClick={() => download("results.csv", toCsv(exportColumns, visible), "text/csv")}
+          className={TABLE_ACTION_CLASS}
         >
           Export CSV
         </ActionButton>
         <ActionButton
           onClick={() => download("results.json", toJsonText(visible), "application/json")}
+          className={TABLE_ACTION_CLASS}
         >
           Export JSON
         </ActionButton>
-        <ActionButton onClick={copyAll}>
+        <ActionButton onClick={copyAll} className={`col-span-2 sm:col-span-1 ${TABLE_ACTION_CLASS}`}>
           Copy CSV
         </ActionButton>
       </div>
@@ -206,7 +221,7 @@ export function QueryTable({ rows }: { rows: ReadonlyArray<Row> }): JSX.Element 
                         setSort((current) => nextSort(current, column));
                         setShown(QUERY_ROWS_STEP);
                       }}
-                      className="flex min-h-9 w-full items-center gap-1 px-3 text-left whitespace-nowrap hover:bg-background hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"
+                      className="flex min-h-9 w-full items-center gap-1 px-3 text-left whitespace-nowrap hover:text-foreground"
                     >
                       <span>{column}</span>
                       <SortIcon dir={dir} />
@@ -244,7 +259,7 @@ export function QueryTable({ rows }: { rows: ReadonlyArray<Row> }): JSX.Element 
                     type="button"
                     onClick={() => setOpenRow(position)}
                     aria-label={`Open row ${position + 1}`}
-                    className="tabular inline-flex min-h-9 min-w-9 items-center justify-center rounded-sm px-2 text-xs text-muted-foreground hover:bg-background hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"
+                    className="tabular inline-flex min-h-9 min-w-9 items-center justify-center rounded-sm px-2 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
                   >
                     {position + 1}
                   </button>

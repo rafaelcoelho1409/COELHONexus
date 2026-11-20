@@ -1,11 +1,11 @@
 """LangFuse prompt management — versioned, label-deployed prompts with
 in-process caching and a bulletproof local fallback.
 
-Pattern (in a planner / synth / agent node):
+Pattern (in an agent or graph node):
     import infra
 
     rendered = infra.langfuse.prompts.get_prompt(
-        "dd.planner.chapter_propose",
+        "feature.agent.operation",
         label     = "production",
         variables = {"framework": "...", "target_chapters": 7, ...},
         fallback  = _local_build(framework, ...),
@@ -166,13 +166,13 @@ def with_langfuse_override(
     (lists of dicts, nested dicts) at least produce a deterministic
     string in the rendered prompt.
 
-    Usage (sawc, anywhere with a builder fn):
-        @with_langfuse_override("dd.synth.sawc.writer")
+    Usage (anywhere with a builder fn):
+        @with_langfuse_override("feature.agent.writer")
         def build_writer_prompt(*, framework, chapter_id, ...) -> str:
             return f"... long static body ..."
 
     When no template is published, this is a no-op (local body runs).
-    When a template IS published under `dd.synth.sawc.writer / production`,
+    When a template IS published under `feature.agent.writer / production`,
     every call uses it with the kwargs substituted in.
     """
     def _coerce(v):

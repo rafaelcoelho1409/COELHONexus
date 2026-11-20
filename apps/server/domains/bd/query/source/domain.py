@@ -84,14 +84,6 @@ def assert_cypher_readonly(statement: str) -> None:
     limit_values = patterns.CYPHER_LIMIT_VALUE.findall(scan)
     if not limit_values:
         raise errors.QueryNotAllowed("Neo4j queries must include an explicit LIMIT.")
-    if any(
-        len(value) > len(str(params.NEO4J_MAX_QUERY_LIMIT))
-        or int(value) > params.NEO4J_MAX_QUERY_LIMIT
-        for value in limit_values
-    ):
-        raise errors.QueryNotAllowed(
-            f"Neo4j queries are capped at LIMIT {params.NEO4J_MAX_QUERY_LIMIT}.",
-        )
 
     tokens = patterns.CYPHER_IDENTIFIER.findall(scan)
     bad = sorted({token for token in tokens if token in params.CYPHER_WRITE_KEYWORDS})

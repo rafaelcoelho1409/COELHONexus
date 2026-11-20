@@ -5,7 +5,7 @@ in `prompts.py`:
 
   client     — lazy `Langfuse` singleton (`get_client`, `is_available`)
   sessions   — `session(...)`: stamp session_id + user_id into OTel baggage
-               (DD one study run, YCS one Ask conversation)
+               (Book Distiller one run, YCS one Ask conversation)
   scores     — `record_score(...)` onto the active trace
   annotation — `flag_for_review(...)`: span markers + review score
   span attrs — `set_current_span_langfuse_io / _trace_metadata /
@@ -206,7 +206,7 @@ def record_score(
 
 # ---------------------------------------------------------------------------
 # Annotation — human-review flagging. When a node detects a low-confidence
-# outcome (e.g. planner chapter_assign rescue), call
+# outcome that warrants review, call
 # `flag_for_review("rescued N docs")` inside the node's @traced scope.
 # Filter the LangFuse UI by either signal to find traces needing attention.
 # ---------------------------------------------------------------------------
@@ -248,7 +248,7 @@ def flag_for_review(
 
 # ---------------------------------------------------------------------------
 # Span attributes — LangFuse-recognized I/O + filterable metadata on the CURRENT
-# active span (typically the workflow-root span for DD and YCS). Keeps COELHO
+# active span (typically the workflow-root span for Book Distiller and YCS). Keeps COELHO
 # Nexus on a single OpenTelemetry tracing plane while still setting the
 # LangFuse-specific attributes needed for rich trace previews, filtering and
 # evaluations. All fail-soft: no recording span, or any error, is a no-op.

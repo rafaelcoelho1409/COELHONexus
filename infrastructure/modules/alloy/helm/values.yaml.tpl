@@ -275,12 +275,12 @@ alloy:
         //
         // Widened 2026-09-28, ported from COELHO Cloud's 2026-09-26 fix
         // (project_alloy_tempo_queue_fix): live-observed DeadlineExceeded on
-        // this exporter during a sustained DD Synth run (Celery worker),
+        // this exporter during a sustained LLM workload (Celery worker),
         // coinciding with 100% span loss for that workload's traces despite
         // the app-side OTel export being confirmed correct. Root cause: this
         // queue was sized for steady low-volume FastAPI traffic, not a
-        // sustained Celery LLM trace burst — Nexus runs the identical DD
-        // Synth/Celery pipeline, so the same burst pattern applies here.
+        // sustained Celery LLM trace burst — Nexus runs similar agentic
+        // Celery workloads, so the same burst pattern applies here.
         // memory_limit was already raised 768Mi→1536Mi above, so there's
         // headroom for the larger queue without repeating an OOM.
         retry_on_failure {

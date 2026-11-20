@@ -5,6 +5,7 @@ import { DISTILL_NODES, distillBoardCaption, distillNodeStatus, distillNodeViews
 const progress = {
   current_node: "synthesize_chapter",
   current_task: null,
+  active_tasks: {},
   node_status: {
     prepare_units: "done",
     extract_unit: "done",
@@ -21,7 +22,7 @@ const progress = {
 };
 
 describe("Distill pipeline progress", () => {
-  it("keeps the six Distill stages in workflow order before a run exists", () => {
+  it("keeps all Distill nodes in workflow order before a run exists", () => {
     const views = distillNodeViews(null, null);
     expect(views.map((view) => view.id)).toEqual(DISTILL_NODES.map((node) => node.id));
     expect(views.every((view) => view.status === "pending")).toBe(true);

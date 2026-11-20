@@ -39,8 +39,11 @@ import domains.ycs.ingestion.qdrant_task.task
 import domains.ycs.ingestion.extract.task
 import infra.celery
 
+import asyncio
 import json
 import logging
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 from typing import Any
 
@@ -50,6 +53,49 @@ from . import keys, params
 logger = logging.getLogger(__name__)
 
 PHASES = ("neo4j", "qdrant")
+
+
+async def _refresh_neo4j_resolution_marker(
+    redis: infra.redis.service.Redis,
+    key: str,
+) -> None:
+    while True:
+        await asyncio.sleep(params.NEO4J_RESOLVING_REFRESH_S)
+        try:
+            active = await redis.expire(key, params.NEO4J_RESOLVING_TTL_S)
+        except Exception as error:  # noqa: BLE001 - a transient marker refresh must not cancel graph resolution.
+            logger.warning(
+                f"[ycs:pipeline:streaming] Neo4j resolution marker refresh "
+                f"failed: {type(error).__name__}: {error}"
+            )
+            continue
+        if not active:
+            return
+
+
+@asynccontextmanager
+async def neo4j_resolution_guard(
+    redis: infra.redis.service.Redis,
+    extract_id: str,
+) -> AsyncIterator[bool]:
+    """Acquire a run-scoped resolution lock and keep its poller marker fresh."""
+    key = keys.neo4j_resolving_key(extract_id)
+    acquired = await redis.set(
+        key,
+        "1",
+        nx = True,
+        ex = params.NEO4J_RESOLVING_TTL_S,
+    )
+    if not acquired:
+        yield False
+        return
+    refresh_task = asyncio.create_task(_refresh_neo4j_resolution_marker(redis, key))
+    try:
+        yield True
+    finally:
+        refresh_task.cancel()
+        await asyncio.gather(refresh_task, return_exceptions = True)
+        await redis.delete(key)
 
 
 def dispatch_videos_pipeline(

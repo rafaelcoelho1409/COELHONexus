@@ -4,7 +4,7 @@ Thin OpenAI-compatible client over the user-configured external endpoint
 (Settings page "LLM Endpoint" card → `llm_endpoint` {url, model} + managed
 key `LLM_API_KEY`). No gateway logic here: no arm pool, no bandit
 cells, no cascade, no feedback loop — the endpoint owns all of that.
-Every caller (DD planner/synth, YCS Ask/query/graph, Langfuse judges)
+Every caller (Book Distiller, YCS Ask/query/graph, Langfuse judges)
 builds through `build_chat_model()` or calls `chat_text_async()` directly.
 
 SOTA Sept 2026 optimizations (kept from the previous adapter):
@@ -468,7 +468,7 @@ async def chat_text_async(
 
     meta = {
         "model": resp_model,
-        "deployment": resp_model,  # compat alias — DD/YCS counter + log call sites read `deployment`
+        "deployment": resp_model,  # compatibility alias used by counter + log call sites
         "attempts": 1,
         "latency_s": round(latency_s, 3),
         "rotator_request_id": ((rm.get("headers") or {}).get("x-rotator-request-id") if isinstance(rm, dict) else None),
@@ -521,14 +521,10 @@ async def chat_structured_async(
     `errors.ChatError`, same as `chat_text_async`.
 
     NOT a drop-in for every `response_format` call site: this assumes
-    the model actually honors `json_schema` mode, and that no
-    normalize-before-validate step runs on the raw dict first. Some DD
-    nodes (book_harmonize, sawc, sawc_derive, digest) carry hand-rolled
-    repair loops specifically because some Rotator provider arms don't
-    honor `response_format` server-side ("Gemini slips through" per
-    those files' own comments); `outline`'s draft call runs
-    `normalize_outline_dict()` before Pydantic-validating. Those stay
-    on `chat_text_async` until verified safe per-provider."""
+    the model honors `json_schema` mode and that no normalization step
+    must run on the raw dict first. Call sites that need normalization
+    or provider-compatibility repair should continue using
+    `chat_text_async` until verified safe for their schema."""
     _apply_endpoint()
 
     structured_model = build_chat_model(

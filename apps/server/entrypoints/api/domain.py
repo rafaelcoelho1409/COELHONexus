@@ -20,8 +20,8 @@ def host_origin_protection(allowed_hosts: list[str]) -> bool | Literal["auto"]:
 
 
 def operation_id(route: APIRoute) -> str:
-    """OpenAPI `operationId` of a route: `<method>_<path>`, e.g. `get_dd_pages_runs_active` for
-    `GET /api/v1/dd/pages/runs/active`. Typed clients (the web app's generated SDK) name their functions after it,
+    """OpenAPI `operationId` of a route: `<method>_<path>`, e.g. `get_bd_books` for
+    `GET /api/v1/bd/books`. Typed clients (the web app's generated SDK) name their functions after it,
     so it must be readable, stable and unique — a method and a path are unique by construction, which a
     `<tag>-<function name>` scheme is not (two routes named `get_page` collide)."""
     method = sorted(route.methods or {"get"})[0].lower()

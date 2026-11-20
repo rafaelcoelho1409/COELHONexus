@@ -1,10 +1,8 @@
-"""Layout check: a route's URL path is the package path of the router that defines it.
+"""Check that a route's URL path follows the package path of its router.
 
-    cd apps/server && .venv/bin/python ../../scripts/server/test_api_layout.py
-
-`entrypoints/api/v1/dd/pipeline/planner/router.py` serves `/api/v1/dd/pipeline/planner/...`, `.../dd/pages/runs/router.py`
-serves `/api/v1/dd/pages/runs/...`, and so on: a feature that has sub-packages mounts them itself (its `router.py`
-includes them), so the tree on disk and the URL tree are one. Offline: it builds the real app and reads its routes."""
+Run with `cd apps/server && .venv/bin/python ../../scripts/server/test_api_layout.py`.
+Features with sub-packages mount them through their router, so the tree on disk and URL tree stay aligned.
+This check builds the real app and reads its routes without network access."""
 
 import os
 import sys
@@ -17,7 +15,6 @@ for _name, _value in {
     "REDIS_PORT": "6379",
     "REDIS_PASSWORD": "",
     "ENVIRONMENT": "local",
-    "DD_STUDY_SEM": "2",
 }.items():
     os.environ.setdefault(_name, _value)
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "server"))
@@ -25,7 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "server"))
 from main import app  # noqa: E402
 
 API_PREFIX = "entrypoints.api.v1."
-CONTEXTS = ("bd", "dd", "ycs", "settings")
+CONTEXTS = ("bd", "ycs", "settings")
 
 
 def expected_prefix(route: APIRoute) -> str | None:

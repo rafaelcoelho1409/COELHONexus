@@ -508,7 +508,7 @@ def node_tracer(
     attributes `state_attrs(state)` returns (each prefixed `<prefix>.`), and
     `<prefix>.ok` / `.error_type` / `.error_message` on completion. `context`, when
     given, is a context-manager factory `(state, node_name)` entered around the whole
-    call, spans or not (DD uses it for its LLM-usage attribution)."""
+    call, spans or not, so model usage remains attributable."""
     def traced(name: str) -> Callable:
         def decorator(fn: Callable) -> Callable:
             @functools.wraps(fn)

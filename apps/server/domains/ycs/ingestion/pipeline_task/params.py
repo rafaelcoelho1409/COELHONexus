@@ -26,3 +26,8 @@ PIPELINE_STATE_PREFIX: str = "coelhonexus:ycs:pipeline:"
 # Same window as PIPELINE_STATE_TTL_S — no reason for the cancel flag to
 # outlive (or expire before) the run's own dispatch-state bookkeeping.
 PIPELINE_CANCEL_TTL_S: int = PIPELINE_STATE_TTL_S
+
+# Keep the Neo4j phase visibly active during graph-wide entity resolution.
+# The marker refreshes while the worker is alive and expires quickly after a crash.
+NEO4J_RESOLVING_TTL_S: int = 300
+NEO4J_RESOLVING_REFRESH_S: int = 60

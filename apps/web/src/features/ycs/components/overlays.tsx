@@ -1,7 +1,7 @@
 "use client";
 
 /** In-page notice (auto-hide), toast (persistent, dismissible) and a promise-based confirm dialog,
- * scoped to YouTube Content Search. Same shape as the Docs Distiller's provider: the dialog is the
+ * scoped to YouTube Content Search. The dialog is the
  * native `<dialog>` — focus is trapped, the page behind is inert, Escape cancels and focus returns to
  * the control that opened it. */
 

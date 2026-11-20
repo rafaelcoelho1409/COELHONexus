@@ -79,7 +79,7 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(
             f"[lifespan] AsyncPostgresSaver init failed: "
-            f"{type(e).__name__}: {e}. Planner endpoints will 503 until "
+            f"{type(e).__name__}: {e}. Persisted graph endpoints will 503 until "
             f"Postgres is reachable + POSTGRES_* env vars are correct."
         )
 
@@ -148,32 +148,6 @@ async def lifespan(app: FastAPI):
         logger.warning(
             f"[lifespan] YCS FAST LLM chain init failed: "
             f"{type(e).__name__}: {e}. FAST falls back to app.state.llm."
-        )
-
-    # query_ai_llm targets the external provider for NL→DSL translation
-    # (tiny deterministic output — 40s ceiling is plenty); falls back
-    # to app.state.llm at request time.
-    # 2026-09-17: 120s → 60s. `ai_generate_stream`'s `_stream_with_retry`
-    # now retries once on a dead endpoint pick (live-observed: the
-    # endpoint hanging the full budget with zero tokens back) — at
-    # 120s/attempt that made the worst case ~240s before the user saw
-    # anything. 60s keeps 2 attempts inside the old single-attempt
-    # ceiling; a healthy arm's NL→DSL output is well under 10s anyway.
-    # 2026-09-24: 60s → 40s, paired with `max_attempts` going 2→3 in
-    # the same commit — live-reproduced the 2026-09-17 scenario again
-    # (two consecutive hung arms), which needed a 3rd attempt to
-    # recover. Kept at 3×40s=120s instead of letting 3×60s=180s become
-    # the new worst case, since a healthy arm is still well under 10s.
-    try:
-        app.state.query_ai_llm = domains.settings.chat.service.build_chat_model(
-            timeout_s=40.0,
-        )
-    except Exception as e:
-        app.state.query_ai_llm = None
-        logger.warning(
-            f"[lifespan] YCS Query AI fast-chain init failed: "
-            f"{type(e).__name__}: {e}. /ycs/query/ai/* will fall back to "
-            f"the slower dd-all chain."
         )
 
     try:
@@ -274,8 +248,6 @@ async def root():
             "docs": "/docs",
             "health": "/health",
             "mcp": "/mcp",
-            "catalog": "/api/v1/dd/catalog",
-            "runs": "/api/v1/dd/pages/runs",
         },
     }
 

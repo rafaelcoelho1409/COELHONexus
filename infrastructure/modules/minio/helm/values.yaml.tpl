@@ -93,8 +93,9 @@ environment:
   # drive is fine (self-heals within the same 30-40s every time). With 1
   # drive there's no quorum to fall back on, so each false positive is a full
   # outage — this is exactly Nexus's topology (single-node, local-path PVC)
-  # and would manifest as MinIO reads/writes hanging mid-Synth-chapter and
-  # FastAPI's ensure_bucket() hanging on lifespan startup. Undocumented but
+  # and would manifest as MinIO reads/writes hanging during long-running
+  # jobs, or `ensure_bucket()` hanging during FastAPI lifespan startup.
+  # Undocumented but
   # community-confirmed knob (github.com/minio/minio/discussions/18909).
   # Acceptable here — dev/homelab single-node instance, no other drives to
   # protect via failover anyway.

@@ -39,7 +39,7 @@ src/shared/                   api (generated client) · config · lib · markdow
 - Layers: `app → features → shared`. A feature is imported **only through its `index.ts`**.
   A feature never imports another feature's internals. `shared` never imports `features`.
 - Inside a feature: `entities.ts` = zod schemas + inferred types; `domain.ts` (or a `domain/` folder of small
-  pure modules, as in `features/dd/`) = pure functions (no React, no fetch); `params.ts` = constants (no magic
+  pure modules) = pure functions (no React, no fetch); `params.ts` = constants (no magic
   numbers/strings elsewhere); `hooks/` = TanStack Query wrappers; `components/` = UI. Copy the shape of
   `src/features/marketing/` — it is the reference implementation.
 - Tests sit next to the file: `thing.ts` → `thing.test.ts(x)`. Pure `domain` code must have unit tests.
@@ -92,15 +92,6 @@ src/shared/                   api (generated client) · config · lib · markdow
   stop and report.
 - MSW 3: `server.listen({ onUnhandledFrame: "error" })` (not `onUnhandledRequest`). In jsdom the client needs an
   absolute base URL: `client.setConfig({ baseUrl: "http://nexus.test" })` from `@/shared/api`.
-- Run/thread ids contain slashes and **start with `docs-distiller/`** (`docs-distiller/<slug>/<uuid>`; synth:
-  `docs-distiller/synth|study/<slug>/<uuid>`); the server finds a framework's runs by that prefix, so build them
-  only with `generateThreadId`. The generated client sends them percent-encoded (`%2F`), which the backend
-  decodes; in MSW match them with `*` and in Playwright with a single `*` segment.
-- Planner/synth graph state is read **by key name** (`PLANNER_NODES`/`SYNTH_NODES` in `features/dd/domain/stages.ts`),
-  and the spec types it as an open object, so a wrong key never fails — a node just never turns "done".
-  `npm run contract:check` compares those tables with the backend's `NODE_ORDER` and `PlannerState`/`SynthState`;
-  change both sides together. Planner state calls the scheduled nodes `next_nodes`, synth calls them `next`
-  (`graphStateSchema` folds both).
 - The stage graphs are React Flow (`@xyflow/react`, pinned 12.12.0 — not the 13 pre-release), and only
   `stage-node-board.tsx` imports `stage-flow.tsx`, through `next/dynamic`, so the library (~42 KB gz) stays out of
   every other page. Node positions are fixed (`domain/flow-layout.ts`; no dagre/ELK), so a stream event never
@@ -108,14 +99,12 @@ src/shared/                   api (generated client) · config · lib · markdow
   `pointer-events: none` on nodes that cannot be dragged or selected, and children inherit it: the button
   re-enables it inline. The list view is the text equivalent; keep both. jsdom has no `ResizeObserver` — stubs
   are in `vitest.setup.ts`; edges only draw in a real browser, so test them in e2e.
-- Planner and Synth have no tabs: they run side by side on the Pipeline tab. `/dd/planner` and `/dd/synth` remain
-  as single-stage deep links (`DD_STAGES[].tab === false`).
-- A side panel is `SideSheet` (native `<dialog>`, `features/dd/components/side-sheet.tsx`); a hook that opens
+- A side panel is `SideSheet` (native `<dialog>`); a hook that opens
   one for a clicked item is `useSourceSheet`-shaped (state + handlers, no `useMemo`/`useCallback` in the page —
   the compiler lint rejects them there).
 - Streams (SSE) are not in the OpenAPI spec: read them through `@/shared/sse`, with the URL built by
-  `client.buildUrl` (see `features/dd/api.ts`), not a hand-typed string.
-- A confirmation is the native `<dialog>` (`features/dd/components/overlays.tsx`), never `window.confirm`.
+  `client.buildUrl`, not a hand-typed string.
+- A confirmation uses the native `<dialog>`, never `window.confirm`.
 - `localStorage` is only for a per-browser preference (theme, auto-chain), never for ids the server already knows.
 - A scrollable region (`overflow-x-auto`) needs `tabIndex={0}` plus a `biome-ignore` with the WCAG reason (see
   `shared/markdown/markdown.tsx`); and every new page gets its row in `e2e/` for axe, no sideways scroll and the
@@ -150,7 +139,7 @@ src/shared/                   api (generated client) · config · lib · markdow
 | `npm run typecheck` | `tsc --noEmit` (must be clean) |
 | `npm test` | Vitest — all tests must pass |
 | `npm run knip` | unused files/exports/deps (must be clean) |
-| `npm run test:boundaries` / `copy:check` / `tokens:check` / `api:check` / `contract:check` | guards |
+| `npm run test:boundaries` / `copy:check` / `tokens:check` / `api:check` | guards |
 | `npm run verify` | all of the above — **the gate for every phase** |
 | `npm run build && npm run budgets && npm run test:e2e` | production build, size budgets, browser tests |
 

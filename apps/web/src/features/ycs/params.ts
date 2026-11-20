@@ -1,6 +1,5 @@
 /** YouTube Content Search — stage table, source-mode table, URL builders and the per-browser preference
- * keys. The stage shape mirrors `features/dd/params.ts`; YCS has no per-framework slug, so hrefs take no
- * argument. */
+ * keys. YCS has no per-framework slug, so hrefs take no argument. */
 
 import type { Section } from "@/shared/layout/section";
 

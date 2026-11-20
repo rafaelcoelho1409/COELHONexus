@@ -24,12 +24,6 @@
       "targetBlank": false
     },
     {
-      "title": "DD Pipeline",
-      "type": "link",
-      "url": "/d/coelhonexus-dd-pipeline",
-      "targetBlank": false
-    },
-    {
       "title": "LLM Rotator",
       "type": "link",
       "url": "/d/coelhonexus-rotator-red",

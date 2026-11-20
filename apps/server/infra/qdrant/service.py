@@ -1,8 +1,8 @@
 """Async Qdrant client factory + lifecycle.
 
 Lives at the infra layer (not under any one domain) because multiple
-domains will share a single cluster client — YCS holds video chunks
-under one collection; future DD code may add a separate collection.
+domains can share a single cluster client — YCS holds video chunks
+under one collection; other contexts can add collections as needed.
 
 PER-LOOP CACHING — same Celery-prefork reasoning as infra/neo4j/service.py.
 `AsyncQdrantClient` wraps an httpx.AsyncClient whose connection pool is

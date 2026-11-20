@@ -27,8 +27,7 @@ PER_DOC_CHAR_CAP = 2000
 # calls are tiny binary judgments (≪ generate/synthesize payloads) and
 # each pass grades up to _PRE_GRADE_CAP=12 docs at 30s each: at 2-wide
 # that's 180s per pass dominating every STANDARD cycle, at 5-wide ~75s.
-# Still half of DD doc_distill's 10-wide on far heavier calls. Override
-# via `KD_GRADER_CONCURRENCY` if needed.
+# Override via `KD_GRADER_CONCURRENCY` if needed.
 GRADER_CONCURRENCY = 5
 
 # per-call timeout on a single grading invocation. 2026-09-15: 30 →

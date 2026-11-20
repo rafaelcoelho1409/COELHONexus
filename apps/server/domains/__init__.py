@@ -1,4 +1,4 @@
-"""domains — business domains (bounded contexts): dd (Docs Distiller),
+"""domains — business domains (bounded contexts): bd (Book Distiller),
 ycs (YouTube Content Search), settings (external endpoints + credential store).
 
 Each domain owns its router, schemas, service/graph code, tasks and exceptions.
@@ -8,7 +8,7 @@ docs/CODE-CONVENTIONS.md §8) rather than bare `from domains.x.y import z` impor
 The domains below are re-exported LAZILY (PEP 562 module
 `__getattr__`, 2026-09-24) — see `infra/__init__.py`'s docstring for
 the full rationale/measurements. Same fix, same reason: a caller that
-only ever touches `domains.ycs` used to pay for dd + settings too,
+only ever touches `domains.ycs` used to pay for other domains too,
 since reaching `domains.ycs` at all required this file to first run
 to completion. Each domain now only imports on first actual access.
 """
@@ -18,10 +18,10 @@ import importlib
 
 
 if TYPE_CHECKING:
-    from . import dd, ycs, bd, settings
+    from . import ycs, bd, settings
 
 
-__all__ = ["dd", "ycs", "bd", "settings"]
+__all__ = ["ycs", "bd", "settings"]
 
 
 def __getattr__(name: str):

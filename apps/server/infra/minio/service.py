@@ -118,7 +118,7 @@ def span(
 
 
 class MinIOStorage:
-    """Async MinIO/S3 storage for docs-distiller artifacts."""
+    """Async MinIO/S3 storage for application artifacts."""
     def __init__(
         self,
         bucket: str,

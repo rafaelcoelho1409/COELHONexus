@@ -8,14 +8,13 @@ from collections.abc import Iterable, Iterator, Mapping
 from json import JSONDecodeError, JSONDecoder, loads
 from typing import Any
 
-from pydantic import BaseModel, ValidationError
-
 from json_repair import loads as json_repair_loads
+from pydantic import BaseModel, ValidationError
 
 from . import entities, params, schemas
 
 _WHITESPACE_RE = re.compile(r"\s+")
-_DISTILL_CHAPTER_HEADING = re.compile(r"^(?:chapter|appendix)\s+", re.I)
+_DISTILL_CHAPTER_HEADING = re.compile(r"^(?:chapter|appendix)\s+", re.IGNORECASE)
 _BOOK_SYNTHESIS_OUTPUT_ALIASES = {"connections": "cross_chapter_connections"}
 _BOOK_SYNTHESIS_OUTPUT_ITEMS = {
     "key_takeaways": "Key takeaway",
@@ -69,6 +68,10 @@ def structured_model_from_agent_result(result: Any, response_model: type[BaseMod
 
 def chapter_synthesis_from_agent_result(result: Any) -> schemas.ChapterSynthesis | None:
     """Parse a chapter guide from provider output, including a single known wrapper object."""
+    if isinstance(result, schemas.ChapterSynthesis):
+        return result
+    if isinstance(result, BaseModel):
+        result = {"structured_response": result}
     if not isinstance(result, dict):
         return None
 
@@ -93,6 +96,10 @@ def chapter_synthesis_from_agent_result(result: Any) -> schemas.ChapterSynthesis
 
 def book_synthesis_from_agent_result(result: Any) -> schemas.BookSynthesis | None:
     """Parse a whole-book guide from provider output, including a known wrapper object."""
+    if isinstance(result, schemas.BookSynthesis):
+        return result
+    if isinstance(result, BaseModel):
+        result = {"structured_response": result}
     for candidate in _book_synthesis_output_candidates(result):
         synthesis = _validate_book_synthesis(candidate)
         if synthesis is not None:
@@ -194,6 +201,9 @@ def _validate_book_synthesis(value: Any) -> schemas.BookSynthesis | None:
 
 
 def _book_synthesis_output_candidates(result: Any) -> Iterator[Any]:
+    if isinstance(result, BaseModel):
+        yield result.model_dump(mode = "python")
+        return
     if not isinstance(result, dict):
         return
 
@@ -209,13 +219,19 @@ def _chapter_synthesis_candidates(value: Any) -> Iterator[dict[str, Any]]:
     """Yield the root response and unwrap only a single recognized provider envelope."""
     candidate = value
     for _ in range(4):
+        if isinstance(candidate, BaseModel):
+            candidate = candidate.model_dump(mode = "python")
         if not isinstance(candidate, dict):
             return
         yield candidate
         if len(candidate) != 1:
             return
         key, nested = next(iter(candidate.items()))
-        if key not in {"chapter", "output", "result", "section", "synthesis"} or not isinstance(nested, dict):
+        if key not in {"chapter", "output", "result", "section", "synthesis"}:
+            return
+        if isinstance(nested, BaseModel):
+            nested = nested.model_dump(mode = "python")
+        if not isinstance(nested, dict):
             return
         candidate = nested
 
@@ -224,13 +240,19 @@ def _book_synthesis_candidates(value: Any) -> Iterator[dict[str, Any]]:
     """Yield the root response and unwrap one recognized whole-book response envelope."""
     candidate = value
     for _ in range(4):
+        if isinstance(candidate, BaseModel):
+            candidate = candidate.model_dump(mode = "python")
         if not isinstance(candidate, dict):
             return
         yield candidate
         if len(candidate) != 1:
             return
         key, nested = next(iter(candidate.items()))
-        if key not in {"book", "output", "result", "synthesis"} or not isinstance(nested, dict):
+        if key not in {"book", "output", "result", "synthesis"}:
+            return
+        if isinstance(nested, BaseModel):
+            nested = nested.model_dump(mode = "python")
+        if not isinstance(nested, dict):
             return
         candidate = nested
 

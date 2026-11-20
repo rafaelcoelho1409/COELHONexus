@@ -529,7 +529,7 @@ const PENDING_NOTE: Record<AgenticNodeStatus, string | null> = {
   cancelled: "The run stopped before this node finished.",
 };
 
-/** A side sheet for one graph node, as the Docs Distiller's: what it does and what it reads and writes (Overview), then
+/** A side sheet for one graph node: what it does and what it reads and writes (Overview), then
  * the LLM calls it made. It stays live while the run goes on. */
 function AgenticNodeSheet({
   node,

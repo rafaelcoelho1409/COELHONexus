@@ -113,8 +113,8 @@ tempo:
   # checks at the chart default 5s timeout / 10s period (~30-40s window) —
   # kubelet killed and restarted the pod. Single-replica StatefulSet, so the
   # restart dropped Grafana's Tempo datasource connectivity briefly
-  # (self-recovered, zero data loss). Nexus runs the identical DD ingestion
-  # workload, so the same burst pattern applies here too — give the probes
+  # (self-recovered, zero data loss). Nexus runs large ingestion workloads,
+  # so the same burst pattern applies here too — give the probes
   # more slack to ride out a legitimate load spike without a disruptive
   # restart, since Tempo's own querier already has its own 10s per-query
   # timeout to fail slow lookups cleanly on its own.

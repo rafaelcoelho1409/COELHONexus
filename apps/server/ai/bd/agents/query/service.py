@@ -1,12 +1,11 @@
 """Invocation helpers for the BD Query DeepAgent."""
 from __future__ import annotations
+from . import agent
 
 import json
 from typing import Any
 
 from langchain_core.messages import AIMessage
-
-from . import agent
 
 
 async def generate_query(

@@ -1,12 +1,8 @@
 """Bootstrap LangFuse datasets — upload every fixture mounted at `/etc/langfuse-fixtures/`
 to LangFuse as a versioned dataset.
 
-This is the missing piece between the gold fixtures (in-repo at
-`k8s/helm/files/langfuse/{dd,ycs}/`, mounted via ConfigMap into the pod) and the eval runners (also already
-in-repo at `scripts/observability/run_*_eval.py`). The runners reference
-dataset names like `dd.reference_book.v1` and assume they exist in
-LangFuse. Without this bootstrap, the runners fail with "dataset not
-found" — even though the fixture files are sitting on disk.
+This uploads the YCS QA fixtures mounted at
+`/etc/langfuse-fixtures/ycs/qa_pairs` to LangFuse as a versioned dataset.
 
 Run inside the server container (the only place `langfuse` Python SDK +
 `langfuse.<host>` env vars are reliably available):
@@ -35,14 +31,7 @@ logger = logging.getLogger("bootstrap_datasets")
 
 
 # Mapping fixture_dir → (dataset_name, description).
-# Keep dataset_name in sync with scripts/observability/run_*_eval.py
-# (DATASET_NAME constant in each runner).
 DATASETS = [
-    (
-        "/etc/langfuse-fixtures/dd/reference_book",
-        "dd.reference_book.v1",
-        "DD planner chapter-outline gold corpus — graded by the faithfulness judge against the rubric.md.",
-    ),
     (
         "/etc/langfuse-fixtures/ycs/qa_pairs",
         "ycs.qa_pairs.v1",

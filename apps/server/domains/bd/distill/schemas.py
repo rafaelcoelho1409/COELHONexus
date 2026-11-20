@@ -6,7 +6,14 @@ import math
 from typing import Annotated, Any, Literal
 from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    field_validator,
+    model_validator,
+)
 
 from . import versions
 
@@ -187,7 +194,7 @@ class ChapterSynthesis(BaseModel):
     equations: list[EquationBlock] = Field(default_factory = list, max_length = 8)
     charts: list[ChartSpec] = Field(default_factory = list, max_length = 8)
     timelines: list[TimelineSpec] = Field(default_factory = list, max_length = 4)
-    maps: list["GeoMapSpec"] = Field(default_factory = list, max_length = 4)
+    maps: list[GeoMapSpec] = Field(default_factory = list, max_length = 4)
 
     @model_validator(mode = "before")
     @classmethod
@@ -454,7 +461,7 @@ class ReportSection(BaseModel):
     equations: list[EquationBlock] = Field(default_factory = list)
     charts: list[ChartSpec] = Field(default_factory = list)
     timelines: list[ReportTimeline] = Field(default_factory = list)
-    maps: list["GeoMapSpec"] = Field(default_factory = list, max_length = 4)
+    maps: list[GeoMapSpec] = Field(default_factory = list, max_length = 4)
 
 
 class GlossaryEntry(BaseModel):
@@ -765,10 +772,20 @@ class StudyGuideDocument(BaseModel):
     review_required: bool
 
 
+class DistillNodeProgress(BaseModel):
+    model_config = ConfigDict(extra = "forbid")
+
+    completed_count: int = Field(default = 0, ge = 0, strict = True)
+    total_count: int = Field(default = 0, ge = 0, strict = True)
+    active_count: int = Field(default = 0, ge = 0, strict = True)
+
+
 class DistillProgress(BaseModel):
     current_node: str | None = None
     current_task: str | None = Field(default = None, max_length = 240)
+    active_tasks: dict[str, str] = Field(default_factory = dict)
     node_status: dict[str, str] = Field(default_factory = dict)
+    node_progress: dict[str, DistillNodeProgress] = Field(default_factory = dict)
     completed_extractions: int = 0
     completed_units: int = 0
     total_units: int = 0
@@ -801,7 +818,7 @@ class StructuralQuality(BaseModel):
 class DistillRunManifest(BaseModel):
     model_config = ConfigDict(extra = "forbid")
 
-    schema_version: Literal["1.0", "1.1", "1.2", "1.3", "1.4"] = versions.MANIFEST_SCHEMA_VERSION
+    schema_version: Literal["1.0", "1.1", "1.2", "1.3", "1.4", "1.5"] = versions.MANIFEST_SCHEMA_VERSION
     workflow_version: NonEmptyText = versions.WORKFLOW_VERSION
     prompt_version: NonEmptyText = versions.PROMPT_VERSION
     renderer_version: NonEmptyText = versions.RENDERER_VERSION
@@ -845,14 +862,14 @@ class DistillRunManifest(BaseModel):
 
     @model_validator(mode = "after")
     def _validate_terminal_state(self) -> DistillRunManifest:
-        if self.schema_version == "1.1" and any(value is None for value in (
+        if self.schema_version in {"1.1", "1.2", "1.3", "1.4", "1.5"} and any(value is None for value in (
             self.selected_page_count,
             self.content_selection_key,
             self.content_selection_sha256,
             self.content_selection_revision,
         )):
-            raise ValueError("1.1 Distill runs must pin their content-selection revision")
-        if self.schema_version in {"1.2", "1.3"} and any(value is None for value in (
+            raise ValueError("Distill runs from schema 1.1 onward must pin their content-selection revision")
+        if self.schema_version in {"1.2", "1.3", "1.4", "1.5"} and any(value is None for value in (
             self.selected_page_count,
             self.content_selection_key,
             self.content_selection_sha256,
@@ -862,7 +879,7 @@ class DistillRunManifest(BaseModel):
             self.processed_book_revision,
             self.processed_page_count,
         )):
-            raise ValueError("1.2 Distill runs must pin the processed-book page set")
+            raise ValueError("Distill runs from schema 1.2 onward must pin the processed-book page set")
         if self.status in {"done", "failed", "cancelled"} and self.finished_at is None:
             raise ValueError("terminal Distill runs require finished_at")
         if self.status == "done" and (self.report_key is None or self.html_key is None):

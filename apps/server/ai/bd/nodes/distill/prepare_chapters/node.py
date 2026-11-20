@@ -1,10 +1,12 @@
 """Prepare chapter inputs and route chapter synthesis batches."""
 from __future__ import annotations
-import domains
-from .... import graphs
 
 from langgraph.runtime import Runtime
 from langgraph.types import Send
+
+import domains
+
+from .... import graphs
 
 
 def dispatch_chapters(state: graphs.distill.states.DistillRunState) -> list[Send]:
@@ -27,9 +29,25 @@ async def prepare_chapters(
     dependencies = runtime.context
 
     async def execute() -> dict:
+        await graphs.service.report_node_work_plan(
+            dependencies.progress_callback,
+            "prepare_chapters",
+            len(graph_state.get("completed_units", [])),
+        )
+
+        async def report_unit_progress(unit_id: str, status: str, total_count: int) -> None:
+            await graphs.service.report_node_item_progress(
+                dependencies.progress_callback,
+                "prepare_chapters",
+                unit_id,
+                status,
+                total_count = total_count,
+            )
+
         result = await domains.bd.distill.synthesize.service.prepare_chapters(
             dependencies.storage,
             graph_state,
+            on_unit_progress = report_unit_progress,
         )
         await graphs.service.report(
             dependencies.progress_callback,

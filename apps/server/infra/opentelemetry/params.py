@@ -38,7 +38,7 @@ OTLP_TIMEOUT_S = int(os.environ.get("OTEL_EXPORTER_OTLP_TIMEOUT", str(OTLP_TIMEO
 
 
 # Phase E : SDK defaults (q=2048, b=512, d=5s) caused Alloy
-# RESOURCE_EXHAUSTED under heavy LangChain Planner volume. A later 256-span
+# RESOURCE_EXHAUSTED under heavy LangChain agent volume. A later 256-span
 # batch reached 5.15 MB, above Alloy's 4 MiB gRPC receive limit, so halve the
 # batch again while retaining the longer delay and larger queue. The
 # `OTEL_BSP_*` env vars override each.

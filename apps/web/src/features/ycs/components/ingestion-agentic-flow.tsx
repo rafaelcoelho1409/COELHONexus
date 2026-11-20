@@ -5,24 +5,31 @@
 import "@xyflow/react/dist/style.css";
 import "./ingestion-agentic-flow.css";
 
-import { Play } from "lucide-react";
-import { type Edge, Handle, MarkerType, type Node, type NodeProps, Position, ReactFlow } from "@xyflow/react";
+import {
+  Controls,
+  type Edge,
+  Handle,
+  MarkerType,
+  type Node,
+  type NodeProps,
+  Position,
+  ReactFlow,
+} from "@xyflow/react";
+import { LoaderCircle, Play } from "lucide-react";
 
 import { ReactFlowNodeInternals } from "@/shared/lib/react-flow-node-internals";
 
 import { STATUS_WORD_LABEL, type StatusWord, statusWord } from "../domain";
+import { IngestionStatusGlyph } from "./ingestion-status-glyph";
 import { type Step, StepProgress } from "./pipeline-steps";
-import { StatusBadge } from "./status-badge";
 
 const NODE_WIDTH = 168;
-const NODE_HEIGHT = 136;
-const FLOW_WIDTH = 368;
-const FLOW_HEIGHT = 488;
+const NODE_HEIGHT = 140;
 const POSITIONS: Record<string, { x: number; y: number }> = {
   playwright: { x: 100, y: 8 },
-  elasticsearch: { x: 100, y: 164 },
-  qdrant: { x: 8, y: 320 },
-  neo4j: { x: 192, y: 320 },
+  elasticsearch: { x: 100, y: 168 },
+  qdrant: { x: 8, y: 328 },
+  neo4j: { x: 196, y: 328 },
 };
 
 type IngestionFlowNodeData = {
@@ -32,79 +39,89 @@ type IngestionFlowNodeData = {
   step: Step;
   onOpen: () => void;
   onPlay?: () => void;
+  playDisabled: boolean;
+  playPending: boolean;
 };
 type IngestionFlowNode = Node<IngestionFlowNodeData, "ingestion">;
 
 function IngestionNodeCard({ data }: NodeProps<IngestionFlowNode>) {
   const status = STATUS_WORD_LABEL[data.status];
-  const detailsId = `ycs-ingestion-node-${data.step.key}-details`;
+  const borderTone =
+    data.status === "running"
+      ? "border-running"
+      : data.status === "failed"
+        ? "border-destructive"
+        : data.status === "partial"
+          ? "border-warning"
+          : "border-border";
   return (
     <>
       <Handle type="target" position={Position.Top} isConnectable={false} />
-      <fieldset
-        aria-label={`${data.label} — ${status}`}
+      <div
+        data-node-id={data.step.key}
         data-status={data.status}
-        style={{ width: NODE_WIDTH, height: NODE_HEIGHT, pointerEvents: "none" }}
-        className={`relative isolate m-0 flex min-w-0 flex-col overflow-hidden rounded-md border bg-card p-0 hover:bg-muted ${
-          data.status === "running"
-            ? "border-running"
-            : data.status === "failed"
-              ? "border-destructive"
-              : data.status === "partial"
-                ? "border-warning"
-                : "border-border"
-        }`}
+        style={{ width: NODE_WIDTH, height: NODE_HEIGHT }}
+        className={`flex h-full w-full cursor-pointer flex-col overflow-hidden rounded-md border bg-card ${borderTone}`}
       >
-        <legend className="sr-only">{`${data.label} — ${status}`}</legend>
-        <button
-          type="button"
-          onPointerDown={(event) => event.stopPropagation()}
-          onClick={(event) => {
-            event.stopPropagation();
-            data.onPlay?.();
-          }}
-          aria-label={`Replay from ${data.label}`}
-          title={`Replay from ${data.label} and clear downstream results`}
-          style={{ pointerEvents: "auto", zIndex: 50 }}
-          className="nodrag nopan absolute left-1 top-1 inline-flex size-9 items-center justify-center rounded-sm bg-card text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"
-          hidden={!data.onPlay}
-        >
-          <Play aria-hidden className="size-4" />
-        </button>
+        <header className="flex min-h-9 items-center gap-1 border-b border-border/60 px-1.5">
+          <button
+            type="button"
+            onClick={data.onOpen}
+            aria-label={`Open ${data.label} node details — ${status}`}
+            aria-haspopup="dialog"
+            className="nodrag nopan flex min-w-0 flex-1 items-center gap-1.5 rounded-sm px-1 text-left hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring"
+          >
+            <IngestionStatusGlyph status={data.status} />
+            <span className="min-w-0 truncate text-sm">{data.label}</span>
+            <span className="sr-only">— {status}</span>
+          </button>
+          {data.onPlay ? (
+            <button
+              type="button"
+              onPointerDown={(event) => event.stopPropagation()}
+              onMouseDown={(event) => event.stopPropagation()}
+              onClick={(event) => {
+                event.stopPropagation();
+                data.onPlay?.();
+              }}
+              disabled={data.playDisabled || data.playPending}
+              aria-busy={data.playPending}
+              aria-label={
+                data.playPending ? `Queueing replay from ${data.label}` : `Replay from ${data.label}`
+              }
+              title={`Replay from ${data.label} and clear downstream results`}
+              className="nodrag nopan inline-flex size-8 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring disabled:pointer-events-none disabled:opacity-60"
+            >
+              {data.playPending ? (
+                <LoaderCircle aria-hidden className="size-4 animate-spin" />
+              ) : (
+                <Play aria-hidden className="size-4" />
+              )}
+            </button>
+          ) : null}
+        </header>
         <button
           type="button"
           onClick={data.onOpen}
-          aria-label={`Open ${data.label} node details`}
-          aria-describedby={detailsId}
+          aria-label={`Open ${data.label} node progress details`}
           aria-haspopup="dialog"
-          style={{
-            pointerEvents: "auto",
-            clipPath: data.onPlay
-              ? "polygon(44px 0, 100% 0, 100% 100%, 0 100%, 0 44px, 44px 44px)"
-              : undefined,
-          }}
-          className="nodrag nopan absolute inset-0 z-10 flex min-h-0 flex-col overflow-hidden rounded-md border-0 bg-transparent p-0 text-left text-foreground hover:bg-muted/20 focus-visible:outline-2 focus-visible:outline-ring"
+          className="nodrag nopan flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden px-3 py-2 text-left hover:bg-muted focus-visible:z-10 focus-visible:outline-2 focus-visible:outline-ring"
         >
-          <div id={detailsId} className="pointer-events-none flex min-h-0 flex-1 flex-col">
-            <span className={`flex min-h-10 flex-col pt-2 ${data.onPlay ? "pl-11" : "px-3"}`}>
-              <span className="truncate text-sm leading-4">{data.label}</span>
-              <span className="flex min-w-0 items-center justify-between gap-2">
-                <span className="truncate font-mono text-xs text-muted-foreground">{data.step.key}</span>
-                <StatusBadge tone={data.status} label={status} className="shrink-0" />
-              </span>
-            </span>
-            <span
-              title={data.detail}
-              className="pointer-events-none block truncate px-3 pt-1 font-mono text-xs text-muted-foreground"
-            >
-              {data.detail}
-            </span>
-            <span className="pointer-events-none mt-auto block px-3 pb-2 pt-1">
-              <StepProgress step={data.step} />
-            </span>
-          </div>
+          <span className="truncate font-mono text-xs text-muted-foreground">{data.step.key}</span>
+          <span title={data.detail} className="mt-1 truncate font-mono text-xs text-muted-foreground">
+            {data.detail}
+          </span>
+          <span
+            title={data.step.view.hint ?? data.step.defaultHint}
+            className="mt-1 line-clamp-2 text-xs text-muted-foreground"
+          >
+            {data.step.view.hint ?? data.step.defaultHint}
+          </span>
+          <span className="mt-auto block pt-1">
+            <StepProgress step={data.step} />
+          </span>
         </button>
-      </fieldset>
+      </div>
       <Handle type="source" position={Position.Bottom} isConnectable={false} />
     </>
   );
@@ -117,10 +134,16 @@ export function IngestionAgenticFlow({
   steps,
   onOpen,
   onPlay,
+  replayDisabled = false,
+  replayPending = false,
+  replayPendingNodeId = null,
 }: {
   steps: ReadonlyArray<Step>;
   onOpen: (key: string) => void;
   onPlay?: (key: string) => void;
+  replayDisabled?: boolean;
+  replayPending?: boolean;
+  replayPendingNodeId?: string | null;
 }) {
   const stepByKey = new Map(steps.map((step) => [step.key, step]));
   const nodes: IngestionFlowNode[] = steps.map((step) => {
@@ -139,6 +162,8 @@ export function IngestionAgenticFlow({
         step,
         onOpen: () => onOpen(key),
         ...(onPlay ? { onPlay: () => onPlay(key) } : {}),
+        playDisabled: replayDisabled || replayPending,
+        playPending: replayPending && replayPendingNodeId === key,
       },
     };
   });
@@ -167,8 +192,7 @@ export function IngestionAgenticFlow({
 
   return (
     <figure
-      className="ycs-ingestion-flow mx-auto max-w-full"
-      style={{ width: FLOW_WIDTH, height: FLOW_HEIGHT }}
+      className="ycs-ingestion-flow mx-auto h-[min(76vh,680px)] min-h-[520px] w-full min-w-0"
       data-testid="ycs-ingestion-flow"
       aria-label="Playwright transcript retrieval followed by Elasticsearch indexing, then Qdrant and Neo4j writes"
     >
@@ -176,22 +200,26 @@ export function IngestionAgenticFlow({
         nodes={nodes}
         edges={edges}
         nodeTypes={NODE_TYPES}
-        defaultViewport={{ x: 0, y: 0, zoom: 1 }}
-        minZoom={1}
-        maxZoom={1}
+        onNodeClick={(_event, node) => onOpen(node.id)}
+        defaultViewport={{ x: 0, y: 0, zoom: 0.82 }}
+        fitView
+        fitViewOptions={{ padding: 0.06 }}
+        minZoom={0.25}
+        maxZoom={2.25}
         nodesDraggable={false}
         nodesConnectable={false}
         nodesFocusable={false}
         edgesFocusable={false}
         elementsSelectable={false}
-        panOnDrag={false}
-        zoomOnScroll={false}
-        zoomOnPinch={false}
+        panOnDrag
+        zoomOnScroll
+        zoomOnPinch
         zoomOnDoubleClick={false}
-        preventScrolling={false}
+        preventScrolling
         proOptions={{ hideAttribution: false }}
       >
         <ReactFlowNodeInternals nodeIds={nodes.map((node) => node.id)} revision={nodes} />
+        <Controls showInteractive={false} position="bottom-right" />
       </ReactFlow>
     </figure>
   );

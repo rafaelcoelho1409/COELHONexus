@@ -18,8 +18,8 @@ import { useEventStream } from "@/shared/sse";
 import {
   cancelDistillRun,
   distillEventsUrl,
-  resumeDistillRun,
   replayDistillRunNode,
+  resumeDistillRun,
   saveContentSelection,
   startDistillRun,
   wipeDistillRun,
@@ -198,10 +198,15 @@ function reconcileRunState(
     ...snapshot.progress,
     current_node: currentNode,
     current_task: currentTask,
+    active_tasks: {
+      ...streamed.progress.active_tasks,
+      ...snapshot.progress.active_tasks,
+    },
     node_status: {
       ...streamed.progress.node_status,
       ...snapshot.progress.node_status,
     },
+    node_progress: mergeNodeProgress(streamed.progress.node_progress, snapshot.progress.node_progress),
     completed_units: Math.max(streamed.progress.completed_units, snapshot.progress.completed_units),
     completed_extractions: Math.max(
       streamed.progress.completed_extractions,
@@ -230,6 +235,11 @@ function reconcileRunState(
       progress: {
         ...snapshot.progress,
         current_task: snapshot.progress.current_task,
+        node_progress: mergeNodeProgress(
+          streamed.progress.node_progress,
+          snapshot.progress.node_progress,
+          true,
+        ),
         completed_units: progress.completed_units,
         completed_extractions: progress.completed_extractions,
         total_units: progress.total_units,
@@ -249,6 +259,26 @@ function reconcileRunState(
     progress,
     error: snapshot.error,
   };
+}
+
+function mergeNodeProgress(
+  streamed: DistillRun["progress"]["node_progress"],
+  snapshot: DistillRun["progress"]["node_progress"],
+  terminal = false,
+): DistillRun["progress"]["node_progress"] {
+  const merged: NonNullable<DistillRun["progress"]["node_progress"]> = {};
+  for (const nodeId of new Set([...Object.keys(streamed ?? {}), ...Object.keys(snapshot ?? {})])) {
+    const streamedNode = streamed?.[nodeId];
+    const snapshotNode = snapshot?.[nodeId];
+    const latest = snapshotNode ?? streamedNode;
+    if (!latest) continue;
+    merged[nodeId] = {
+      completed_count: Math.max(streamedNode?.completed_count ?? 0, snapshotNode?.completed_count ?? 0),
+      total_count: Math.max(streamedNode?.total_count ?? 0, snapshotNode?.total_count ?? 0),
+      active_count: terminal ? 0 : (latest.active_count ?? 0),
+    };
+  }
+  return merged;
 }
 
 export function useDistillActions(bookId: string) {

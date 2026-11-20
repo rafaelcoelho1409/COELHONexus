@@ -3,15 +3,7 @@
 # 'production' = ArgoCD with GitLab Container Registry
 environment: production
 
-# Planner graph version. Set to v1 to roll back while retaining both implementations.
-planner:
-  version: "v2"
-
-# Synth graph version. Set to v1 to roll back while retaining both implementations.
-synth:
-  version: "v2"
-
-# LLM endpoint the Docs Distiller / YCS apps call (OpenAI-compatible HTTP).
+# LLM endpoint the applications call (OpenAI-compatible HTTP).
 # No default endpoint is baked into the chart — set url/apiKey/model here, or
 # configure it at runtime from the Settings page (BYOK, takes precedence over
 # these chart defaults either way). Read by
@@ -158,10 +150,10 @@ server:
 celery:
   enabled: true
   replicas: 1
-  # 2 workers: peak COW RSS (5 × 2GB + parent) OOMKilled at concurrency=5; 2 × 8 LLM calls already hits DD_LLM_GLOBAL_CONCURRENCY.
+  # 2 workers: peak COW RSS (5 × 2GB + parent) OOMKilled at concurrency=5.
   concurrency: 2
   # Keep aligned with infra/celery/keys.py; deployment.yaml applies the environment suffix.
-  queues: "crawler,embedding,llm,planner,synth,default,ycs,bd"
+  queues: "crawler,embedding,llm,default,ycs,bd"
   threads: "1"
   resources:
     requests:

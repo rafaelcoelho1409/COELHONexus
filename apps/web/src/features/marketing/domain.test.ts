@@ -1,29 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  countActiveRuns,
-  countDocumentationSets,
-  countIndexedVideos,
-  formatCount,
-  isHealthy,
-} from "./domain";
+import { countIndexedVideos, formatCount, isHealthy } from "./domain";
 
 describe("platform status narrowing", () => {
   it("accepts only a healthy status", () => {
     expect(isHealthy({ status: "healthy" })).toBe(true);
     expect(isHealthy({ status: "degraded" })).toBe(false);
     expect(isHealthy(null)).toBe(false);
-  });
-
-  it("counts documentation sets from a list", () => {
-    expect(countDocumentationSets([{}, {}, {}])).toBe(3);
-    expect(countDocumentationSets({})).toBeNull();
-  });
-
-  it("counts active runs and rejects an unexpected shape", () => {
-    expect(countActiveRuns({ active: [{ id: "a" }] })).toBe(1);
-    expect(countActiveRuns({ active: [] })).toBe(0);
-    expect(countActiveRuns({ runs: [] })).toBeNull();
   });
 
   it("reads the indexed-video total", () => {

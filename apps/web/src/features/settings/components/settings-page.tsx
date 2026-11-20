@@ -42,7 +42,7 @@ export function SettingsPage() {
           <ConnectionCard
             kind="llm"
             title="LLM"
-            intro="Set the chat connection used by Docs Distiller and YouTube Content Search. This setting takes precedence over the deployment default."
+            intro="Set the chat connection used by Book Distiller and YouTube Content Search. This setting takes precedence over the deployment default."
           />
         ) : null}
         {selectedTab === "embedding" ? (

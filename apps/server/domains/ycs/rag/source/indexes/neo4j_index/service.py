@@ -31,7 +31,7 @@ from ai.ycs.prompts.rag.graph_transformer import prompts
 from ...... import settings
 from ..... import ingestion
 from .... import ai
-from . import domain, params, schemas
+from . import config, domain, params, schemas
 
 
 async def _embed_ids_for_resolution(ids: list[str]) -> dict[str, list[float]]:
@@ -183,8 +183,7 @@ async def extract_and_store_graph(
     total_processed = 0
     total_skipped = 0
 
-    # Skip-on-re-run, fingerprint-aware (2026-09-14, DD manifest_hash
-    # pattern adapted): a video skips only when its Document carries a
+    # Skip-on-re-run, fingerprint-aware: a video skips only when its Document carries a
     # matching `transcript_sha` AND `extract_prompt_version`. A
     # transcript edit or a prompt bump (params.EXTRACT_PROMPT_VERSION) makes
     # the tag stale → re-extract instead of trusting outdated entities.
@@ -302,7 +301,7 @@ async def extract_and_store_graph(
     # Track the LAST per-video error so the silent-zero guard downstream
     # can surface the actual LLM error body in the log (otherwise the
     # user only sees "0 nodes" with no diagnostic). `error_breakdown`
-    # counts per failure KIND (DD's histogram pattern) so a 25-video
+    # counts per failure KIND so a 25-video
     # run with 3 different failure modes stays diagnosable.
     last_batch_error: str | None = None
     error_breakdown: dict[str, int] = {}
@@ -318,20 +317,6 @@ async def extract_and_store_graph(
         # Shared definition in domain.py (also used by neo4j_task's
         # streak halt) — kept as a thin alias so call sites read local.
         return domain.is_infra_error(err)
-
-    def _is_overflow_error(err: str) -> bool:
-        return domain.is_overflow_error(err)
-
-    def _split_content(content: str) -> list[str]:
-        """Halve a too-large transcript on paragraph boundaries (DD's
-        shrink-and-retry, adapted: split instead of truncate — truncating
-        would silently drop entities)."""
-        paras = [p for p in content.split("\n\n") if p.strip()]
-        if len(paras) < 4:
-            mid = len(content) // 2
-            return [content[:mid], content[mid:]]
-        mid = len(paras) // 2
-        return ["\n\n".join(paras[:mid]), "\n\n".join(paras[mid:])]
 
     # In-process pool width (this task's own view) — kept alongside the
     # distributed slot below since a single task can still be asked for
@@ -362,6 +347,116 @@ async def extract_and_store_graph(
             )
             return [graph_document]
 
+    def _error_message(error: Exception) -> str:
+        if isinstance(error, TimeoutError) and not str(error):
+            return (
+                f"TimeoutError: extraction exceeded the "
+                f"{params.GRAPH_BATCH_TIMEOUT_S:.0f}s watchdog"
+            )
+        return f"{type(error).__name__}: {str(error)[:400]}"
+
+    def _merge_evidence(target: Any, incoming: Any) -> None:
+        target_properties = getattr(target, "properties", None)
+        incoming_properties = getattr(incoming, "properties", None)
+        if not isinstance(target_properties, dict) or not isinstance(incoming_properties, dict):
+            return
+        evidence: list[str] = []
+        for properties in (target_properties, incoming_properties):
+            value = properties.get("evidence")
+            values = value if isinstance(value, (list, tuple)) else [value]
+            evidence.extend(
+                str(item).strip()
+                for item in values
+                if isinstance(item, str) and item.strip()
+            )
+        if evidence:
+            target_properties["evidence"] = list(dict.fromkeys(evidence))
+
+    def _combine_graph_documents(graph_documents: list[Any], source: Document) -> Any:
+        if not graph_documents:
+            return None
+        first = graph_documents[0]
+        nodes_by_id: dict[str, Any] = {}
+        relationships_by_key: dict[tuple[str, str, str], Any] = {}
+        for graph_document in graph_documents:
+            for node in graph_document.nodes or []:
+                node_id = domain.coerce_entity_id(node.id).strip()
+                key = domain.normalize_entity_id(node_id)
+                if key and key in nodes_by_id:
+                    _merge_evidence(nodes_by_id[key], node)
+                elif key:
+                    node.id = node_id
+                    node.type = domain.sanitize_neo4j_label(node.type)
+                    nodes_by_id[key] = node
+            for relationship in graph_document.relationships or []:
+                source_id = domain.normalize_entity_id(
+                    getattr(getattr(relationship, "source", None), "id", None),
+                )
+                target_id = domain.normalize_entity_id(
+                    getattr(getattr(relationship, "target", None), "id", None),
+                )
+                relationship.type = domain.sanitize_neo4j_label(
+                    relationship.type, fallback = "RELATED_TO",
+                )
+                key = (source_id, relationship.type.casefold(), target_id)
+                if source_id and target_id:
+                    existing = relationships_by_key.get(key)
+                    if existing is None:
+                        relationships_by_key[key] = relationship
+                    else:
+                        _merge_evidence(existing, relationship)
+        first.nodes = list(nodes_by_id.values())
+        first.relationships = list(relationships_by_key.values())
+        first.source = source
+        return first
+
+    async def _extract_with_split(
+        doc: Document,
+        *,
+        source: Document,
+        depth: int = 0,
+    ) -> Any:
+        try:
+            graph_documents = await _convert(doc)
+            return graph_documents[0] if graph_documents else None
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            error_message = _error_message(error)
+            content = doc.page_content or ""
+            if (
+                not domain.is_overflow_error(error_message)
+                or len(content) <= config.GRAPH_CHUNK.min_split_chars
+                or depth >= config.GRAPH_CHUNK.max_split_depth
+            ):
+                raise
+            parts = domain.graph_chunks(
+                content,
+                chunk_size = max(config.GRAPH_CHUNK.min_split_chars, len(content) // 2),
+            )
+            if len(parts) < 2:
+                raise
+            logger.warning(
+                f"[ycs:graph] {doc.metadata.get('video_id', 'unknown')}: "
+                f"{type(error).__name__} at {len(content)} chars; "
+                f"retrying as {len(parts)} smaller transcript chunks "
+                f"(split depth {depth + 1})"
+            )
+            split_results: list[Any] = []
+            for part in parts:
+                segment = Document(
+                    page_content = part,
+                    metadata = dict(doc.metadata),
+                )
+                result = await _extract_with_split(
+                    segment,
+                    source = source,
+                    depth = depth + 1,
+                )
+                if result is not None:
+                    split_results.append(result)
+            return _combine_graph_documents(split_results, source)
+
     async def _extract_one(doc: Document) -> tuple[str, Any, str | None]:
         """One transcript → (video_id, GraphDocument|None, error|None).
         Exceptions are mapped to the error string here so the consumer
@@ -372,63 +467,30 @@ async def extract_and_store_graph(
                 ns = "ycs", run_id = extract_id, node_id = vid,
             )
         try:
-            # Watchdog: hard wall-clock ceiling per transcript. The
-            # inner request stack already has per-deployment timeouts +
-            # a zero-timeout-retry policy (see _build_pinned_chain), so
-            # this only fires when that stack wedges — and guarantees
-            # one slow arm can't burn the whole run before the bandit
-            # gets its negative reward. Gating (both in-process AND
-            # distributed) lives inside `_convert` now.
-            gdocs = await _convert(doc)
-            if not gdocs:
-                return vid, None, None
-            # Overflow split-union (2026-09-14): a context-overflow
-            # manifests as an exception, not an empty result — but
-            # if the FIRST segment errors with overflow markers on
-            # a large doc, retrying the same full doc is doomed.
-            # Handled in the except branch below via `_split_content`
-            # (needs the original doc — kept in scope here).
-            return vid, (gdocs[0] if gdocs else None), None
+            content_chunks = domain.graph_chunks(doc.page_content or "")
+            logger.info(
+                f"[ycs:graph] {vid}: extracting {len(content_chunks)} "
+                f"bounded transcript chunk(s)"
+            )
+            graph_documents: list[Any] = []
+            for index, content in enumerate(content_chunks, start = 1):
+                segment = Document(
+                    page_content = content,
+                    metadata = dict(doc.metadata),
+                )
+                graph_document = await _extract_with_split(segment, source = doc)
+                if graph_document is not None:
+                    graph_documents.append(graph_document)
+                logger.info(
+                    f"[ycs:graph] {vid}: chunk {index}/{len(content_chunks)} "
+                    f"complete ({len(graph_document.nodes) if graph_document else 0} nodes, "
+                    f"{len(graph_document.relationships or []) if graph_document else 0} rels)"
+                )
+            return vid, _combine_graph_documents(graph_documents, doc), None
         except asyncio.CancelledError:
             raise
         except Exception as e:
-            if isinstance(e, TimeoutError) and not str(e):
-                # asyncio.wait_for raises a bare TimeoutError — stamp it
-                # so the silent-zero guard's diagnostic isn't empty.
-                err = (
-                    f"TimeoutError: extraction exceeded the "
-                    f"{params.GRAPH_BATCH_TIMEOUT_S:.0f}s watchdog"
-                )
-            else:
-                err = f"{type(e).__name__}: {str(e)[:400]}"
-            # Overflow → split in halves and extract per segment,
-            # unioning nodes/rels (truncate would drop entities).
-            if _is_overflow_error(err):
-                try:
-                    parts = _split_content(doc.page_content or "")
-                    merged_nodes: list = []
-                    merged_rels: list = []
-                    first = None
-                    for part in parts:
-                        seg = Document(
-                            page_content = part,
-                            metadata = dict(doc.metadata),
-                        )
-                        seg_gdocs = await _convert(seg)
-                        if seg_gdocs and seg_gdocs[0]:
-                            if first is None:
-                                first = seg_gdocs[0]
-                            merged_nodes.extend(seg_gdocs[0].nodes or [])
-                            merged_rels.extend(
-                                seg_gdocs[0].relationships or []
-                            )
-                    if first is not None and (merged_nodes or merged_rels):
-                        first.nodes = merged_nodes
-                        first.relationships = merged_rels
-                        return vid, first, None
-                    err = f"{err} (split-union yielded nothing)"
-                except Exception as split_e:  # noqa: BLE001 - fallback failure is reported with the original extraction error.
-                    err = f"{err} | split-union failed: {type(split_e).__name__}"
+            err = _error_message(e)
             # 2026-09-14: non-transient errors (anything that ISN'T a
             # timeout/connection/rate-limit/5xx from the provider) are
             # almost certainly code bugs (e.g. the observed
@@ -520,7 +582,7 @@ async def extract_and_store_graph(
                 # path runs `SET d += $document.metadata`, and our
                 # source Documents carry {video_id, title, channel}.
                 # 2026-09-14: sync driver call in a thread + watchdog
-                # (DD's bounded-write pattern) — a wedged Bolt
+                # A bounded write ensures a wedged Bolt
                 # connection must not hang the task past its budget.
                 try:
                     await asyncio.wait_for(
@@ -677,7 +739,7 @@ async def extract_and_store_graph(
         # neo4j_task's silent-zero guard can log the body (otherwise
         # the user only sees "0 nodes" with no diagnostic). None when
         # every extraction succeeded. `error_breakdown` histograms
-        # failure KINDS across the batch (DD pattern); `thin_video_ids`
+        # failure KINDS across the batch; `thin_video_ids`
         # flags suspiciously-small-but-kept graphs for tuning.
         "last_batch_error":      last_batch_error,
         "error_breakdown":       dict(error_breakdown),

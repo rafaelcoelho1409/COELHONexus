@@ -1,6 +1,6 @@
 "use client";
 
-/** The Agentic AI graph, drawn with React Flow the way the Docs Distiller draws a stage: fixed positions (nothing
+/** The Agentic AI graph drawn with React Flow using fixed positions (nothing
  * moves when a status changes), a button per node that opens its sheet, a separate replay action, a glyph for the
  * state, a headline number once the node is done and a live line while it runs. The edge into the node now running
  * is highlighted. Loaded

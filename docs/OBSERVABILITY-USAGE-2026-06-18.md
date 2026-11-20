@@ -40,7 +40,7 @@ no-ops."""`. Every `genai_completion_span` / `genai_embedding_span` /
 `_NoOpSpan` stub. Nexus's own outbound call (`domains/settings/chat/service.py`)
 has zero span code either — it relies entirely on `HTTPXClientInstrumentor`'s
 generic `POST` span, which the Langfuse gate's allow-list doesn't match (no
-`gen_ai.*` attrs, no `dd./ycs.` prefix). **Net effect: no LLM call
+`gen_ai.*` attrs or recognized feature prefix). **Net effect: no LLM call
 anywhere in the system currently produces a `gen_ai.*` span or a Langfuse
 "generation" observation** — despite the Rotator having a fully-designed
 `gen_ai.*` + `bandit.*` attribute contract sitting dormant in
@@ -157,12 +157,10 @@ yet (nothing to group observability code alongside) may keep a single flat
 a `runtime/` folder for any other reason, the flat file should move under
 it like everywhere else, rather than staying an orphan next to a `runtime/`
 folder that already exists — **this exception is now theoretical, not
-demonstrated**: `dd/ingestion` was the one domain using it (see the audit
-row below) and was moved under `runtime/` on 2026-09-22, at the user's
-explicit request for uniformity across `dd/`, even though the trigger
-table alone wouldn't have forced the move on its own (36 lines, one
-caller). Kept as documentation of the pattern for whichever future domain
-starts small enough to need it again.
+demonstrated**: a small ingestion feature was moved under `runtime/` on
+2026-09-22, even though the trigger table alone wouldn't have forced the
+move (36 lines, one caller). Kept as documentation of the pattern for
+whichever future domain starts small enough to need it again.
 
 **File triggers, once inside `runtime/observability/`:**
 
@@ -192,17 +190,14 @@ already matches, with one real exception:
 
 | Domain | Files present | Matches triggers? |
 |---|---|---|
-| `dd/planner`, `dd/synth` | `metrics.py`, `service.py` | ✅ — `service.py` earned its keep (≥8 node files import it); no `spans.py`/`keys.py`/`domain.py` because neither trigger holds yet |
-| `dd/runtime` (shared) | `observability/spans.py` (new 2026-09-22) | ✅ — `api/v1/dd/{synth,planner}/router.py` both query the LangGraph `checkpoints` table directly (recent-threads listing, wipe endpoints) — real SQL we authored, not `AsyncPostgresSaver` internals — so it earned a shared `postgres_span(operation, **attrs)` at the `dd/runtime` level (used by both routers) rather than duplicating one per stage. `AsyncPostgresSaver`'s own internals (`domains/dd/planner/runtime/checkpoint/service.py`) stay unwrapped — third-party library code, not ours to instrument |
 | `ycs` | `metrics.py`, `service.py`, `spans.py`, `domain.py` | ✅ — the richest, because YCS genuinely has all four needs (node spans, `db.*`/`gen_ai.rerank` I/O spans, and pure attribute helpers). 2026-09-22: `spans.py` gained `postgres_span`, `qdrant_upsert_span`, `qdrant_admin_span`; every remaining raw Postgres/ES/Qdrant call site across `conversation/`, `query/`, `ingestion/`, `es_index/`, `embedding_migration/`, `transcript/service.py`, and `api/v1/ycs/admin/{router,service}.py` is now wrapped — no bare `psycopg`/ES-client/Qdrant-client call left un-spanned in `apps/server/domains/ycs/` or its router |
 | `settings` | `metrics.py`, `spans.py`, `keys.py` | ✅ — no `service.py` (chat/embeddings are 2 leaf functions, not a multi-node graph, so no shared node-decorator need); `keys.py` earned its keep mirroring the `gen_ai.*` semconv |
-| `dd/ingestion` | `runtime/{dispatch,observability,progress}/`, `observability/` has only `metrics.py` | ✅ — moved under `runtime/` 2026-09-22 to match planner/synth structurally (`dispatch/`+`progress/`+`observability/` relocated together, not just observability alone — moving observability by itself would have left a `runtime/` folder holding exactly one thing, a worse inconsistency than the flat file it replaced). No `service.py`/`spans.py`/`keys.py`/`domain.py` — ingestion's one span is still inline in `runtime/dispatch/service.py:run()`, no fan-out of consumers exists to justify extracting it |
 
 ---
 
 ## 1. Add a node-level OTel span (LangGraph or generic)
 
-**Pattern:** `@traced("name")` decorator, mirrors what DD synth + YCS already use.
+**Pattern:** the `@traced(name)` decorator at graph-node and request-handler boundaries.
 
 ```python
 # domains/foo/runtime/observability/spans.py
@@ -351,7 +346,6 @@ async def run_foo_pipeline(workflow_id: str, tenant: str):
 
 The same pattern is shipped in:
 - `api/v1/ycs/agents/router.py:rag_search` — YCS Ask
-- `domains/dd/synth/runtime/dispatch/service.py:run_study_async` — DD study
 
 ---
 
@@ -366,7 +360,7 @@ from infra.langfuse.service import record_score
 record_score("foo.quality.precision", 0.92, comment = "tenant=acme")
 ```
 
-Existing pattern: `domains/dd/synth/runtime/observability/metrics.py:record_grader_dim_score` dual-writes — OTel histogram **and** LangFuse score. Use that shape for any "quality metric" you want visible both in aggregate (Mimir) and per-trace (LangFuse UI).
+Use this pattern when a quality metric should be visible both in aggregate (Mimir) and per-trace (LangFuse UI).
 
 ---
 
@@ -394,7 +388,7 @@ def build_foo_prompt(*, tenant: str, items: list[dict]) -> str:
 
 ### 6b. Publish the template (one-shot)
 
-Add a script under `scripts/observability/publish_foo_prompt.py` mirroring `publish_chapter_propose_prompt.py`:
+Add a script under `scripts/observability/publish_foo_prompt.py` using this pattern:
 
 ```python
 from infra.langfuse import get_client
@@ -453,7 +447,7 @@ Existing shipped reference: `scripts/observability/run_faithfulness_eval.py`.
 
 Drop `observability/grafana-dashboards/foo-something.json` next to the existing ones. Use `Mimir` as the Prometheus datasource UID. For span-derived metrics (latency, error rate), the `traces_spanmetrics_*` series populate automatically (Tempo→Mimir pipeline).
 
-Reference shipped: `rotator-red.json`, `dd-pipeline.json`, `ycs-retrieval.json`.
+Reference shipped: `rotator-red.json` and `ycs-retrieval.json`.
 
 ---
 

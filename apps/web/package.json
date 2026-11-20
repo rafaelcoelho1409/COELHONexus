@@ -24,8 +24,7 @@
     "tokens:check": "node scripts/generate-tokens.mjs --check",
     "budgets": "node scripts/check-budgets.mjs",
     "copy:check": "node scripts/check-public-copy.mjs",
-    "contract:check": "node scripts/check-backend-contract.mjs",
-    "verify": "npm run lint && npm run typecheck && npm run knip && npm run test && npm run test:boundaries && npm run tokens:check && npm run api:check && npm run copy:check && npm run contract:check",
+    "verify": "npm run lint && npm run typecheck && npm run knip && npm run test && npm run test:boundaries && npm run tokens:check && npm run api:check && npm run copy:check",
     "verify:full": "npm run verify && npm run build && npm run budgets && npm run test:e2e"
   },
   "dependencies": {

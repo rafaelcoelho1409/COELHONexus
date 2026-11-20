@@ -35,7 +35,7 @@
 
 ## What is this?
 
-COELHO Nexus is a single, self-contained platform hosting two independent AI-powered applications (a third, Book Distiller, is in development), all running on the same Kubernetes cluster, sharing the same observability stack, the same free-tier LLM rotator, and the same infrastructure-as-code foundation. It was designed and built end-to-end by one engineer — from the Terraform modules that provision every data store, to the FastAPI backend and Next.js front end that run the apps, to the pipeline that deploys them.
+COELHO Nexus is a single, self-contained platform hosting two AI-powered applications, both running on the same Kubernetes cluster and sharing observability and infrastructure-as-code foundations. It was designed and built end-to-end by one engineer — from the Terraform modules that provision every data store, to the FastAPI backend and Next.js front end that run the apps, to the pipeline that deploys them.
 
 The point of this repo isn't just "a few AI apps." It's a demonstration of what a single engineer can own end-to-end: infrastructure, backend, observability, and delivery, all treated with the same rigor a platform team would bring to production.
 
@@ -43,9 +43,8 @@ The point of this repo isn't just "a few AI apps." It's a demonstration of what 
 
 | Feature | What it does |
 |---|---|
-| **Docs Distiller** | Turns any framework's scattered documentation into a single, coherent study guide. A five-tier ingestion cascade (`llms_full.txt` → `llms_txt` → sitemap → httpx-crawl-with-Playwright-fallback → GitHub README) pulls in raw docs; a Planner → Resolver → Synth pipeline turns them into a structured, chapter-by-chapter book. |
 | **YouTube Content Search** | Full semantic search over YouTube video transcripts. Playwright-driven transcript scraping feeds a hybrid retrieval pipeline — Qdrant for dense vector search, Elasticsearch for full-text, Neo4j for the entity/relationship graph extracted from what's actually said in each video. |
-| **Book Distiller** *(in development)* | Turns a book into a structured, chapter-by-chapter study guide, then researches across it and the live web with citations. The sibling of Docs Distiller, built on Deep Agents, LangGraph and FastMCP. |
+| **Book Distiller** *(in development)* | Turns a book into a structured, chapter-by-chapter study guide, then researches across it and the live web with citations. Built on Deep Agents, LangGraph and FastMCP. |
 
 ## Architecture
 
@@ -55,7 +54,7 @@ The point of this repo isn't just "a few AI apps." It's a demonstration of what 
 
 **Two services, plus Celery workers and Flower:**
 - **Server** — the FastAPI ML/agent backend (with a FastMCP endpoint at `/mcp`). Owns the actual pipelines for the features, plus Celery-orchestrated background task queues (one isolated queue per feature pipeline).
-- **Web** — the Next.js front end, and the only UI: home, Settings, Docs Distiller and YouTube Content Search. It proxies `/api/*` to the server and streams live pipeline progress over SSE.
+- **Web** — the Next.js front end and the only UI: home, Settings, Book Distiller and YouTube Content Search. It proxies `/api/*` to the server and streams live pipeline progress over SSE.
 
 The earlier FastHTML UI and the standalone FastMCP gateway were retired and moved out of this repo.
 
@@ -84,7 +83,7 @@ The earlier FastHTML UI and the standalone FastMCP gateway were retired and move
 | **FastMCP** | Model Context Protocol endpoint mounted on the server (`/mcp`) |
 | **Celery** | Background task orchestration, one queue per feature |
 | **DeepAgents** | Autonomous agent orchestration (Book Distiller, in development) |
-| **LangGraph** | Graph-structured pipelines (Docs Distiller Planner/Synth) |
+| **LangGraph** | Graph-structured Book Distiller workflows |
 | **Playwright** | Headless/headed browser automation — transcript scraping, doc-site rendering |
 
 ### Infrastructure & DevOps
@@ -124,7 +123,7 @@ The earlier FastHTML UI and the standalone FastMCP gateway were retired and move
 ## Key Components
 
 <div align="center">
-<img src="diagrams/coelho_nexus_ai_domains.png" alt="COELHO Nexus AI Domains — pipeline internals for DD, YCS, and the shared LLM Rotator" width="1000">
+<img src="diagrams/coelho_nexus_ai_domains.png" alt="COELHO Nexus AI Domains — YCS pipeline and shared AI services" width="1000">
 </div>
 
 <p align="center"><em>Every LangGraph node, FastMCP tool, and data-store write in the two pipelines below, plus the shared LLM Rotator they all route through.</em></p>
@@ -132,10 +131,6 @@ The earlier FastHTML UI and the standalone FastMCP gateway were retired and move
 ### The free-tier LLM rotator
 
 Every LLM call across both features routes through a single rotator that load-balances across 20+ free models from multiple providers (NVIDIA NIM, Groq, Cerebras, Mistral, Google, DeepSeek, SambaNova) using bandit-based arm selection — models that are actually performing well get more traffic, not round-robin. BYOK: bring your own provider keys via the `/settings` UI, encrypted at rest in MinIO.
-
-### Docs Distiller's five-tier ingestion cascade
-
-Any framework's documentation gets pulled in through the cheapest source that actually works: a pre-bundled `llms_full.txt`, then a `llms_txt` link index, then `sitemap.xml`, then an `httpx` crawl with Playwright fallback for JS-rendered sites, then a GitHub README as last resort. A Planner → Resolver → Synth pipeline turns whatever lands into a structured, chapter-by-chapter study guide.
 
 ### YCS hybrid retrieval
 
@@ -233,7 +228,7 @@ cp .env.example .env
 | ArgoCD | `coelhonexus` | `python upload_env_to_k3d.py .env coelhonexus` |
 | `skaffold dev` | `coelhonexus-dev` | `python upload_env_to_k3d.py .env coelhonexus-dev` |
 
-`.env.example`'s placeholder infrastructure credentials (`postgres`, `redis-demo-password`, etc.) are fine as-is — they already match what Terragrunt provisioned via `env.hcl`. Only the LLM keys are worth replacing — without at least one, DD/YCS won't do anything real.
+`.env.example`'s placeholder infrastructure credentials (`postgres`, `redis-demo-password`, etc.) are fine as-is — they already match what Terragrunt provisioned via `env.hcl`. Only the LLM keys are worth replacing — without at least one, BD/YCS won't do anything real.
 
 **Quick test** — skip the copy/edit step and pass `.env.example` directly as the source file for either command above (e.g. `python upload_env_to_k3d.py .env.example coelhonexus`). Works, but every BYOK provider key in it is blank.
 
@@ -385,7 +380,7 @@ All demo credentials above are defined in [`infrastructure/env.hcl`](infrastruct
 
 Every pipeline run, LLM call, and cross-service request is traced twice, to two different tools built for two different questions:
 
-- **Grafana LGTM stack** (Loki + Grafana Mimir + Tempo, fed by Alloy) — infra-level observability: request latency, error rates, resource usage, cross-service traces. A pre-built PromQL/LogQL/TraceQL query catalog covering every feature (Planner, Synth, YCS retrieval, the LLM rotator, service-graph edges) lives in [`docs/GRAFANA-EXPLORE-QUERIES.md`](docs/GRAFANA-EXPLORE-QUERIES.md).
+- **Grafana LGTM stack** (Loki + Grafana Mimir + Tempo, fed by Alloy) — infra-level observability: request latency, error rates, resource usage, cross-service traces. A pre-built PromQL/LogQL/TraceQL query catalog covering Book Distiller, YCS retrieval, the LLM rotator, and service-graph edges lives in [`docs/GRAFANA-EXPLORE-QUERIES.md`](docs/GRAFANA-EXPLORE-QUERIES.md).
 - **LangFuse** — LLM-specific observability: prompts, token usage, cost, per-session grouping, grader/quality scores dual-written from each pipeline's own evaluation logic.
 
 Adding observability to a new domain follows one documented, copy-pasteable pattern — see [`docs/OBSERVABILITY-USAGE-2026-06-18.md`](docs/OBSERVABILITY-USAGE-2026-06-18.md).
@@ -406,11 +401,11 @@ COELHONexus/
 ├── apps/
 │   ├── server/                 # FastAPI + FastMCP backend
 │   │   ├── entrypoints/          # api/ (REST routes) + mcp/ (MCP tools)
-│   │   ├── domains/              # dd/ ycs/ llm/ — one folder per feature
+│   │   ├── domains/              # bd/ ycs/ — one folder per feature
 │   │   └── infra/                # otel/, langfuse/, db clients
-│   └── web/                      # Next.js front end (home, Settings, Docs Distiller, YCS)
+│   └── web/                      # Next.js front end (home, Settings, Book Distiller, YCS)
 │       ├── src/app/               # App Router routes (one-line page re-exports)
-│       ├── src/features/          # dd/, ycs/, settings/, marketing/ — one folder per feature
+│       ├── src/features/          # bd/, ycs/, settings/, marketing/ — one folder per feature
 │       └── src/shared/            # generated API client, UI kit, config, layout
 │
 ├── infrastructure/               # Terraform + Terragrunt IaC

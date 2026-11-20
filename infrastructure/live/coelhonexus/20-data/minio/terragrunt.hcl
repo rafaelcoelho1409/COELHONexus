@@ -16,8 +16,9 @@
 #   - Ported 2026-09-28: memory_request/memory_limit/gomemlimit bump — Cloud
 #     hit repeated OOMKills at the module's 384Mi default under real load
 #     (MinIO's IAM refresh subsystem freezing under GC pressure), manifesting
-#     as FastAPI lifespan hangs + Planner stalls on MinIO reads/writes. Same
-#     chart/architecture here, so applying the same headroom pre-emptively.
+#     as FastAPI lifespan hangs + agent workflow stages stalling on MinIO
+#     reads/writes. Same chart/architecture here, so applying the same headroom
+#     pre-emptively.
 # =============================================================================
 
 include "root" {

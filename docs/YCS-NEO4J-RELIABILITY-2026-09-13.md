@@ -10,19 +10,11 @@ breaker fix (SHIPPED), the Qdrant+Neo4j concurrency fix (SHIPPED — see
 bottom section), and the remaining, deliberately-deferred piece of the
 streaming-architecture proposal.
 
-## Starting question: should DD's "timeout engine" move into the LLM Rotator?
+## Starting question: which timeout controls belong in the LLM Rotator?
 
-Investigated by reading `chat_judge_bandit_async` (DD Planner's
-`doc_distill` node, the actual code, not assumption) side by side with
-YCS's Neo4j chain builder.
+Investigated by tracing YCS's Neo4j chain builder and the shared client configuration in the LLM Rotator adapter.
 
-**Finding: the rotation/arm-selection already lives server-side, in the
-rotator.** Evidence: `chat_judge_bandit_async`'s `dd_process` and
-`candidate_filter` params are explicitly commented `# ignored — no
-per-process weights` / `# ignored — no heavyweight filter` — fossils of
-a client-side bandit that used to exist and has since been stripped
-down to a single `client.chat.completions.create(...)` call with
-`model="auto"`. There is nothing left to "transfer."
+**Finding: rotation and arm selection already live server-side in the Rotator. The Nexus client is a thin HTTP adapter issuing a single request with model auto. There is nothing left to transfer.
 
 **What's still client-side, and has to stay there** (this is the actual
 "timeout engine," and none of it can move server-side):
@@ -38,14 +30,9 @@ down to a single `client.chat.completions.create(...)` call with
    with no wire representation; the rotator has no way to observe or
    enforce it over the protocol.
 
-Conclusion: keep it in Nexus (nothing DD-specific to relocate — the
-shared client already lives at `domains/llm/rotator/chain/service.py`,
-not under `domains/dd/`), apply the same discipline to YCS's Neo4j path,
-adjusted for its different interface (LangChain `ChatOpenAI`, required
-by `LLMGraphTransformer`, vs. DD's raw `AsyncOpenAI` hot path — these
-correctly stay separate call shapes, not a case for merging).
+Conclusion: keep consumer-specific timeout and retry budgets in Nexus. Apply them to YCS's Neo4j path, which uses LangChain ChatOpenAI as required by LLMGraphTransformer.
 
-## Fix 1 (shipped): give Neo4j's chain the same client discipline DD has
+## Fix 1 (shipped): configure Neo4j's chain explicitly
 
 `build_ycs_neo4j_pinned_chain()` (`domains/llm/rotator/chain/service.py`)
 used to delegate to `build_reduce_label_chain()` — a bare
@@ -58,12 +45,9 @@ neighboring comment in the same file already warned about
 ("`max_retries=0,  # rotator handles cascade, SDK retries would triple
 timeout`") but that this call site didn't follow.
 
-Added a shared `_build_chat_openai(*, timeout_s, ...)` helper (also
-found and fixed the same gap dormant in `_get_chat_llm()`, DD's own
-"legacy" LangChain wrapper — zero live callers today, but the same bug
-waiting to happen the moment something calls it) so both paths get
-`max_retries=0` by construction instead of trusting each call site to
-remember.
+Added a shared `_build_chat_openai(*, timeout_s, ...)` helper so both
+active call paths get `max_retries=0` by construction instead of trusting
+each call site to remember.
 
 ## Fix 2 → same-day regression → Fix 3: the timeout value itself
 
@@ -93,10 +77,8 @@ Caught via live testing on a real 24-video Raiam Santos McArn batch:
 
 **Caveat carried forward, not resolved**: 400s is a reasoned estimate
 ("~600s used to work, land safely under the 600s watchdog"), not a
-measured percentile. DD's `doc_distill` timeout (70s) came from a real
-LangFuse p99 pull (genuine successful calls topped out at 47.6s, max
-51.7s) — Neo4j's graph-extraction calls have no equivalent telemetry
-pulled yet. If timeouts recur at 400s, pulling real latency data (if
+measured percentile. Neo4j's graph-extraction calls have no equivalent
+latency telemetry pulled yet. If timeouts recur at 400s, pulling real latency data (if
 this call path is traced in LangFuse) should replace the next guess.
 
 ## Validation run — fix confirmed, but exposed a bigger, separate problem
@@ -268,16 +250,16 @@ concurrently with each other and with Playwright still fetching the
 rest of the batch.
 
 **Key findings from that research, not yet acted on:**
-- LangGraph + `AsyncPostgresSaver` checkpointing (DD's Planner/Synth
-  resilience mechanism) is a **mismatch** for this shape of problem —
+- LangGraph + `AsyncPostgresSaver` checkpointing is a **mismatch** for
+  this shape of problem —
   it's built for durable resumption of a single stateful graph
   traversal, not fan-out over N independent, order-irrelevant items.
   Checkpointing alone also does not provide automatic crash detection/
   recovery — that requires an external task queue/worker pool, which
   Celery already natively provides. YCS's existing idempotent
   skip-checks (ES cache-hit, Neo4j "already exists") are already the
-  right-shaped resilience primitive for this problem — same spirit as
-  DD's checkpointing, different plumbing appropriate to a smaller
+  right-shaped resilience primitive for this problem — a durable retry
+  mechanism with plumbing appropriate to a smaller
   per-item task shape.
 - Per-item Celery task dispatch (one small task per video, `group()`/
   chord fan-out) rather than one monolithic task per phase is the

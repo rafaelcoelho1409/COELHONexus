@@ -9,15 +9,6 @@ export function isHealthy(data: unknown): boolean {
   return isRecord(data) && data.status === "healthy";
 }
 
-/** Documentation sets that have been ingested (the endpoint returns one row per set). */
-export function countDocumentationSets(data: unknown): number | null {
-  return Array.isArray(data) ? data.length : null;
-}
-
-export function countActiveRuns(data: unknown): number | null {
-  return isRecord(data) && Array.isArray(data.active) ? data.active.length : null;
-}
-
 export function countIndexedVideos(data: unknown): number | null {
   if (!isRecord(data)) return null;
   const { total } = data;

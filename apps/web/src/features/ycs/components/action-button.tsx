@@ -2,7 +2,7 @@ import type { ComponentProps } from "react";
 
 import { Button } from "@/shared/ui/button";
 
-/** YCS actions share the outlined control used across BD and DD. */
+/** YCS actions share the outlined control used across the app. */
 const LOOK =
   "h-auto min-h-10 gap-2 rounded-sm border-border bg-background px-3 text-sm font-medium text-foreground hover:border-neutral-8 hover:bg-background hover:text-foreground aria-expanded:bg-background aria-pressed:border-primary aria-pressed:bg-muted dark:border-border dark:bg-background dark:hover:border-neutral-8 dark:hover:bg-background [&_svg:not([class*='size-'])]:text-muted-foreground";
 const ICON_ONLY = "size-10 min-h-0 px-0";

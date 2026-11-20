@@ -3,7 +3,7 @@
 Six importable Grafana dashboard JSONs that visualize the app-level metrics
 confirmed in Mimir for COELHO Nexus:
 
-- `overview.json` — top-level cross-application RED-style view for Docs
+- `overview.json` — top-level cross-application RED-style view for Book
   Distiller and YouTube Content Search.
 - `investigations.json` — mixed Mimir + Loki investigation surface for
   recent errors, orchestration logs, and trace-oriented troubleshooting.
@@ -11,9 +11,6 @@ confirmed in Mimir for COELHO Nexus:
   `traces_service_graph_*` metrics written to Mimir by Alloy.
 - `rotator-red.json` — LLM rotator discovery + benchmark health, built on the
   `dd_rotator_*` metrics emitted by the benchmark and discovery services.
-- `dd-pipeline.json` — Docs Distiller planner + study health, built on the
-  live `dd_*` instruments declared in
-  `apps/server/infra/opentelemetry/entities.py`.
 - `ycs-retrieval.json` — YouTube Content Search ask/retrieval health, built on
   the live `ycs_*` metrics emitted by the YCS runtime.
 

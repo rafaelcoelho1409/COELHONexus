@@ -1,10 +1,12 @@
 """Prepare Distill source units and route unit extraction work."""
 from __future__ import annotations
-import domains
-from .... import graphs
 
 from langgraph.runtime import Runtime
 from langgraph.types import Send
+
+import domains
+
+from .... import graphs
 
 
 def after_start(state: graphs.distill.states.DistillRunState) -> str:
@@ -47,9 +49,19 @@ async def prepare_units(
     dependencies = runtime.context
 
     async def execute() -> dict:
+        async def report_page_progress(page_number: int, status: str, total_count: int) -> None:
+            await graphs.service.report_node_item_progress(
+                dependencies.progress_callback,
+                "prepare_units",
+                str(page_number),
+                status,
+                total_count = total_count,
+            )
+
         result = await domains.bd.distill.extract_learning_units.service.prepare_units(
             dependencies.storage,
             graph_state,
+            on_page_progress = report_page_progress,
         )
         await graphs.service.report(
             dependencies.progress_callback,

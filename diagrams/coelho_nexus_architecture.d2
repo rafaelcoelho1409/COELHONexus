@@ -218,11 +218,8 @@ app: Application Services Layer {
   style.font-color: "#000000"
   style.bold: true
 
-  fasthtml: "FastHTML\n(Frontend UI)" {
-    shape: image
-    icon: ./icons/fasthtml.svg
-    width: 500
-    height: 500
+  web: "Next.js\n(Frontend UI)" {
+    shape: rectangle
     style.font-size: 64
   }
 
@@ -236,7 +233,7 @@ app: Application Services Layer {
     style.font-color: "#000000"
     style.bold: true
 
-    dd: "/api/v1/dd\n(Docs Distiller)" {
+    bd: "/api/v1/bd\n(Book Distiller)" {
       shape: image
       icon: ./icons/fastapi.png
       width: 500
@@ -267,7 +264,7 @@ app: Application Services Layer {
     style.font-size: 64
   }
 
-  celery: "Celery Workers\n(crawler, embedding,\nllm, planner, synth)" {
+  celery: "Celery Workers\n(ingestion, embedding,\nLLM, distillation)" {
     shape: image
     icon: ./icons/celery.png
     width: 500
@@ -306,16 +303,16 @@ app: Application Services Layer {
   otel -> celery: "auto-instrument" {style.stroke: "#E53E3E"; style.stroke-width: 4; style.stroke-dash: 3}
 
   # Internal app flow
-  fasthtml -> server.dd: "REST API" {style.stroke: "#00B4D8"; style.stroke-width: 8}
-  fasthtml -> server.ycs: {style.stroke: "#00B4D8"; style.stroke-width: 7}
+  web -> server.bd: "REST API" {style.stroke: "#00B4D8"; style.stroke-width: 8}
+  web -> server.ycs: {style.stroke: "#00B4D8"; style.stroke-width: 7}
 
-  server.dd -> celery: "dispatch\ntasks" {style.stroke: "#0066CC"; style.stroke-width: 7}
+  server.bd -> celery: "dispatch\ntasks" {style.stroke: "#0066CC"; style.stroke-width: 7}
   server.ycs -> celery: {style.stroke: "#0066CC"; style.stroke-width: 7}
 
   celery -> flower: "metrics" {style.stroke: "#0066CC"; style.stroke-width: 2; style.stroke-dash: 5}
   celery -> playwright: "crawl\nrequests" {style.stroke: "#0066CC"; style.stroke-width: 7}
 
-  server.llm -> server.dd: {style.stroke: "#6B46C1"; style.stroke-width: 2; style.stroke-dash: 5}
+  server.llm -> server.bd: {style.stroke: "#6B46C1"; style.stroke-width: 2; style.stroke-dash: 5}
   server.llm -> server.ycs: {style.stroke: "#6B46C1"; style.stroke-width: 2; style.stroke-dash: 5}
 }
 
@@ -412,7 +409,7 @@ gitops.argocd_updater -> gitops.argocd: {style.stroke: "#FF6B35"; style.stroke-w
 gitops.argocd -> infra.helm: "GitOps\ndeploy" {style.stroke: "#FF6B35"; style.stroke-width: 2; style.stroke-dash: 5}
 
 # ── Helm deployment edges (faint dashed blue) ───────────────
-infra.helm -> app.fasthtml: {style.stroke: "#004D99"; style.stroke-width: 6; style.stroke-dash: 5; style.opacity: 0.4}
+infra.helm -> app.web: {style.stroke: "#004D99"; style.stroke-width: 6; style.stroke-dash: 5; style.opacity: 0.4}
 infra.helm -> app.server: {style.stroke: "#004D99"; style.stroke-width: 6; style.stroke-dash: 5; style.opacity: 0.4}
 infra.helm -> app.fastmcp: {style.stroke: "#004D99"; style.stroke-width: 6; style.stroke-dash: 5; style.opacity: 0.4}
 infra.helm -> app.celery: {style.stroke: "#004D99"; style.stroke-width: 6; style.stroke-dash: 5; style.opacity: 0.4}
@@ -421,7 +418,7 @@ infra.helm -> app.playwright: {style.stroke: "#004D99"; style.stroke-width: 6; s
 infra.helm -> monitoring.langfuse: {style.stroke: "#004D99"; style.stroke-width: 6; style.stroke-dash: 5; style.opacity: 0.4}
 
 # ── Data store connections (green solid) ────────────────────
-app.server.dd -> stores.postgresql: "LangGraph\ncheckpoints" {style.stroke: "#28A745"; style.stroke-width: 7}
+app.server.bd -> stores.postgresql: "LangGraph\ncheckpoints" {style.stroke: "#28A745"; style.stroke-width: 7}
 app.server.ycs -> stores.postgresql: "conversation\nthreads" {style.stroke: "#28A745"; style.stroke-width: 7}
 app.server.llm -> stores.minio: "BYOK KEK\nencrypted keys" {style.stroke: "#28A745"; style.stroke-width: 7}
 app.celery -> stores.redis: "broker +\nresult backend" {style.stroke: "#28A745"; style.stroke-width: 8}

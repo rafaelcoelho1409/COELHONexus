@@ -61,7 +61,7 @@ describe("Markdown", () => {
 
   it("drops the target of a javascript: link and opens real ones safely", () => {
     render(
-      <Markdown text="[bad](javascript:alert(1)) [good](https://example.com/a) [here](#top) [rel](/dd/study)" />,
+      <Markdown text="[bad](javascript:alert(1)) [good](https://example.com/a) [here](#top) [rel](/article)" />,
     );
     expect(screen.getByText("bad").closest("a")).not.toHaveAttribute(
       "href",
@@ -71,7 +71,7 @@ describe("Markdown", () => {
     expect(good).toHaveAttribute("target", "_blank");
     expect(good).toHaveAttribute("rel", "noreferrer noopener");
     expect(screen.getByRole("link", { name: "here" })).not.toHaveAttribute("target");
-    expect(screen.getByRole("link", { name: "rel" })).toHaveAttribute("href", "/dd/study");
+    expect(screen.getByRole("link", { name: "rel" })).toHaveAttribute("href", "/article");
   });
 
   it("does not render raw HTML by default", () => {

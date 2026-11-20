@@ -19,17 +19,13 @@ describe("AppNav", () => {
   it("links the apps", () => {
     pathname.current = "/";
     render(<AppNav />);
-    expect(screen.getByRole("link", { name: "Docs Distiller" })).toHaveAttribute("href", "/dd");
+    expect(screen.getByRole("link", { name: "YouTube Content Search" })).toHaveAttribute("href", "/ycs");
     expect(screen.getByRole("link", { name: "Book Distiller" })).toHaveAttribute("href", "/bd");
     expect(screen.getByRole("link", { name: "Settings" })).toHaveAttribute("href", "/settings");
   });
 
   it("marks a page current for its own path and every path below it", () => {
-    expect(currentLinks("/dd")).toEqual(["Docs Distiller"]);
-  });
-
-  it("keeps Docs Distiller current on a stage page", () => {
-    expect(currentLinks("/dd/planner")).toEqual(["Docs Distiller"]);
+    expect(currentLinks("/ycs/ask")).toEqual(["YouTube Content Search"]);
   });
 
   it("marks Settings, and nothing on a path that only shares a prefix", () => {
@@ -37,6 +33,6 @@ describe("AppNav", () => {
   });
 
   it("does not mistake a longer name for a child path", () => {
-    expect(currentLinks("/ddx")).toEqual([]);
+    expect(currentLinks("/ycsx")).toEqual([]);
   });
 });

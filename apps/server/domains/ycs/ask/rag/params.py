@@ -39,8 +39,8 @@ HISTORY_MAX_TOKENS = 800
 HISTORY_ANSWER_CHARS_CAP = 800
 
 
-# DD parity: these mean "try again" — same rationale as
-# `doc_distill._TRANSIENT_REASONS` (timeout/connection only).
+# These transient transport failures are safe to retry (timeouts and
+# connection errors only).
 TRANSIENT_SUBSTRINGS: tuple[str, ...] = (
     "timeout",
     "timed out",

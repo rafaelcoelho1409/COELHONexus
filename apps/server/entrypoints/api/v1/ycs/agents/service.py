@@ -26,7 +26,7 @@ def clear_turn_cancelled(turn_id: int | None) -> None:
 async def build_graph_from_request(request: Request):
     """Build the adaptive RAG graph wired to `app.state.llm` (chat model, not BYOK override).
     BYOK exclusive-override was dropped — routing one user key through a shared
-    fallback defeats explicit provider choice; same workload as Planner/Synth so same endpoint path."""
+    fallback defeats explicit provider choice; graph calls use the configured endpoint path."""
     app = request.app
     return ai.ycs.graphs.ask.adaptive.graphs.adaptive_rag_graph(
         retriever    = app.state.smart_retriever,

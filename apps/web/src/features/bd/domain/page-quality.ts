@@ -1,4 +1,4 @@
-/** Keep the BD feature's established import path while the report helpers are shared with DD. */
+/** Keep the established BD import path while report helpers remain shared internally. */
 export {
   describeMechanicalFixes,
   dispositionNote,

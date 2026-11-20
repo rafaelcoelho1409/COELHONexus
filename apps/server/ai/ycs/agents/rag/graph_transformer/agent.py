@@ -1,11 +1,13 @@
 """YCS transcript graph extraction through LangChain's graph transformer."""
 from __future__ import annotations
-import domains
-from .... import prompts
 
 from typing import Any
 
 from langchain_neo4j import LLMGraphTransformer
+
+import domains
+
+from .... import prompts
 
 
 def graph_transformer(

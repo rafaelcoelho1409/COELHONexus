@@ -5,10 +5,10 @@ import importlib
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from . import domain, params, patterns, schemas, service
+    from . import config, domain, params, patterns, schemas, service
 
 
-__all__ = ["domain", "params", "patterns", "schemas", "service"]
+__all__ = ["config", "domain", "params", "patterns", "schemas", "service"]
 
 
 def __getattr__(name: str):

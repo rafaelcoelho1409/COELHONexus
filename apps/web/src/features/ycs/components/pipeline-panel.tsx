@@ -1,8 +1,7 @@
 "use client";
 
-/** The pipeline panel: the run as four steps (Playwright, ElasticSearch, Qdrant, Neo4j) with one overall state, an elapsed clock and
- * the actions that belong to a run — Stop while it works, Start/Resume once it has stopped, and Wipe cache. The per-video × per-store
- * table and the LLM usage open in side sheets. Port of
+/** The pipeline panel: the run as four steps (Playwright, ElasticSearch, Qdrant, Neo4j) with one overall state and an elapsed clock.
+ * Videos and LLM usage open in side sheets. The Source tab owns dispatching the video ingestion run. Port of
  * `static/js/ycs/pipeline_panel.js` + `features/ycs/shared/pipeline_panel.py`.
  *
  * Playwright and ElasticSearch poll the SAME extract task (there is no separate ES task) and read different sub-phase targets out
@@ -10,7 +9,7 @@
  * reused as a lookup key, not task ids). */
 
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { Info, ListChecks } from "lucide-react";
+import { Info } from "lucide-react";
 import { useRouter } from "next/navigation";
 import type { JSX } from "react";
 import { useEffect, useRef, useState } from "react";
@@ -21,7 +20,7 @@ import {
   getYcsAdminTaskTaskIdOptions,
 } from "@/shared/api";
 import { apiErrorMessage } from "@/shared/lib/api-error";
-import { replayPipelineNode, rerunPipeline, stopPipeline, wipePipeline } from "../api";
+import { replayPipelineNode } from "../api";
 import {
   extractBarState,
   extractSuccessLabel,
@@ -38,7 +37,6 @@ import {
   subPhaseLabel,
   subPhasePct,
   successHint,
-  wipeSummaryLine,
 } from "../domain";
 import { llmCountersSchema, taskSnapshotSchema } from "../entities";
 import { useYcsOverlays } from "../hooks/use-overlays";
@@ -188,6 +186,7 @@ export function PipelinePanel({
   const { confirm, toast } = useYcsOverlays();
   const [sheet, setSheet] = useState<"videos" | "usage" | null>(null);
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const [replayNodeId, setReplayNodeId] = useState<string | null>(null);
 
   const extractQuery = useQuery({
     ...getYcsAdminTaskTaskIdOptions({ path: { task_id: tracking.extract } }),
@@ -257,14 +256,12 @@ export function PipelinePanel({
     noTranscriptIds,
   });
 
-  const [stopped, setStopped] = useState(false);
-  const [wipeLine, setWipeLine] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
-    if (allTerminal || stopped) return;
+    if (allTerminal) return;
     const timer = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(timer);
-  }, [allTerminal, stopped]);
+  }, [allTerminal]);
   const elapsed = fmtElapsed((now - tracking.startedAtMs) / 1000);
 
   // One library refresh per phase as it first reaches SUCCESS, then a final sweep on the terminal
@@ -295,24 +292,6 @@ export function PipelinePanel({
     onAllDone();
   }, [allTerminal, onAllDone]);
 
-  const stop = useMutation({
-    mutationFn: () => stopPipeline(tracking.extract),
-    onSuccess: () => setStopped(true),
-  });
-  const wipe = useMutation({
-    mutationFn: () => wipePipeline(tracking.extract),
-    onSuccess: (result) => {
-      setWipeLine(wipeSummaryLine(result));
-      onAllDone();
-    },
-  });
-  const rerun = useMutation({
-    mutationFn: () => rerunPipeline(tracking.extract),
-    onSuccess: (queued) => {
-      if (queued) router.push(ingestionHref(queued.phases));
-      else toast("Start/Resume returned no phase ids.");
-    },
-  });
   const replay = useMutation({
     mutationFn: (nodeId: string) => replayPipelineNode(tracking.extract, nodeId),
     onSuccess: (queued) => {
@@ -369,14 +348,6 @@ export function PipelinePanel({
       // Playwright and ElasticSearch share one task: while it works on the other one's sub-phase this one is still waiting.
       state = label === "Queued" ? "pending" : snap.state.toLowerCase();
     }
-    if (stopped && !isTerminal(snap.state)) {
-      return {
-        state: "cancelled",
-        pct: 100,
-        label: "Cancelled",
-        hint: "Stopped by user — partial writes preserved.",
-      };
-    }
     return { state, pct, label, hint };
   }
 
@@ -397,25 +368,13 @@ export function PipelinePanel({
   );
   const overall = pipelineOverall(
     steps.map((step) => step.view.state),
-    stopped,
+    false,
   );
-  const running = !allTerminal && !stopped;
-  const resumable = overall === "failed" || overall === "partial" || overall === "cancelled";
+  const running = !allTerminal;
   const announcement = phaseAnnouncement(
     steps.map((step) => ({ title: step.title, barState: step.view.state })),
     overall,
   );
-
-  async function handleStop(): Promise<void> {
-    const ok = await confirm({
-      title: "Stop the Agentic RAG run?",
-      message:
-        "The currently-running phase gets SIGTERM; queued phases are cancelled. Completed phases keep their writes — use Start/Resume to run this batch again from the Source phase.",
-      confirmLabel: "Stop",
-    });
-    if (!ok) return;
-    stop.mutate();
-  }
 
   async function handleReplay(nodeId: string): Promise<void> {
     if (running || replay.isPending) return;
@@ -426,17 +385,10 @@ export function PipelinePanel({
       confirmLabel: "Replay",
       tone: "primary",
     });
-    if (ok) replay.mutate(nodeId);
-  }
-
-  async function handleWipe(): Promise<void> {
-    const ok = await confirm({
-      title: "Wipe Agentic RAG data for these videos?",
-      message: `Deletes every cached artifact for the ${videoCount || ""} video${videoCount === 1 ? "" : "s"} in this pipeline — ES metadata + transcripts, Qdrant hybrid points, Neo4j Document and Video nodes. The next Start/Resume will run the full chain from scratch (no Phase 1 cache hits, no Phase 3 skip-on-video_id). Entity nodes are left intact. This cannot be undone.`,
-      confirmLabel: "Wipe",
-    });
-    if (!ok) return;
-    wipe.mutate();
+    if (ok) {
+      setReplayNodeId(nodeId);
+      replay.mutate(nodeId);
+    }
   }
 
   const videoCount = tracking.videoIds.length || allItems.length;
@@ -447,40 +399,34 @@ export function PipelinePanel({
         {announcement}
       </p>
 
-      <header className="flex flex-wrap items-center gap-2">
-        <div className="flex min-w-0 items-baseline gap-1.5">
+      <header className="flex min-w-0 flex-col gap-1.5">
+        <div className="flex items-start justify-between gap-2">
           <h2 className="whitespace-nowrap text-base font-medium">Agentic RAG</h2>
-          <span className="whitespace-nowrap font-mono text-xs text-muted-foreground">
-            {videoCount ? `· ${videoCount} video${videoCount === 1 ? "" : "s"}` : ""}
-          </span>
+          <ActionButton
+            type="button"
+            iconOnly
+            aria-haspopup="dialog"
+            aria-label="Open Agentic RAG details"
+            title="Agentic RAG details"
+            onClick={() => setDetailsOpen(true)}
+            className="shrink-0"
+          >
+            <Info aria-hidden />
+          </ActionButton>
         </div>
-        <StatusBadge tone={overall} label={STATUS_WORD_LABEL[overall]} />
-        <span aria-live="polite" className="whitespace-nowrap text-xs text-muted-foreground">
-          {completedStages} / {steps.length} stages
-        </span>
-        <span className="whitespace-nowrap tabular font-mono text-xs text-muted-foreground">{elapsed}</span>
-        <ActionButton
-          type="button"
-          iconOnly
-          aria-haspopup="dialog"
-          aria-label="Open Agentic RAG details"
-          title="Agentic RAG details"
-          onClick={() => setDetailsOpen(true)}
-        >
-          <Info aria-hidden />
-        </ActionButton>
-        <ActionButton
-          type="button"
-          aria-haspopup="dialog"
-          onClick={() => setSheet("videos")}
-          className="ml-auto whitespace-nowrap px-2"
-        >
-          <ListChecks aria-hidden />
-          {`Videos (${videoCount})`}
-        </ActionButton>
+        <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+          {videoCount > 0 && (
+            <span className="whitespace-nowrap font-mono text-xs text-muted-foreground">
+              {videoCount} video{videoCount === 1 ? "" : "s"}
+            </span>
+          )}
+          <StatusBadge tone={overall} label={STATUS_WORD_LABEL[overall]} />
+          <span aria-live="polite" className="whitespace-nowrap text-xs text-muted-foreground">
+            {completedStages} / {steps.length} stages
+          </span>
+          <span className="whitespace-nowrap tabular font-mono text-xs text-muted-foreground">{elapsed}</span>
+        </div>
       </header>
-
-      {wipeLine ? <p className="text-xs text-muted-foreground">{wipeLine}</p> : null}
 
       <div
         role="progressbar"
@@ -496,59 +442,19 @@ export function PipelinePanel({
 
       <IngestionAgenticStructure
         steps={steps}
-        actions={{
-          start: {
-            label: resumable ? "Resume" : "Start",
-            pendingLabel: resumable ? "Resuming…" : "Starting…",
-            pending: rerun.isPending,
-            disabled: running || rerun.isPending,
-            title: running
-              ? "An ingestion run is already active."
-              : resumable
-                ? "Resume by re-dispatching this batch from Source; completed cache entries may be reused."
-                : "Start this batch again from Source.",
-            onClick: () => rerun.mutate(),
-          },
-          stop: {
-            label: "Stop",
-            pendingLabel: "Stopping…",
-            pending: stop.isPending,
-            disabled: !running || stop.isPending,
-            title: running ? undefined : "There is no active ingestion run to stop.",
-            onClick: () => void handleStop(),
-          },
-          wipe: {
-            label: "Wipe",
-            pendingLabel: "Wiping…",
-            pending: wipe.isPending,
-            disabled: wipe.isPending,
-            title: wipe.isPending ? "Ingestion cache wipe is in progress." : undefined,
-            onClick: () => void handleWipe(),
-          },
-        }}
         onOpenUsage={() => setSheet("usage")}
+        onOpenVideos={() => setSheet("videos")}
+        videoCount={videoCount}
         usage={usageData}
         usageLoading={countersQuery.isPending}
         usageError={usageError}
         onPlayNode={allTerminal ? (nodeId) => void handleReplay(nodeId) : undefined}
+        replayDisabled={!allTerminal}
+        replayPending={replay.isPending}
+        replayPendingNodeId={replayNodeId}
         ariaLabel="Agentic RAG pipeline"
       />
 
-      {stop.isError ? (
-        <p role="alert" className="text-sm text-destructive-text">
-          Stop failed — {apiErrorMessage(stop.error)}
-        </p>
-      ) : null}
-      {wipe.isError ? (
-        <p role="alert" className="text-sm text-destructive-text">
-          Wipe failed — {apiErrorMessage(wipe.error)}
-        </p>
-      ) : null}
-      {rerun.isError ? (
-        <p role="alert" className="text-sm text-destructive-text">
-          Agentic RAG start/resume failed — {apiErrorMessage(rerun.error)}
-        </p>
-      ) : null}
       {replay.isError ? (
         <p role="alert" className="text-sm text-destructive-text">
           Node replay failed — {apiErrorMessage(replay.error)}

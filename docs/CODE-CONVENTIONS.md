@@ -40,21 +40,21 @@ model without opening every file.
 - **Pydantic for boundary validation only** (LLM responses, HTTP bodies).
   Dataclasses for everything internal.
 - **Cross-module references use a dotted `domains.*` path, unaliased**
-  (`domains.dd.ingestion.artifacts.params.MAX_ARTIFACT_BYTES`), not a bare
+  (`domains.bd.ingestion.params.MAX_ARTIFACT_BYTES`), not a bare
   `from .module import name` and not a wrapper/namespace class. See §8.
 
 ---
 
 ## 1. Diagnosis — what the current `constants.py` / `types.py` names hide
 
-Audit of the actual content (audited 2026-06-02):
+Examples of what catch-all names can obscure:
 
 | File | What's actually inside | Why the name is wrong |
 |---|---|---|
 | `ingestion/storage/constants.py` | Key-builder **functions** (`framework_prefix()`, `manifest_key()`, `page_key()`) + a TTL scalar | These are functions, not constants. The file is really a "key shapes you must agree on" file. |
-| `synth/sawc/constants.py` | Schema version string, 12 numeric tunables (subtopics min/max, explanation words min/max, memory chars), pre-compiled regex, decision-log comments | Mixes 4 separable concerns: version markers, parameter groups, patterns, history. |
-| `synth/sawc/types.py` | Pydantic `BaseModel` schemas (`Subtopic`, `Section`, `Citation`, `_LLMSectionDraft`) + plain `@dataclass` value objects (`MemoryEntry`, `SAWCStats`) | Mixes "validation at the LLM boundary" with "internal domain shapes". |
-| `synth/sawc/service.py` | Pure logic (AST identifier extraction, hash computation, validator) + I/O orchestration (LLM dispatch, MinIO writes, retry loops) | The pure functions are buried alongside `async` I/O — they could be tested without any mocking but aren't because they're not isolated. |
+| `workflow/constants.py` | Version marker, tunables, regular expressions, and decision notes | Mixes versioning, parameters, patterns, and historical context. |
+| `workflow/types.py` | Boundary schemas and internal value objects | Mixes validation at system boundaries with internal domain shapes. |
+| `workflow/service.py` | Pure transformations and I/O orchestration | Pure functions are harder to test when buried alongside asynchronous I/O. |
 
 The pattern problem: **lowest-common-denominator names hide what each
 file is for, which forces every new contributor to read the file before
@@ -128,27 +128,26 @@ Group ≥3 scalars into a frozen dataclass when:
 ### How — the canonical shape
 
 ```python
-# synth/sawc/config.py
+# workflow/config.py
 from dataclasses import dataclass
 
 
 @dataclass(frozen=True, slots=True)
 class MemoryConfig:
-    """Limits for per-section MemoryEntry derivation. Tuned for
-    cross-section context without bloating the LLM input budget."""
-    summary_chars_min: int = 200
-    summary_chars_max: int = 600
-    term_chars_max:    int = 40
-    terms_max:         int = 12
+    """Limits for a compact summary and its key terms."""
+    summary_chars_min: int = 100
+    summary_chars_max: int = 500
+    term_chars_max:    int = 48
+    terms_max:         int = 10
 
 
 @dataclass(frozen=True, slots=True)
 class StructureConfig:
-    """SAWC v2 cookbook output shape limits."""
-    subtopics_min:          int = 2
-    subtopics_max:          int = 6
-    explanation_words_min:  int = 12
-    explanation_words_max:  int = 60
+    """Output shape limits for a structured guide."""
+    sections_min:          int = 2
+    sections_max:          int = 8
+    explanation_words_min: int = 12
+    explanation_words_max: int = 80
 
 
 # Module exports — single immutable instances. Importers see
@@ -282,16 +281,16 @@ This is the deeper lever for readability + testability. Today most
 to **separate them into different modules**:
 
 ```
-synth/sawc/
+workflow/step/
 ├── __init__.py
 ├── prompts.py        # LLM templates + version strings
 ├── params.py         # loose numeric tunables
-├── config.py         # frozen-dataclass GROUPS (MemoryConfig, StructureConfig)
+├── config.py         # frozen-dataclass groups for related tunables
 ├── patterns.py       # pre-compiled regexes
-├── schemas.py        # Pydantic schemas: _LLMSectionDraft, Subtopic, Section, Citation
-├── entities.py       # @dataclass value objects: MemoryEntry, SAWCStats
+├── schemas.py        # Pydantic schemas at external boundaries
+├── entities.py       # internal value objects
 ├── domain.py         # PURE functions — no I/O, no LLM, no async
-├── service.py        # ORCHESTRATION — async, dispatches LLM, calls domain.*, writes MinIO
+├── service.py        # ORCHESTRATION — async I/O, calls domain.*
 ├── node.py           # LangGraph node wrapper — ~30 lines, calls service.run(state)
 ├── state.py          # TypedDict for the LangGraph state field
 └── errors.py         # exception classes
@@ -305,11 +304,11 @@ Pure functions that:
 - No mutable globals.
 - Deterministic — same inputs → same outputs.
 
-From the current sawc service.py, examples:
-- `_ast_identifiers(code: str) -> set[str]` — extracts identifiers from Python AST.
-- `_overlap_score(idents_a, idents_b) -> float` — Jaccard-style overlap.
+Examples:
+- `_normalize_identifier(value: str) -> str` — deterministic text normalization.
+- `_overlap_score(items_a, items_b) -> float` — Jaccard-style overlap.
 - `_compute_manifest_hash(...)` — deterministic SHA hash.
-- `_validate_section_against_inputs(section, digest)` — boolean / repair-list logic.
+- `_validate_record_against_inputs(record, source)` — validation and repair-list logic.
 
 These are the "Functional Core". They're trivial to unit-test
 (no mocks, no fixtures, no event loop). They're the modules to write
@@ -332,13 +331,12 @@ contract and policy that give the function its meaning.
 | LangGraph state transitions and conditional-edge routing | `ai/<context>/graphs/` (with small adapters in `node.py`) |
 | External client lifecycle and provider-specific mechanics | `infra/<service>/` |
 
-Examples: DD's general Markdown normalization belongs to
-`domains/dd/ingestion/corpus_normalize/domain.py`; validation of an auditor's
-assessment or a repair agent's patch belongs beside those AI steps in
-`ai/dd/nodes/ingestion/{page_audit,page_repair}/domain.py`. YCS video
-projection and transcript partition rules belong to `domains/ycs/ingestion/`;
-which graph edge to take after indexing is workflow control and belongs with
-the YCS ingestion graph.
+Examples: BD's processed-book heading and page-mapping rules belong in the
+BD domain layer when they remain independent of agent contracts. Validation
+of an agent response belongs beside the AI step that owns that response
+schema. YCS video projection and transcript partition rules belong to
+`domains/ycs/ingestion/`; which graph edge to take after indexing is workflow
+control and belongs with the YCS ingestion graph.
 
 AI code may call bounded-context domain services. Domain business-capability
 modules must not depend on LangGraph `State`/`Runtime` types or schemas owned
@@ -351,7 +349,7 @@ contract, keep it in the AI node package. Keep `node.py` as the LangGraph
 adapter; put orchestration that outgrows a thin wrapper in the node's
 `service.py`.
 
-#### Applying the rule to BD and DD agentic AI
+#### Applying the rule to Book Distiller agentic AI
 
 Use YCS ingestion as an organizational precedent for separating AI-step
 behavior from bounded-context capabilities. Do not interpret it as a rule
@@ -377,12 +375,6 @@ contract and policy that own the code.
   (`domain.py`, `params.py`, and `patterns.py`) under a shared AI ingestion
   package such as `ai/bd/nodes/ingestion/inventory/`. This is a focused
   follow-up, not a reason to relocate all deterministic BD logic.
-- **DD:** Keep page-audit and page-repair validation beside those AI steps.
-  Keep general Markdown normalization and deterministic ingestion tiers in
-  `domains/dd/ingestion/`. Keep AI run identifiers, checkpoint thread names,
-  candidate digests, and manifest transformations in the DD ingestion run
-  support where they define run lifecycle and persisted candidate behavior,
-  rather than an individual agent's output policy.
 
 This records the target ownership standard. It does not imply that the BD
 inventory package or other existing modules have already been moved.
@@ -407,15 +399,14 @@ LangGraph; the body is one call into `service.py`'s entry point + a
 state-patch dict on the way out.
 
 ```python
-# synth/sawc/node.py
-from .service import sawc_write_run
-from ..state import SynthState
+from .service import run_step
+from ..state import WorkflowState
 from ..observability.spans import traced
 
 
-@traced("sawc_write")
-async def sawc_write(state: SynthState) -> dict:
-    return await sawc_write_run(state)
+@traced("step_run")
+async def run(state: WorkflowState) -> dict:
+    return await run_step(state)
 ```
 
 The teaching value: `node.py` becomes a 5-second read. The architecture
@@ -424,39 +415,35 @@ The teaching value: `node.py` becomes a 5-second read. The architecture
 
 ---
 
-## 5. Pilot target — what `synth/sawc/` should look like
+## 5. Example module layout
 
-Use sawc as the **pattern-establishing module**. It has the most surface
-area (~1,500 LOC across service + types + constants today), so it
-exercises all six naming categories and forces the domain/service split
-decision. After it lands, every other module copies the shape.
+Use one focused workflow step as the **pattern-establishing module**. Apply
+only the files whose triggers hold, then use the resulting structure as a
+reference for other modules.
 
 ### Target tree
 
 ```
-synth/sawc/
-├── __init__.py             # re-exports the public API (sawc node + key schemas)
-├── prompts.py              # WRITER_PROMPT, CRITIC_PROMPT, REPAIR_PROMPT (+ versions)
-├── config.py               # MemoryConfig, StructureConfig, RetryConfig
-├── params.py               # _CONCURRENCY, _PICK_TIMEOUT_S — loose scalars not in a group
-├── patterns.py             # _IDENT_STOPWORDS, _CODE_FENCE_RE
-├── versions.py             # SAWC_SCHEMA_VERSION, prompt-version strings
-├── schemas.py              # Pydantic: _LLMSectionDraft, Subtopic, Section, Citation
-├── entities.py             # @dataclass: MemoryEntry, SAWCStats, SectionDraft
-├── domain.py               # PURE: _ast_identifiers, _overlap_score, _structural_score,
-│                           #       _compute_manifest_hash, validate_section
-├── service.py              # ORCHESTRATION: sawc_write_run, run_stage, fire_drafts,
-│                           #       pick_best, persist_chapter_draft
-├── node.py                 # ~30 lines: @traced wrapper over service.sawc_write_run
-├── state.py                # (only if sawc-specific state — most lives in ../state.py)
-└── errors.py               # SAWCDraftFailed, SAWCAllDraftsFailed
+workflow/step/
+├── __init__.py             # narrow public API, when needed
+├── prompts.py              # LLM templates + versions
+├── config.py               # related tunable groups
+├── params.py               # standalone tunables
+├── patterns.py             # compiled regular expressions
+├── versions.py             # schema and prompt versions
+├── schemas.py              # boundary validation shapes
+├── entities.py             # internal value objects
+├── domain.py               # pure deterministic logic
+├── service.py              # I/O orchestration and persistence
+├── node.py                 # thin LangGraph wrapper
+├── state.py                # only when the step owns state
+└── errors.py               # step-specific exceptions
 ```
 
 ### What gets touched in import-callers
 
-Most call sites today import from `sawc.constants` and `sawc.types`.
-After the split they import from the specific file. **The migration is
-mechanical** — search-and-replace import lines per module.
+Callers import from the specific module that owns each symbol. Avoid broad
+re-export barrels that hide dependency direction.
 
 ---
 
@@ -472,12 +459,11 @@ Phase this. Don't do it all at once.
 | 4 | Extract pure functions from `service.py` → `domain.py` | actual architectural change; testable core appears | MEDIUM |
 | 5 | Shrink `node.py` to a thin LangGraph shell | trivial after phase 4 | LOW |
 
-Each phase is **one PR per module**. The sweep across `domains/dd/` +
+Each phase is **one PR per module**. A sweep across `domains/<context>/` and
 `domains/settings/` is roughly 3–5 days of focused work for the whole tree.
 
-**Recommended pilot:** apply all 5 phases to `synth/sawc/` first. It
-becomes the reference template. Other modules then migrate by copying
-the shape.
+**Recommended pilot:** apply all 5 phases to one focused step first. It
+becomes the reference template for other modules.
 
 ---
 
@@ -505,366 +491,77 @@ the shape.
   document the side effects in the first docstring line. "Service" is
   the orchestrator, not the dumping ground.
 - **Don't preserve dead modules in a `deprecated/` folder.** Git history
-  IS the deprecation archive — see `docs/archive/PLANNER-CLASSICAL-REFERENCE.md`
-  for the pattern (condensed design doc, code recovered via `git log`).
+  is the deprecation archive; record only design rationale that remains
+  useful to active contributors.
 - **Don't wrap pure functions in a class to get import-path clarity**
-  (`DDIngestionArtifactsDomain.func(...)`, or a nested `DD.Ingestion.
-  Artifacts.Domain.func(...)` tree). Every function needs a manually
+  (`IngestionArtifactsDomain.func(...)`, or a nested `Ingestion.Artifacts.
+  Domain.func(...)` tree). Every function needs a manually
   maintained `@staticmethod` mirror inside the class — permanent drift
   risk against the real module, for a problem §8's dotted `domains.*`
   path already solves for free.
 
 ---
 
-## 8. Cross-module reference convention — dotted path, no wrapper classes
+## 8. Cross-module references and Python imports
 
-**Status:** DECIDED 2026-09-18, revised same day. **Scope:** every reference
-outside the function/class doing the referencing — including same-directory
-sibling files (`domain.py` calling into `keys.py`), not just cross-package
-ones. The original scope note here carved out sibling imports as unchanged
-from §2; that carve-out was inherited from the pre-existing convention, not
-independently justified — a bare `_coerce_usage(...)` three lines into
-`service.py` costs the same "which file is this from?" lookup as a bare
-cross-domain import did. There's no principled reason "3 lines away in the
-same folder" is different from "3 lines away in another domain" for this
-goal, so the rule is uniform: no bare `from .module import name`, anywhere,
-full stop.
+Use Python packages and modules as namespaces. Do not create wrapper
+classes whose only purpose is to add a qualified name to module functions.
+Keep imports explicit at module boundaries and avoid eager package exports
+that load optional infrastructure or heavyweight dependencies during app
+startup.
 
-### The rule
-
-Reference everything outside your own leaf directory — functions,
-module-level constants, and classes alike — through one fully dotted path
-rooted at the top-level `domains` package, imported unaliased:
+For example, a domain-owned operation should remain in the domain package
+that owns it, and callers should make that ownership clear in their imports:
 
 ```python
-import domains
+from domains.bd.ingestion import service as ingestion_service
 
-domains.dd.ingestion.artifacts.params.MAX_ARTIFACT_BYTES          # constant
-domains.dd.ingestion.artifacts.domain.compute_manifest_hash(...)  # function
-ai.dd.agents.entities.Role(name="...", ...)                        # class
+await ingestion_service.run(...)
 ```
 
-Never `from domains.dd.ingestion.artifacts import domain` and never
-`from ai.dd.agents.entities import Role`. A bare imported name
-loses its path the moment it's read three lines below the import block.
-The dotted chain carries its own provenance everywhere it appears — import
-line, call site, grep result, stack trace — with no need to scroll up.
+For code evaluated while a module is importing (decorators, module-level
+registries, and default values), use a direct import of the needed symbol
+when an attribute chain could cross a package that is still initializing.
+Keep package initialization light, and add re-exports only when they do not
+create import cycles or force unrelated runtime dependencies to load.
 
-**Same-directory siblings follow the same rule, just without the
-`domains.*` prefix** (no cross-package boundary to cross, so no need to
-route through the global root) — import the sibling *module*, not names
-out of it:
-
-```python
-# domains/settings/llm_counter/service.py
-from . import domain, entities, keys, params
-
-domain.extract_usage(response)
-keys.counters_key(ns, run_id)
-params.COUNTER_TTL_S
-```
-
-Never `from .domain import extract_usage` — same reasoning as the
-cross-package case, just one folder over instead of several.
-
-### Pending observation — internal imports across server package trees
-
-For a later convention review and migration, prefer relative package imports
-when code references sibling packages from within any of these trees:
-`apps/server/ai/`, `apps/server/domains/`, `apps/server/entrypoints/`, and
-`apps/server/infra/`. Avoid importing the current tree's root from inside
-that same tree (`import ai`, `import domains`, `import entrypoints`, or
-`import infra`) unless an absolute import is necessary. Use the appropriate
-relative level instead, such as `from . import <package_name>`,
-`from .. import <package_name>`, or `from ... import <package_name>`, then
-access members through the imported package. This is a recorded observation
-for future work, not an instruction to migrate source files now; reconcile
-it with the existing dotted `domains.*` rule above when that review begins.
-
-### Why this over the alternatives considered
-
-| Alternative | Rejected because |
-|---|---|
-| Bare `from .module import name` (pre-2026-09-18 style) | Call site (`compute_manifest_hash(...)`) tells you nothing without checking the import block |
-| Wrapper class per module (`DDIngestionArtifactsDomain.func(...)`) | Every function needs a manually maintained `@staticmethod` mirror inside the class — permanent drift risk vs. the real module. Google Python Style Guide: "Never use `staticmethod`... write a module-level function instead." |
-| Nested class tree (`DD.Ingestion.Artifacts.Domain.func(...)`) | Same staticmethod-wrapping cost at every tree level, plus short segment names (`Domain`, `Artifacts`) are ambiguous away from the import line unless always spelled from the root — which then requires the full wrapper tree just to reproduce what plain packages already give for free |
-| Mega flat name (`DomainsDDIngestionArtifactsDomain.func(...)`) | Same wrapping cost; a 30+ character unbroken PascalCase run has no visual parse boundary — harder to read at depth than the dotted form it replaces |
-
-This converges on the same pattern large, well-known libraries already
-use for exactly this reason — `tf.keras.layers.Conv3D(...)`,
-`tf.nn.relu(...)`, `np.linalg.norm(...)`. Packages and modules are
-Python's native namespace mechanism; no wrapper class is needed to get a
-dotted, self-describing call site — that's what `import` + attribute
-access already does.
-
-### Mechanics — `__init__.py` re-exports required at every level
-
-Python does not expose a subpackage as an attribute of its parent just
-because the parent was imported. Every intermediate `__init__.py` in the
-chain needs one `from . import <child>` line per direct child, added once
-when that child module is created and never touched again as the child's
-internals change:
-
-```python
-# domains/__init__.py
-from . import dd, settings, ycs
-
-# domains/dd/__init__.py
-from . import catalog, ingestion, pipeline
-
-# domains/dd/ingestion/__init__.py
-from . import artifacts, dispatch, filters, post, progress, storage, tiers
-
-# domains/dd/ingestion/artifacts/__init__.py
-from . import domain, entities, keys, params, patterns, service
-```
-
-Without these, `import domains` leaves `domains.dd` (and everything below
-it) undefined — `AttributeError` at the first dotted access, not at
-import time.
-
-### No alias
-
-`import domains` — never `import domains as X`.
-1. `domains` is referenced from `api/` as much as from inside `domains/`
-   itself, so there's no single "internal-only" context to shorten it for.
-2. Any short alias risks colliding with an unrelated local variable
-   somewhere in a codebase this size. `cn` was considered and rejected —
-   it's a common ad-hoc name for a database/network connection object,
-   which this project creates constantly (Postgres, Redis, MinIO, Neo4j,
-   Qdrant, ES). Not aliasing has zero such risk by construction, and
-   matches how the project already imports most real dependencies
-   (`fastapi`, `celery`, `redis`, `minio`, `neo4j`, `qdrant_client` — all
-   unaliased). Only a handful of extremely high-repetition data-science
-   libraries (numpy, pandas, tensorflow) earned a community-standard
-   short alias; `domains` doesn't need that treatment to save a few
-   characters.
-
-### Local shorthand — allowed, but must keep the identifying prefix
-
-If one file calls the same leaf module many times, a local alias is fine
-as long as it keeps enough of the path to stay self-describing without
-the import line:
-
-```python
-from domains.dd.ingestion.artifacts import domain as ingestion_artifacts_domain
-ingestion_artifacts_domain.compute_manifest_hash(...)
-```
-
-Never shorten to something generic (`domain`, `d`, `art`) — that
-reintroduces the exact ambiguity this convention exists to remove.
-
-### Exception 1 — heavy/env-dependent modules stay out of the eager `__init__.py` chain
-
-A module whose import triggers a *hard* external dependency (reads a
-required env var at module level, opens a real connection at import time)
-must **not** be added to its parent's `__init__.py` re-export list, even
-though it's a legitimate part of that package. Adding it would mean a bare
-`import domains` anywhere in the app — including a standalone script, a
-test, or a REPL — suddenly requires production secrets to succeed.
-
-Known instances: `dd/pipeline/ai/task.py` (the planner's and the synth's tasks) does
-`from infra.celery import app`, which transitively requires
-`REDIS_HOST`/`REDIS_PORT`/`REDIS_PASSWORD`/`ENVIRONMENT` (never re-exported
-from `ai/__init__.py` — callers reach it with a
-direct `from domains.dd.pipeline.ai.task import X`, same shape as any normal
-Python import, and the same class of exception as the LLM rotator's
-reverse-edge import above).
-
-`bd/ingestion/extract/service.py` and `bd/ingestion/outline/service.py` import Docling, torch and pypdfium2. These dependencies are in
-the shared server image, but their `__init__.py` files leave `service` out so API requests and unrelated Celery tasks do not load the
-heavy libraries at startup. `bd/ingestion/task.py` imports the services only inside the extraction run; the router imports the task and
-calls `.delay()`, and the task is included in `infra/celery/keys.py::TASK_INCLUDE` for worker discovery.
-
-`dd/pipeline/synth`'s `params.py` originally did `STUDY_SEM = int(os.environ["KD_STUDY_SEM"])`
-at module scope — a hard eager read that would have forced this same exception
-onto `params`, `graph`, and most of `runtime` (all pull constants from
-`params.py`, and Python re-executes a whole module on any import of it, not
-just the names actually used). Fixed at the root instead of propagating the
-exception: turned it into `study_sem() -> int: return
-int(os.environ["KD_STUDY_SEM"])` — a function, read lazily inside whichever
-function body needs it, same as any other deferred `domains.*` reference.
-Zero behavior change (still one `os.environ` read per call site, just later),
-and it let `dd/pipeline/synth` join the eager `dd/__init__.py` chain outright instead
-of carrying its own exception. Prefer this fix — de-lazy the read — over a
-wider `__init__.py` exclusion whenever the env-dependent value doesn't
-actually need to be read at import time.
-
-### Exception 2 — module-level code needs a plain import, not the dotted chase
-
-`import domains` + `domains.dd.x.y.z` only works for references **deferred
-inside a function body** — resolved long after the app has fully booted.
-A reference evaluated at *module or class definition time* (a decorator, a
-module-level dict/list/tuple literal, a class body attribute, a default
-argument value) breaks this, because Python does not set `domains.dd` as
-an attribute of the `domains` module until `dd/__init__.py` finishes
-running *completely* — and a file that gets loaded transitively as part of
-that very `__init__.py` chain (e.g. every node's `node.py`, pulled in via
-`nodes/__init__.py` pulled in via `synth/__init__.py`) executes its
-module-level code *during* that unfinished bootstrap, not after.
-
-Concretely, this failed with `AttributeError: module 'domains' has no
-attribute 'dd'`:
-
-```python
-# BROKEN — decorator runs at import time, mid-bootstrap
-import domains
-
-@domains.dd.pipeline.observability.service.traced("corpus_load")
-async def corpus_load(state) -> dict: ...
-```
-
-Fixed by using a plain import for the decorator specifically (the type
-annotation on `state` stays dotted-style and is unaffected — `from
-__future__ import annotations`, present everywhere in this codebase,
-stores annotations as unevaluated strings, so they never actually chase
-the attribute chain at runtime):
-
-```python
-import domains
-from domains.dd.pipeline.observability.service import traced
-
-@traced("corpus_load")
-async def corpus_load(state: graphs.pipeline.planner.state.PlannerState, runtime) -> dict: ...
-```
-
-Same reasoning applies to `graph.py`'s `NODE_REGISTRY` dict — its values
-are real function objects needed at module-exec time. The fix there is one
-step cleaner: import the sibling `nodes` package itself, then chase
-attributes off *that* name instead of off `domains`:
-
-```python
-from . import nodes
-
-NODE_REGISTRY = {
-    "corpus_load": nodes.corpus_load.node.corpus_load,
-    ...
-}
-```
-
-This is safe for a subtler reason than "it's a plain import" — `from .
-import nodes` is a normal relative import statement, resolved through
-Python's import machinery, not an attribute-chase on an already-existing
-binding. It only returns once `nodes/__init__.py` (and everything *it*
-re-exports) has fully finished running, so `nodes.corpus_load.node...` is
-guaranteed valid the instant the import statement completes — unlike
-`domains.dd...`, which depends on a DIFFERENT, still-unfinished frame
-higher up the call stack (`dd/__init__.py`) to ever set that attribute.
-Prefer this shape over 8 separate `from .nodes.x.node import y` lines
-whenever the target is a sibling *package* one level down, not the global
-`domains` root.
-
-**Rule of thumb:** a dotted chain is only unsafe at module-exec time when
-it's rooted at the global `domains` name specifically. Rooted at a name
-your own `from . import x` (or `from .. import x`) just bound, it's always
-safe — that import already blocked until `x` was fully ready.
-
-### What still uses real classes
-
-Nothing here changes §2–§5: `entities.py` domain objects, stateful
-clients, anything with real invariants or state stays a real class,
-instantiated normally — just referenced through the same dotted path as
-everything else (`ai.dd.agents.entities.Role(...)`), never
-through a bare import.
+Heavy or environment-dependent modules should stay out of eager
+`__init__.py` chains. Import them at the execution
+boundary that actually needs them. This lets API startup, scripts, and
+unrelated workers import the package without production secrets or optional
+libraries.
 
 ---
 
-## 9. The whole-project structure (target)
+## 9. Current project structure
 
-```
+```text
 apps/server/
-├── entrypoints/             # process entry surfaces, referenced as `entrypoints.*` (same dotted rule as `domains.*`)
-│   ├── api/                 # REST: params.py (CORS_ORIGINS, ALLOWED_HOSTS), domain.py, v1/ routers — thin, dispatch to domains
-│   │   └── v1/dd/{catalog,ingestion/runs,pipeline/{planner,synth},debug}/   # the URL path is the package path: /dd/ingestion/runs, /dd/pipeline/planner, …
-│   └── mcp/tools/<family>/  # FastMCP tools, each family exposes service.register(mcp); the server itself is built in main.py
-├── domains/                 # business logic — the bounded contexts
-│   ├── bd/                  # Book Distiller bounded context (ingestion/ so far: outline/, extract/, storage/, runtime/, task.py)
-│   ├── dd/                  # Docs Distiller bounded context
-│   │   ├── ingestion/
-│   │   │   ├── storage/     # ← module = directory with the 5–10 files above
-│   │   │   ├── tiers/
-│   │   │   ├── progress/
-│   │   │   ├── filters/
-│   │   │   ├── post/
-│   │   │   └── ...
-│   │   └── pipeline/        # the Pipeline tab. The planner and the synth are agentic (ai/dd/…/pipeline/{planner,synth}); what runs them lives here
-│   │       ├── ai/          # the composition roots (planner service.py, synth/service.py) and the Celery tasks of both stages (task.py), like dd/ingestion/ai
-│   │       ├── runtime/     # keys, params, cancel/ checkpoint/ dispatch/ progress/ — thin wrappers over infra
-│   │       ├── storage/     # keys.py + service.py: both stages' MinIO blobs, their readers, the per-page result cache
-│   │       └── observability/   # service.py: @traced + metric recorders (sibling of runtime/)
-├── ai/                      # Agentic AI: agents/ graphs/ nodes/ prompts/ skills/ tools/ backends/ middleware/ per context (ai/dd, ai/bd)
-│   └── dd/…/pipeline/{planner,synth}/   # agents/<role>/, graphs/ (parent + one subgraph per stage), nodes/<stage>/, prompts/<role>/, skills/<role>/, tools/, backends/{corpus,files}
-│   └── settings/            # external endpoints + credential store
-│       ├── chat/{domain,service,params}.py        # chat endpoint adapter
-│       ├── embeddings/{domain,service,params}.py  # embedding endpoint adapter
-│       ├── credentials/     # MinIO Fernet store + endpoint settings blobs
-│       ├── llm_counter/     # LLM-usage accounting for every context: parser, Redis counters (dd, ycs), drawer payloads, DD snapshot, LangChain callback
-│       └── observability/   # gen_ai.* spans + metrics for the endpoint adapters
-├── infra/                   # one module per COELHO Cloud service (§10)
-├── main.py                  # FastAPI + FastMCP bootstrap (REST under /api, MCP at /mcp)
-├── celery_app.py            # Celery bootstrap
-├── pyproject.toml
-└── shared/                  # cross-cutting (sources.yaml, etc.)
+├── entrypoints/             # REST and MCP interfaces
+│   ├── api/v1/{bd,ycs,settings}/
+│   └── mcp/tools/
+├── domains/                 # business capabilities and I/O orchestration
+│   ├── bd/
+│   ├── ycs/
+│   └── settings/
+├── ai/                      # agents, graphs, nodes, prompts, skills, and tools
+│   ├── bd/
+│   ├── ycs/
+│   └── settings/
+├── infra/                   # database, queue, storage, and observability adapters
+├── main.py                  # FastAPI and FastMCP bootstrap
+└── celery_app.py            # Celery bootstrap
+
+apps/web/src/
+├── app/                     # Next.js route composition
+├── features/{bd,ycs,settings}/
+└── shared/                  # UI, API client, state, and styles
 ```
 
-Each leaf module follows the **5–10 file convention** from §5.
-
-**One folder per feature, named like its tab.** A bounded context's top-level folders are the web tabs (`dd/ingestion`,
-`dd/pipeline`). When a tab runs more than one stage, each stage is its own package *inside* the tab's folder
-(`dd/pipeline/planner`, `dd/pipeline/synth`) and the same nesting is mirrored in `entrypoints/api/v1/dd/pipeline/` and,
-for Agentic AI, in `ai/dd/…/pipeline/` (neither stage has a package under `domains/dd/pipeline/` any more: their code is in `ai/`, their
-run plumbing in `domains/dd/pipeline/{ai,runtime,storage,observability}`). Only folders move: Redis keys, MinIO prefixes, thread-id prefixes, Langfuse prompt
-names and span names keep their stage names (`coelhonexus:dd:planner:*`, `dd/{slug}/planner/`, `dd.synth.*`), because they
-are stored data, not module paths. The Celery task names *do* follow the module path, so moving a
-`task.py` means updating `infra/celery/keys.py` (`TASK_INCLUDE`, `TASK_ROUTES`) and deploying the API and the workers together.
-
-**Agentic AI lives in `ai/`, its run plumbing in `domains/`.** `ai/` (agents, graphs, nodes, prompts, skills, tools, backends,
-middleware) never imports `infra` (`scripts/server/test_infra_boundary.py`, rule `ai-no-infra`): it reaches COELHO Cloud through
-`domains` (the chat adapter, the LLM counter, storage keys) and through the *context* a run hands its graph (`PlannerContext`:
-object storage and the agent registry; `SynthContext` adds a `scratch` dict for data shared across a run's branches, rebuilt by each stage's
-`prepare`). Running a graph (start, resume, progress forwarding, the cancel watcher, how a run ends, the study loop) is `ai` code too
-(`graphs/<tab>/runner` and `graphs/<tab>/<stage>/{service,study}.py`): it is handed a `Binding` (graph over the checkpointer, object storage, a
-context factory) and reaches Redis, Langfuse and OpenTelemetry through `domains/<ctx>/<tab>/{runtime,observability}`. Only the composition root that
-builds that binding from `infra`, and the Celery task, live in `domains/<ctx>/<tab>/ai/` (`service.py`, `task.py`: thin). The planner is the reference, the
-synth follows it:
-
-- Every agent is a `create_deep_agent` built by the one factory `ai/dd/agents/service.py::build` (model, harness profile, file permissions,
-  resilience middleware, unreviewed-tool guard) and asked with `service.ask` (structured answer, retries, usage counted). A role is
-  `agents/<stage>/<role>/{agent,config,params}.py` + `prompts/<stage>/<role>/{prompts.py,SYSTEM.md}` and, when it follows a long
-  procedure, `skills/<stage>/<role>/<skill>/SKILL.md` (front matter must be valid YAML: no unquoted `: ` in `description`). A per-page
-  role that runs hundreds of times a run keeps its rubric in `SYSTEM.md` and has no skill (a skill read is an extra model turn).
-- A stage is a LangGraph subgraph (`graphs/<stage>/<node>/{graph,state}.py`) whose steps live in `nodes/<stage>/<node>/service.py`: `prepare` →
-  `Send` fan-out of workers → `tally`/`collect` → `finalize`, with cycles for retries and score gates. The parent graph keeps one node per
-  stage with the same name and the same `PlannerState` field (the web reads them), so a stage's inner shape can change freely.
-- A fan-out stores each page's result under `dd/{slug}/planner/items/<node>/<version>/<digest>.json`: LangGraph re-runs an interrupted
-  node from its start, so resume (and a re-plan of an unchanged corpus) is carried by those results, not by the checkpoint.
-- Progress events are `shared.service.emit(step, kind, **fields)` (LangGraph's `custom` stream); the run shell republishes them on the
-  Redis channel in the shape the web reads. Deterministic AI-step algorithms stay pure modules (`domain.py`) next to their owning step;
-  rules that belong to the wider bounded context live under `domains/<context>/` and are called from the step.
-
-**An API URL is the package path of its router** (`entrypoints/api/v1/dd/pipeline/planner/router.py` serves
-`/api/v1/dd/pipeline/planner/…`, `ingestion/runs/` serves `/api/v1/dd/ingestion/runs/…`). A feature's `router.py` includes its
-sub-packages' routers *before* its own routes, so the longer static path wins over its own `/{slug}/…` ones; the parent
-mounts each feature at its folder name and never at an alias. `scripts/server/test_api_layout.py` fails when a route lives
-under a different path than its package. Two URLs are stored inside data and must not be renamed:
-`/api/v1/dd/ingestion/{slug}/artifacts/…` (image links written into ingested Markdown). The web client is generated from
-the URL (`operationId` = method + path), so a rename is a server + web change: regenerate `openapi.json`, then the client.
-
-**`runtime/` and `observability/` are siblings** inside a bounded context
-(`domains/<ctx>/…`), not nested: `runtime/` is the machinery that runs a pipeline (dispatch,
-progress events, cancel flags, checkpoint pruning), `observability/` is the context's span and
-metric vocabulary (`service.py`, plus `domain.py` / `keys.py` where they have a trigger — never a
-separate `spans.py` / `metrics.py`). There is deliberately **no
-top-level `apps/server/runtime/`**: these folders and their domain call each other in both
-directions (nodes emit progress and spans; dispatch calls graphs and nodes), so pulling them into
-one shared layer would make `domains` and that layer import each other.
-
-**LLM-usage accounting is not per context.** One `domains/settings/llm_counter/` counts the calls of
-every context, because the counting is identical and only the attribution differs: a context sets
-it (`service.llm_context(ns=…, run_id=…, node_id=…)`, or `set_context` + `set_node`) and the
-namespace (`dd`, `ycs`, listed in `params.NAMESPACES`) picks the Redis keys and the usage payload
-shape. Calls made outside any context are not counted. A new context adds one `Namespace` entry, not
-a folder; `settings/chat` calls the counter without importing any context.
+Each bounded context owns its product behavior. Shared infrastructure
+stays in `infra/`; AI graph construction and
+execution stay in `ai/`; domain services bind those
+graphs to storage, queues, credentials, and persistence.
 
 ---
 
@@ -906,17 +603,17 @@ Redis clients and key layouts out of routers; and `llm-counter`, which keeps usa
   function on purpose (the app-state client, an ingestion run's client shared with its watcher and
   store, the `Progress` object's own).
 - Routers (`entrypoints/`) call domain services; they do not open Redis clients or know key layouts.
-  Whatever a router needs from Redis — the cross-stage single-flight gate, the live-run registry,
-  cancel propagation, the wipe — is a function in the stage's `runtime/dispatch/service.py`
+  Whatever a router needs from Redis — a single-flight gate, a live-run registry,
+  cancel propagation, or cleanup — is a function in the workflow's `runtime/dispatch/service.py`
   (`reserve_start` / `release_start`, `read_active`, `cancel_run`, `wipe_redis`, …); the router keeps
-  only HTTP concerns and the Celery enqueue. `scripts/server/test_dd_routers.py` pins those endpoints
-  against a golden transcript (responses + Redis state) on a throwaway Redis.
+  only HTTP concerns and the Celery enqueue. Focused endpoint checks can pin
+  responses and Redis state against a throwaway Redis instance.
 - Every service module exposes a `span(operation, **attrs)` helper where the service is called
   over the wire, built on `infra.opentelemetry.service.client_span`; domain-specific span wrappers
   (e.g. YCS's `qdrant_search_span`) stay in the domain's `observability/service.py` and only add
   their own attribute vocabulary.
-- A domain module that wraps an infra helper to bind its own keys / TTLs (e.g. the planner and
-  synth `runtime/progress` and `runtime/cancel`) stays: it holds domain knowledge infra must not.
+- A domain module that wraps an infra helper to bind its own keys or TTLs
+  stays: it holds domain knowledge that infrastructure must not own.
 - Not an infra module: libraries that are not services (LangChain, pydantic), the private LLM
   rotator and the embedding endpoint (`domains/settings/chat`, `domains/settings/embeddings`).
 

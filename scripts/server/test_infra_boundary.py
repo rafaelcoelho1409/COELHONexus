@@ -136,7 +136,7 @@ def llm_counter_homes() -> list[str]:
         if path.parent.name != "settings"
     ]
     found += lines_with(
-        SERVER, ("domains.dd.llm_counter", "domains.ycs.llm_counter"), skip_names = (), hint = "domains.settings.llm_counter",
+        SERVER, ("domains.ycs.llm_counter",), skip_names = (), hint = "domains.settings.llm_counter",
     )
     return found
 

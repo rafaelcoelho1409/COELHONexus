@@ -10,24 +10,14 @@ type Row = { label: string; value: string; busy: boolean };
 
 /** Live readout of the platform this page is served from — real API reads, no hard-coded figures. */
 export function PlatformPanel() {
-  const { api, documentationSets, videos, activeRuns } = usePlatformStatus();
+  const { api, videos } = usePlatformStatus();
 
   const apiState = api.isPending ? "checking" : api.data === true ? "operational" : "unreachable";
   const rows: Row[] = [
     {
-      label: "Documentation sets",
-      value: formatCount(documentationSets.data, documentationSets.isPending ? "…" : NO_VALUE),
-      busy: documentationSets.isPending,
-    },
-    {
       label: "Indexed videos",
       value: formatCount(videos.data, videos.isPending ? "…" : NO_VALUE),
       busy: videos.isPending,
-    },
-    {
-      label: "Runs in progress",
-      value: formatCount(activeRuns.data, activeRuns.isPending ? "…" : NO_VALUE),
-      busy: activeRuns.isPending,
     },
   ];
 

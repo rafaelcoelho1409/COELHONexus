@@ -23,12 +23,6 @@
       "targetBlank": false
     },
     {
-      "title": "DD Pipeline",
-      "type": "link",
-      "url": "/d/coelhonexus-dd-pipeline",
-      "targetBlank": false
-    },
-    {
       "title": "YCS Ask",
       "type": "link",
       "url": "/d/coelhonexus-ycs-retrieval",
@@ -83,7 +77,7 @@
       "id": 1,
       "type": "stat",
       "title": "LLM calls observed",
-      "description": "Every chat + embedding call across DD and YCS — one shared boundary (domains/settings/chat + embeddings).",
+      "description": "Every chat + embedding call across Book Distiller and YCS — one shared boundary (domains/settings/chat + embeddings).",
       "datasource": {
         "type": "prometheus",
         "uid": "mimir"

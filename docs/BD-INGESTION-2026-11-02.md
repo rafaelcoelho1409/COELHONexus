@@ -83,6 +83,6 @@ apps/server/.venv/bin/python scripts/bd/ab_ingestion.py --out /tmp/bd_ab2 report
 ## Not done
 
 1. Deploy and smoke-test the shared Celery worker path. The earlier end-to-end run used the now-retired dedicated image.
-2. Observability spans (`gen_ai`-style `traced` + metrics) on the run; the DD ingestion has them.
+2. Add observability spans (`gen_ai`-style `traced` + metrics) to the run.
 3. Enrichment stage, EPUB, the distill/index stages.
 4. Page-level OCR/VLM fallback via the Rotator (needs a pinned / vision-capable route there: the chat route accepts only `auto`, `fgts-va`, `latency-ts` and its pool excludes VLMs).

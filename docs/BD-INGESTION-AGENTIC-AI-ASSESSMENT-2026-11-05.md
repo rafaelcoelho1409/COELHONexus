@@ -99,7 +99,7 @@ Not changed: concurrency (still 4 audit / 4×2 repair), and the page-patch auto-
 
 ## Concurrency headroom
 
-Today: audit = 4 pages × 1 call = 4 concurrent calls; repair = 4 pages × up to 2 specialists = 8; metadata = 1. Docs Distiller's ceiling is 16 (Planner `off_topic` 16, Synth `digest` 16, `chapter_assign` 12, `doc_distill` 10, `sawc` 8); the Rotator's total capacity was documented as ~19 slots (2026-09-07), and DD lowered 24 → 16 after burst timeouts. So BD can go to **16 concurrent calls** at most: audit `PAGE_AUDIT_CONCURRENCY = 16`, repair `PAGE_REPAIR_CONCURRENCY = 8`.
+Today: audit = 4 pages × 1 call = 4 concurrent calls; repair = 4 pages × up to 2 specialists = 8; metadata = 1. The Rotator's total capacity was documented as ~19 slots (2026-09-07). Keep BD at **16 concurrent calls** at most: audit `PAGE_AUDIT_CONCURRENCY = 16`, repair `PAGE_REPAIR_CONCURRENCY = 8`.
 
 ## Basis
 

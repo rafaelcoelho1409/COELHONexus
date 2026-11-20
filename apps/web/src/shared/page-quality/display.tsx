@@ -27,7 +27,7 @@ function autonomousPatchStatus(status: string | null | undefined): string {
   return "Safety checks did not allow automatic application; original retained: ";
 }
 
-/** Shared quality report UI used by both Book Distiller and Docs Distiller page readers. */
+/** Shared quality report UI used by page readers. */
 export function PageQualityDisplay({
   report,
   unit,

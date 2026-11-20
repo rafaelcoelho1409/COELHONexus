@@ -1,12 +1,13 @@
 """Synthesize the whole-book guide from completed chapter guides."""
 from __future__ import annotations
-import domains
-from .... import graphs, prompts, skills
 
 import json
 import logging
 from typing import Any
 
+import domains
+
+from .... import graphs, prompts, skills
 
 logger = logging.getLogger(__name__)
 
@@ -33,19 +34,22 @@ async def _synthesize_book_batch_with_llm(
             if last_error is not None:
                 payload["validation_issue"] = f"{type(last_error).__name__}: {str(last_error)[:900]}"
         try:
+            async def invoke_with_payload(payload: dict[str, Any] = payload) -> Any:
+                return await dependencies.book_synthesizer.ainvoke({
+                    "messages": [{
+                        "role": "user",
+                        "content": json.dumps(payload, ensure_ascii = False),
+                    }],
+                    "files": skills.service.files_for("distill_book_synthesizer"),
+                }, config = {
+                    "callbacks": [domains.settings.llm_counter.service.LLMCounterCallback()],
+                })
+
             with domains.settings.llm_counter.service.llm_context(
                 ns = "bd", run_id = run_id, node_id = "book_synthesizer", stage = "distill",
             ):
                 result = await domains.settings.chat.service.resilient_ainvoke(
-                    lambda: dependencies.book_synthesizer.ainvoke({
-                        "messages": [{
-                            "role": "user",
-                            "content": json.dumps(payload, ensure_ascii = False),
-                        }],
-                        "files": skills.service.files_for("distill_book_synthesizer"),
-                    }, config = {
-                        "callbacks": [domains.settings.llm_counter.service.LLMCounterCallback()],
-                    }),
+                    invoke_with_payload,
                     attempts = domains.bd.distill.params.AGENT_CALL_ATTEMPTS,
                     wait_base_s = domains.bd.distill.params.AGENT_CALL_RETRY_WAIT_BASE_S,
                 )
@@ -55,7 +59,7 @@ async def _synthesize_book_batch_with_llm(
                     output.model_dump(mode = "json"),
                 )
             last_error = ValueError("book DeepAgent returned no valid BookSynthesisOutput")
-        except Exception as error:  # noqa: BLE001 — graph retry handles provider failures; schema retries stay local.
+        except Exception as error:
             last_error = error
             if domains.settings.chat.domain.is_transient_provider_error(error):
                 raise
@@ -77,8 +81,9 @@ async def synthesize_book(
 ) -> dict[str, Any]:
     storage = dependencies.storage
     chapter_summaries = []
+    chapter_refs = state.get("synthesized_chapters") or state.get("completed_chapters", [])
     ordered_refs = sorted(
-        state.get("completed_chapters", []),
+        chapter_refs,
         key = lambda ref: (ref.get("first_page", 0), ref["part_index"]),
     )
     for ref in ordered_refs:
@@ -117,6 +122,21 @@ async def synthesize_book(
     if not chapter_summaries:
         raise ValueError("book synthesis has no completed chapter guides")
 
+    batch_size = domains.bd.distill.params.MAX_BOOK_SYNTHESIS_BATCH_SIZE
+    remaining_batches = len(chapter_summaries)
+    total_batches = 0
+    while remaining_batches > 0:
+        level_batches = (remaining_batches + batch_size - 1) // batch_size
+        total_batches += level_batches
+        if level_batches == 1:
+            break
+        remaining_batches = level_batches
+    await graphs.service.report_node_work_plan(
+        dependencies.progress_callback,
+        "synthesize_book",
+        total_batches,
+    )
+
     current = chapter_summaries
     level = 0
     while True:
@@ -126,6 +146,14 @@ async def synthesize_book(
         ]
         next_level = []
         for batch_index, batch in enumerate(batches):
+            batch_id = f"{level}-{batch_index}"
+            await graphs.service.report_node_item_progress(
+                dependencies.progress_callback,
+                "synthesize_book",
+                batch_id,
+                "running",
+                total_count = total_batches,
+            )
             await graphs.service.report(
                 dependencies.progress_callback,
                 kind = "activity",
@@ -155,6 +183,13 @@ async def synthesize_book(
                     **record,
                     "summary": domains.bd.distill.synthesize.domain.book_summary(synthesis),
                 })
+                await graphs.service.report_node_item_progress(
+                    dependencies.progress_callback,
+                    "synthesize_book",
+                    batch_id,
+                    "done",
+                    total_count = total_batches,
+                )
                 continue
 
             unit_ids = sorted({unit_id for item in batch for unit_id in item["unit_ids"]})
@@ -177,7 +212,7 @@ async def synthesize_book(
             synthesis = await _synthesize_book_batch_with_llm(
                 dependencies,
                 state["run_id"],
-                f"{level}-{batch_index}",
+                batch_id,
                 prompt,
             )
             referenced_ids = set(synthesis.central_thesis_learning_unit_ids)
@@ -204,6 +239,13 @@ async def synthesize_book(
                 **record,
                 "summary": domains.bd.distill.synthesize.domain.book_summary(synthesis),
             })
+            await graphs.service.report_node_item_progress(
+                dependencies.progress_callback,
+                "synthesize_book",
+                batch_id,
+                "done",
+                total_count = total_batches,
+            )
         if len(next_level) == 1:
             synthesis_key = domains.bd.distill.keys.synthesis_key(
                 state["book_id"], state["run_id"], level, 0,

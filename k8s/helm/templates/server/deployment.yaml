@@ -9,9 +9,6 @@ spec:
 {{- include "coelhonexus.DeploymentResources" (dict "appName" $appName "root" .) | nindent 10}}
 {{- include "coelhonexus.ProbeSettings" (dict "appName" $appName "root" .) | nindent 10 }}
           volumeMounts:
-            - name: langfuse-dd-reference-book
-              mountPath: /etc/langfuse-fixtures/dd/reference_book
-              readOnly: true
             - name: langfuse-ycs-qa-pairs
               mountPath: /etc/langfuse-fixtures/ycs/qa_pairs
               readOnly: true
@@ -40,9 +37,6 @@ spec:
             initialDelaySeconds: 5
             periodSeconds: 10
       volumes:
-        - name: langfuse-dd-reference-book
-          configMap:
-            name: coelhonexus-langfuse-dd-reference-book
         - name: langfuse-ycs-qa-pairs
           configMap:
             name: coelhonexus-langfuse-ycs-qa-pairs

@@ -1,4 +1,4 @@
-"""Redis / MinIO key builders for the LLM-usage counters — one layout for every namespace (`dd`, `ycs`)."""
+"""Redis / MinIO key builders for the shared LLM-usage counters."""
 from __future__ import annotations
 
 from urllib.parse import quote

@@ -33,21 +33,6 @@ data:
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: coelhonexus-grafana-dashboard-dd-pipeline
-  namespace: {{ .Release.Namespace }}
-  labels:
-    app: grafana
-    release: {{ .Release.Name }}
-    grafana_dashboard: "1"
-  annotations:
-    grafana_folder: "COELHO Nexus"
-data:
-  dd-pipeline.json: |
-{{ .Files.Get "files/grafana/dashboards/dd-pipeline.json" | indent 4 }}
----
-apiVersion: v1
-kind: ConfigMap
-metadata:
   name: coelhonexus-grafana-dashboard-rotator-red
   namespace: {{ .Release.Namespace }}
   labels:

@@ -5,8 +5,7 @@ import { usePathname } from "next/navigation";
 
 import { APP_NAV } from "./nav";
 
-/** Marks the current page with `aria-current` and the foreground colour — never colour alone. A page is
- * current for its own path and everything below it (`/dd` stays marked on `/dd/planner`). */
+/** Marks the current page with `aria-current` and the foreground colour — never colour alone. */
 export function AppNav() {
   const pathname = usePathname();
 

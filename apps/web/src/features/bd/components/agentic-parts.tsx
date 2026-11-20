@@ -1,6 +1,6 @@
 "use client";
 
-/** Parts shared by the Agentic AI graph, its list and its node sheet. They draw a node the way the Docs Distiller's
+/** Parts shared by the Agentic AI graph, its list and its node sheet. They draw a node consistently across views.
  * stage graphs do: a glyph for the state, the state also in words, a headline number once the node is done and a
  * monospace line while it runs. */
 

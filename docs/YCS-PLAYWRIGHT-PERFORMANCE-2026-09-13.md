@@ -234,10 +234,7 @@ per-chunk, after each Playwright chunk resolves.
 
 Traced the call path in `domains/llm/rotator/chain/service.py`:
 
-- DD's hot-path nodes (`doc_distill`/`off_topic`/`chapter_assign`) use
-  `_get_async_openai()` — pooled `AsyncOpenAI`, HTTP/2, 200/100
-  connections, tuned 90s timeout ceiling, `max_retries=0` (comment:
-  *"rotator handles cascade, SDK retries would triple timeout"*).
+- The shared async client uses pooled `AsyncOpenAI` connections with HTTP/2, bounded connection pools, an explicit timeout, and `max_retries=0` because the Rotator owns provider retries.
 - YCS's Neo4j chain (`build_ycs_neo4j_pinned_chain` →
   `build_reduce_label_chain()`, same file, line ~642) builds a **bare**
   `ChatOpenAI(base_url=..., api_key=..., model=..., temperature=0.0)` —
@@ -256,16 +253,7 @@ stage.
 minimum pass `timeout=90.0, max_retries=0` explicitly to the
 `ChatOpenAI` construction) — small, targeted, not a rewrite.
 
-**Not a "move DD's engine into the rotator" question** — the shared
-client already lives at the Nexus-app level
-(`domains/llm/rotator/chain/service.py`, not under `domains/dd/`), so
-there's nothing to transfer between repos. The rotator service itself
-already owns the provider-cascade/arm-swap logic server-side. What
-can't move server-side is the client's own outer-bound timeout/retry
-count — different consumers have genuinely different budgets (a Celery
-task with a 3660s hard `time_limit` vs. a synchronous request path) —
-that has to stay a per-consumer setting, which is exactly what already
-exists and just needs to be actually used here.
+The shared client lives at the Nexus application level in `domains/llm/rotator/chain/service.py`. The Rotator owns provider-cascade and arm-swap logic server-side; caller-specific deadlines and retry limits remain per-consumer settings.
 
 ## Not done, explicitly deferred
 

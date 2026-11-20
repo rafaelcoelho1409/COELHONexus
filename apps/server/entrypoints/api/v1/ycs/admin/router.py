@@ -98,9 +98,8 @@ async def pipeline_stream_status(
 
 @router.get("/pipeline/{extract_id}/llm-counters")
 async def pipeline_llm_counters(extract_id: str) -> dict:
-    """LLM-usage drawer for the Neo4j box — same contract as DD's
-    `/planner|synth/debug/graph/{thread_id}/llm-counters`
-    (`domains.settings.llm_counter.service.read_counters`), under the
+    """LLM-usage drawer for the Neo4j box, using the shared
+    `domains.settings.llm_counter.service.read_counters` contract under the
     `ycs` namespace since YCS's extraction isn't a LangGraph graph with
     a thread_id to key off — keyed by extract_id instead, "node" is the
     video_id being extracted rather than a workflow node."""

@@ -2,8 +2,8 @@
 
     cd apps/server && .venv/bin/python ../../scripts/server/test_llm_usage.py
 
-The expected values are what the parsers it replaced (DD raw `.usage`, `LLMResult` + usage_metadata,
-YCS `llm_output`) returned on the same inputs; the only deliberate differences are called out inline."""
+The expected values are what the replaced parsers (`LLMResult` + usage_metadata,
+YCS `llm_output`, and provider responses) returned on the same inputs; the only deliberate differences are called out inline."""
 import os
 import sys
 from pathlib import Path
@@ -64,7 +64,7 @@ check("reasoning tokens from usage_metadata.output_token_details",
       None, 1, 2, 5)
 check("empty llm_output", llm({}), None, 0, 0)
 
-# ---- bare AIMessage (what `ChatOpenAI.ainvoke` returns; the DD adapter used to rebuild a fake dict from it) ---------
+# ---- bare AIMessage (what `ChatOpenAI.ainvoke` returns) -----------------------------------------------------------
 check("bare AIMessage: usage_metadata + model from response_metadata",
       AIMessage(content = "x", usage_metadata = {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15,
                                                   "output_token_details": {"reasoning": 2}},
@@ -72,14 +72,14 @@ check("bare AIMessage: usage_metadata + model from response_metadata",
       "m-bare", 10, 5, 2)
 check("bare AIMessage without usage", AIMessage(content = "x"), None, 0, 0, 0)
 
-# ---- raw provider / LiteLLM response (DD) -------------------------------------------------------------------------
-check("raw dict response with reasoning details (DD)",
+# ---- raw provider / LiteLLM response ------------------------------------------------------------------------------
+check("raw dict response with reasoning details",
       {"usage": {"prompt_tokens": 5, "completion_tokens": 8, "completion_tokens_details": {"reasoning_tokens": 3}}, "model": "x"},
       "x", 5, 8, 3)
-check("raw object with a pydantic-style usage (DD)",
+check("raw object with a pydantic-style usage",
       RawResponse(PydanticLike({"input_tokens": 2, "output_tokens": 6, "reasoning_tokens": 1}), "y"), "y", 2, 6, 1)
-check("raw response without usage (DD)", {"model": "z"}, "z", 0, 0, 0)
-check("no response at all (DD)", None, None, 0, 0, 0)
+check("raw response without usage", {"model": "z"}, "z", 0, 0, 0)
+check("no response at all", None, None, 0, 0, 0)
 
 # ---- clamping -----------------------------------------------------------------------------------------------------
 check("negative counts are clamped to zero", {"usage": {"prompt_tokens": -4, "completion_tokens": 2}}, None, 0, 2, 0)

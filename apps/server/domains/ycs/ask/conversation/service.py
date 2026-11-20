@@ -1,10 +1,8 @@
 """ycs/ask/conversation — Postgres-backed thread memory (Q&A history).
 
-Async psycopg adapter for the deprecated `conversation_history` table.
-Each handler call opens its own short-lived connection — same posture
-as the deprecated service, and consistent with the existing DD
-AsyncPostgresSaver pattern (no shared async pool needed for this
-low-volume table).
+Async psycopg adapter for the `conversation_history` table. Each
+handler call opens its own short-lived connection; no shared async pool
+is needed for this low-volume table.
 """
 from __future__ import annotations
 import domains, infra

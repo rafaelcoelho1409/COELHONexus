@@ -102,8 +102,8 @@ async def init_checkpointer() -> AsyncPostgresSaver:
     NOT `AsyncPostgresSaver.from_conn_string` (one long-lived
     `AsyncConnection`): in the long-lived FastAPI process that single
     connection died after a Postgres/network drop and was never reopened, so
-    every `aget_state` raised "the connection is closed" (planner `/state`
-    polling 500'd for the whole pod lifetime). The pool discards dead
+    every `aget_state` raised "the connection is closed" (`/state` polling
+    returned 500 for the whole pod lifetime). The pool discards dead
     connections and reconnects transparently."""
     global _saver, _pool, _saver_loop
     current_loop = asyncio.get_running_loop()

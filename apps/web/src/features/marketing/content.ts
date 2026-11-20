@@ -7,15 +7,6 @@
 export const PRODUCTS = [
   {
     index: "01",
-    name: "Docs Distiller",
-    summary:
-      "Reads a framework's documentation, plans the chapters, and writes a coherent study guide you can read in order.",
-    pipeline: ["Ingest", "Plan", "Synthesize", "Study"],
-    stack: "LangGraph · MinIO · PostgreSQL",
-    open: { label: "Open Docs Distiller", href: "/dd" },
-  },
-  {
-    index: "02",
     name: "YouTube Content Search",
     summary:
       "Indexes a whole channel, then answers questions against the transcripts, the entities in them and the relationships between them — with citations.",
@@ -23,7 +14,7 @@ export const PRODUCTS = [
     stack: "Playwright · Qdrant · Neo4j",
   },
   {
-    index: "03",
+    index: "02",
     name: "Book Distiller",
     summary:
       "Turns a book into a chapter-by-chapter study guide, then researches across it and the live web — with citations.",

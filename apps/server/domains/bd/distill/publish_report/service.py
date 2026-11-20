@@ -1,25 +1,29 @@
 """Assemble, validate, and publish a citation-resolvable Learning Guide."""
 from __future__ import annotations
 
-import domains
-
 import hashlib
 import json
 from collections.abc import Awaitable, Callable
 from typing import Any
+
+import domains
 
 
 async def publish_report(
     storage: Any,
     state: dict[str, Any],
     review_report: Callable[[dict[str, Any]], Awaitable[domains.bd.distill.schemas.ReportReviewOutput]] | None = None,
+    on_unit_progress: Callable[[str, str, int], Awaitable[None]] | None = None,
 ) -> dict[str, Any]:
     book_id = state["book_id"]
     run_id = state["run_id"]
     ingestion_ai_run_id = state["ingestion_ai_run_id"]
     learning_units: dict[str, dict[str, Any]] = {}
     unit_refs = state.get("completed_units", [])
+    total_units = len(unit_refs)
     for ref in unit_refs:
+        if on_unit_progress is not None:
+            await on_unit_progress(ref["unit_id"], "running", total_units)
         artifact_key = domains.bd.distill.keys.learning_unit_key(book_id, run_id, ref["unit_id"])
         artifact = json.loads(await storage.read_text(artifact_key))
         for lesson in artifact.get("lessons", []):
@@ -32,6 +36,8 @@ async def publish_report(
                     "section_path": artifact.get("section_path", []),
                     "source_sha256": artifact["source_sha256"],
                 }
+        if on_unit_progress is not None:
+            await on_unit_progress(ref["unit_id"], "done", total_units)
     if not learning_units:
         raise ValueError("the Distill run has no source-grounded learning units to publish")
 
@@ -89,6 +95,12 @@ async def publish_report(
 
     synthesis_record = json.loads(await storage.read_text(state["book_synthesis_key"]))
     book_synthesis = domains.bd.distill.schemas.BookSynthesis.model_validate(synthesis_record["synthesis"])
+    decision_key = state.get("decision_brief_key") or domains.bd.distill.keys.decision_brief_key(book_id, run_id)
+    if await storage.exists(decision_key):
+        decision_output = domains.bd.distill.schemas.DecisionBriefOutput.model_validate_json(
+            await storage.read_text(decision_key),
+        )
+        book_synthesis = book_synthesis.model_copy(update = {"decision_brief": decision_output.decision_brief})
     research_key = state.get("research_context_key") or domains.bd.distill.keys.research_context_key(book_id, run_id)
     research_context = domains.bd.distill.schemas.ResearchContext(status = "disabled")
     if await storage.exists(research_key):
@@ -395,23 +407,23 @@ async def publish_report(
     try:
         review = await review_report(review_packet) if review_report is not None else None
         if not isinstance(review, domains.bd.distill.schemas.ReportReviewOutput):
-            raise ValueError("report reviewer returned no valid ReportReviewOutput")
+            raise TypeError("report reviewer returned no valid ReportReviewOutput")
         reviewer_notes = [
             f"Editorial review ({item.severity}, {item.area}): {item.issue} Recommendation: {item.recommendation}"
             for item in review.findings
         ]
         report = report.model_copy(update = {
-            "review_notes": sorted(set([*report.review_notes, *reviewer_notes])),
+            "review_notes": sorted({*report.review_notes, *reviewer_notes}),
             "review_required": report.review_required or any(
                 finding.severity == "critical" for finding in review.findings
             ),
         })
     except Exception as error:  # noqa: BLE001 — editorial review never overrides deterministic publication checks.
         report = report.model_copy(update = {
-            "review_notes": sorted(set([
+            "review_notes": sorted({
                 *report.review_notes,
                 f"Editorial review was unavailable ({type(error).__name__}); deterministic checks passed.",
-            ])),
+            }),
         })
     report_json = domains.bd.distill.domain.json_body(report.model_dump(mode = "json"))
     report_html = domains.bd.distill.rendering.domain.render_html(report)

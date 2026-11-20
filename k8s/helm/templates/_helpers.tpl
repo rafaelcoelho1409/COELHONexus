@@ -14,8 +14,6 @@ Credentials are loaded from secret via secretRef
 */}}
 {{- define "coelhonexus.commonEnvVars" -}}
 ENVIRONMENT: "{{ .Values.environment }}"
-DD_PLANNER_VERSION: "{{ .Values.planner.version | default "v2" }}"
-DD_SYNTH_VERSION: "{{ .Values.synth.version | default "v2" }}"
 SERVER_HOST: "coelhonexus-server"
 LLM_ENDPOINT_URL: "{{ .Values.llm.endpoint.url }}"
 LLM_API_KEY: "{{ .Values.llm.endpoint.apiKey }}"
@@ -67,17 +65,6 @@ LITELLM_OTEL_V2: "true"
 # resource builder skips them.
 GIT_SHA: {{ .Values.otel.git_sha | default "" | quote }}
 HELM_CHART_VERSION: {{ .Chart.Version | quote }}
-# chapter_propose Optimal-Stopping feature flag. 2026-10-13: "true" -> "false" — it shipped
-# ONE sample for deepagents (a 41-doc catch-all chapter), i.e. no best-of-N; quality over the
-# ~1 min it saved. Kept live here rather than in values.yaml/params.py so flipping it
-# doesn't need a rebuild.
-DD_PROPOSE_OPTIMAL_STOPPING: "false"
-# Per-study chapter concurrency semaphore. Roll back to "1" if 429 cascades
-# resume. Kept live here (not values.yaml/params.py) as a fast rollback lever.
-DD_STUDY_SEM: "2"
-# "1" = abort right after a degraded chapter_propose on a big corpus (opt-in,
-# currently off). Kept live here as an incident-response toggle.
-DD_PLANNER_ABORT_ON_DEGRADE: "0"
 {{- end -}}
 
 

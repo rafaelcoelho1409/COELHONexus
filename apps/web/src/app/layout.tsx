@@ -19,9 +19,9 @@ const jetbrains = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "COELHO Nexus — Turn framework docs into study guides. Ask any channel.",
+  title: "COELHO Nexus — Search YouTube channels. Distill books.",
   description:
-    "Docs Distiller turns a framework's documentation into a chapter-by-chapter study guide. YouTube Content Search indexes a channel and answers questions with citations.",
+    "YouTube Content Search indexes channels and answers questions with citations. Book Distiller turns books into chapter-by-chapter study guides.",
 };
 
 export const viewport: Viewport = {

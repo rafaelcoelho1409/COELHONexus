@@ -56,5 +56,3 @@
 !ai/bd/skills/ingestion/**/*.md
 !ai/bd/skills/distill/**/*.md
 !ai/**/prompts/**/SYSTEM.md
-!ai/dd/skills/ingestion/**/*.md
-!ai/dd/skills/pipeline/**/*.md

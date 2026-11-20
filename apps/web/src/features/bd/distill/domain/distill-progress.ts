@@ -123,6 +123,33 @@ export const DISTILL_NODES = [
   },
 ] as const;
 
+export const DISTILL_CONNECTIONS = [
+  { source: "prepare_units", target: "extract_unit" },
+  { source: "extract_unit", target: "verify_unit" },
+  { source: "verify_unit", target: "prepare_chapters" },
+  { source: "prepare_chapters", target: "synthesize_chapter" },
+  { source: "synthesize_chapter", target: "build_chapter_visuals" },
+  { source: "synthesize_chapter", target: "synthesize_book" },
+  { source: "synthesize_book", target: "write_decision_brief" },
+  { source: "synthesize_book", target: "research_context" },
+  { source: "build_chapter_visuals", target: "publish_report" },
+  { source: "write_decision_brief", target: "publish_report" },
+  { source: "research_context", target: "publish_report" },
+] as const;
+
+export const DISTILL_POSITIONS = {
+  prepare_units: { x: 284, y: 16 },
+  extract_unit: { x: 284, y: 182 },
+  verify_unit: { x: 284, y: 348 },
+  prepare_chapters: { x: 284, y: 514 },
+  synthesize_chapter: { x: 284, y: 680 },
+  build_chapter_visuals: { x: 16, y: 846 },
+  synthesize_book: { x: 284, y: 846 },
+  write_decision_brief: { x: 150, y: 1012 },
+  research_context: { x: 418, y: 1012 },
+  publish_report: { x: 284, y: 1178 },
+} as const;
+
 export type DistillNode = (typeof DISTILL_NODES)[number];
 
 export const DISTILL_USAGE_COUNTERS: Partial<Record<DistillNode["id"], readonly string[]>> = {
@@ -160,6 +187,15 @@ function nodeProgress(
   progress: DistillRun["progress"] | null,
 ): AgenticNodeProgress | null {
   if (progress === null || status === "pending") return null;
+  const recorded = progress.node_progress?.[nodeId];
+  if (recorded && recorded.total_count > 0) {
+    return {
+      current: Math.min(recorded.completed_count, recorded.total_count),
+      total: recorded.total_count,
+      label: nodeProgressLabel(nodeId),
+      active: recorded.active_count,
+    };
+  }
   if (nodeId === "extract_unit" && progress.total_units > 0) {
     return {
       current: Math.min(progress.completed_extractions, progress.total_units),
@@ -195,6 +231,38 @@ function nodeProgress(
   return null;
 }
 
+function nodeProgressLabel(nodeId: string): string {
+  switch (nodeId) {
+    case "prepare_units":
+      return "source pages prepared";
+    case "extract_unit":
+      return "units extracted";
+    case "verify_unit":
+      return "units checked";
+    case "prepare_chapters":
+      return "source units read";
+    case "synthesize_chapter":
+      return "chapter guides written";
+    case "build_chapter_visuals":
+      return "chapter visual stages complete";
+    case "synthesize_book":
+      return "synthesis batches complete";
+    case "publish_report":
+      return "source units assembled";
+    case "write_decision_brief":
+    case "research_context":
+      return "items complete";
+    default:
+      return "items complete";
+  }
+}
+
+function nodeProgressSummary(nodeId: string, progress: DistillRun["progress"]): string | null {
+  const recorded = progress.node_progress?.[nodeId];
+  if (!recorded || recorded.total_count <= 0) return null;
+  return `${Math.min(recorded.completed_count, recorded.total_count).toLocaleString()}/${recorded.total_count.toLocaleString()} ${nodeProgressLabel(nodeId)}`;
+}
+
 export function distillNodeStatus(
   nodeId: string,
   status: DistillRun["status"] | null,
@@ -226,10 +294,14 @@ export function distillBoardCaption(
     const failed = DISTILL_NODES.find((node) => distillNodeStatus(node.id, status, progress) === "failed");
     return failed ? `Run failed during ${failed.label.toLowerCase()}.` : "Run failed before completion.";
   }
-  const current = DISTILL_NODES.find((node) => node.id === progress?.current_node);
-  if (current && progress?.current_task) {
-    return `Working on ${current.label.toLowerCase()} · ${progress.current_task}.`;
+  const running = DISTILL_NODES.filter((node) => distillNodeStatus(node.id, status, progress) === "running");
+  if (running.length > 1) {
+    const labels = running.map((node) => node.label.toLowerCase()).join(", ");
+    return `${running.length} stages are running in parallel: ${labels}.`;
   }
+  const current = running[0] ?? DISTILL_NODES.find((node) => node.id === progress?.current_node);
+  const task = current ? (progress?.active_tasks[current.id] ?? progress?.current_task) : null;
+  if (current && task) return `Working on ${current.label.toLowerCase()} · ${task}.`;
   return current ? `Working on ${current.label.toLowerCase()}.` : "Distill is processing the book.";
 }
 
@@ -239,6 +311,8 @@ function nodeKpi(
   progress: DistillRun["progress"] | null,
 ): string | null {
   if (status !== "done" || progress === null) return null;
+  const recorded = nodeProgressSummary(nodeId, progress);
+  if (recorded !== null) return recorded;
   if (nodeId === "extract_unit" && progress.total_units > 0) {
     return `${progress.completed_extractions.toLocaleString()} / ${progress.total_units.toLocaleString()} units`;
   }
@@ -259,8 +333,13 @@ function nodeLiveLine(
   status: DistillRun["status"] | null,
   progress: DistillRun["progress"] | null,
 ): string | null {
-  if (status !== "running" || progress === null || progress.current_node !== nodeId) return null;
-  if (progress.current_task) return progress.current_task;
+  const nodeIsRunning = progress?.node_status[nodeId] === "running" || progress?.current_node === nodeId;
+  if (status !== "running" || progress === null || !nodeIsRunning) return null;
+  const activeTask =
+    progress.active_tasks[nodeId] ?? (progress.current_node === nodeId ? progress.current_task : null);
+  if (activeTask) return activeTask;
+  const recorded = nodeProgressSummary(nodeId, progress);
+  if (recorded !== null) return recorded;
   if (nodeId === "extract_unit" && progress.total_units > 0) {
     return `${progress.completed_extractions.toLocaleString()}/${progress.total_units.toLocaleString()} units`;
   }

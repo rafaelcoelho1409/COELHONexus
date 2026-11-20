@@ -102,15 +102,12 @@ MAX_EXTRACTED_NODES = 150
 MAX_EXTRACTED_RELATIONSHIPS = 300
 
 # Inter-retry-pass backoff (jittered): immediate retries hammer an
-# already-exhausted free-tier pool (DD: 2-5s+jitter per item; scaled up
-# here since one Neo4j call carries a ~20K-char transcript, not a
-# 600-token summary — but far below DD's 130s inter-node settle, which
-# would dominate per-chunk).
+# already-exhausted endpoint pool. The longer delay reflects that one
+# Neo4j call carries a full transcript rather than a short summary.
 RETRY_PASS_BACKOFF_S = (10.0, 30.0)
 
-# Consecutive all-failed INFRA passes before giving up early (DD's
-# SUSTAINED_INFRA_OUTAGE_LIMIT=2, adapted: counts passes, not videos —
-# with 5-video chunks a per-video streak would be trigger-happy).
+# Consecutive all-failed infrastructure passes before giving up early;
+# counts passes, not videos, to avoid triggering on a single unlucky item.
 MAX_CONSECUTIVE_INFRA_PASSES = 2
 
 # 2026-09-17: a pass's "0 successes" only counts toward the streak
@@ -135,7 +132,7 @@ MIN_PENDING_FOR_INFRA_HALT = 6
 # (3), so only a genuinely larger batch's all-fail streak counts as
 # real outage evidence.
 
-# Per-video Bolt write budget (DD: wait_for(write,60)). add_graph_documents
+# Per-video Bolt write budget. add_graph_documents
 # is a SYNC driver call — run in a thread + watchdog so a wedged
 # connection can't hang the task past its retry budget.
 WRITE_TIMEOUT_S = 120.0

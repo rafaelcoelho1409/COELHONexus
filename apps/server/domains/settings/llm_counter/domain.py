@@ -109,9 +109,9 @@ def extract_usage(response: Any) -> entities.Usage:
     )
 
 
-# ---- the shared Redis counter layout (DD thread counters, YCS extract / Ask counters) ------------------------------
-# One hash per run: `total:<f>`, `node:<node_id>:<f>`, `errkind:<kind>` (+ DD's `stage`); one hash per node:
-# `<model>:<f>`. `<f>` is a COUNT_FIELDS name, or `errors` (DD only).
+# ---- the shared Redis counter layout (BD runs, YCS extract / Ask counters) ---------------------------------------
+# One hash per run: `total:<f>`, `node:<node_id>:<f>`, `errkind:<kind>` and optional `stage`; one hash per node:
+# `<model>:<f>`. `<f>` is a COUNT_FIELDS name or `errors`.
 
 COUNT_FIELDS = ("calls", "tokens_in", "tokens_out", "reasoning_tokens")
 

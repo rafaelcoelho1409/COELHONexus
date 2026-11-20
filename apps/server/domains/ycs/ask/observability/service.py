@@ -1,4 +1,4 @@
-"""YCS observability — the `@traced` node decorator for RAG nodes (mirrors DD planner/synth), the
+"""YCS observability — the `@traced` node decorator for RAG nodes, the
 retrieval-tier spans with YCS's attribute vocabulary, and the Ask / ingest metric recorders.
 
 Each Ask traces out as: orchestrator → adaptive_node → qdrant_search → es_search → neo4j_lookup →

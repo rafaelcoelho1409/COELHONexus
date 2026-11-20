@@ -50,7 +50,7 @@ OBSERVATION_TYPE_EMBEDDING  = "embedding"
 # Span-gate tables (`domain.should_keep_span`). Celery task root spans for
 # these domains become the trace root in LangFuse and give the trace its name.
 CELERY_DOMAIN_PREFIXES = (
-    "run/domains.dd.",
+    "run/domains.bd.",
     "run/domains.ycs.",
 )
 

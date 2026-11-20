@@ -5,7 +5,7 @@
  * bars are `progressbar`s with a name and a value; they are not live regions, so a poll every 0.7 s says nothing to a screen
  * reader — the panel's one status line announces the transitions. */
 
-import { Play } from "lucide-react";
+import { LoaderCircle, Play } from "lucide-react";
 import type { JSX } from "react";
 
 import { STATUS_WORD_LABEL, statusWord } from "../domain";
@@ -67,10 +67,16 @@ export function PipelineSteps({
   steps,
   onOpen,
   onPlay,
+  replayDisabled = false,
+  replayPending = false,
+  replayPendingStepKey = null,
 }: {
   steps: ReadonlyArray<Step>;
   onOpen: (step: Step) => void;
   onPlay?: (step: Step) => void;
+  replayDisabled?: boolean;
+  replayPending?: boolean;
+  replayPendingStepKey?: string | null;
 }): JSX.Element {
   return (
     <ol aria-label="Agentic RAG stages" className="flex flex-col gap-1.5">
@@ -121,11 +127,17 @@ export function PipelineSteps({
                     event.stopPropagation();
                     onPlay(step);
                   }}
+                  disabled={replayDisabled || replayPending}
+                  aria-busy={replayPending && replayPendingStepKey === step.key}
                   aria-label={`Replay from ${step.title}`}
                   title={`Replay from ${step.title} and clear downstream results`}
-                  className="inline-flex size-9 shrink-0 items-center justify-center self-start rounded-sm text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"
+                  className="inline-flex size-9 shrink-0 items-center justify-center self-start rounded-sm text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring disabled:pointer-events-none disabled:opacity-60"
                 >
-                  <Play aria-hidden className="size-4" />
+                  {replayPending && replayPendingStepKey === step.key ? (
+                    <LoaderCircle aria-hidden className="size-4 animate-spin" />
+                  ) : (
+                    <Play aria-hidden className="size-4" />
+                  )}
                 </button>
               ) : null}
             </div>

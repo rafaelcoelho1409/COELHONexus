@@ -6,17 +6,15 @@ TypeScript 6 strict · Tailwind 4 · shadcn/ui on Base UI · TanStack Query · g
 | Surface | Served by |
 | --- | --- |
 | Home, Settings | this app |
-| Docs Distiller (`/dd/*`) | this app; the old `/docs-distiller*` URLs redirect here (307) |
+| Book Distiller (`/bd/*`) | this app |
 | YouTube content search (YCS: Source, Ingestion, Ask, Query) | this app |
 
-The retired FastHTML UI no longer exists in this repo, so there is no fallback to it. The `/docs-distiller`
-redirect stays so old bookmarks and shared study links keep working; flip it to `permanent: true`
-(`src/shared/config/redirects.ts`) once you no longer need to roll it back.
+The retired FastHTML UI no longer exists in this repo.
 
 ```bash
 npm install
 npm run dev            # http://localhost:3000
-npm run verify         # lint, typecheck, knip, unit tests, boundaries, tokens, API drift, public copy, backend contract
+npm run verify         # lint, typecheck, knip, unit tests, boundaries, tokens, API drift and public copy
 npm run verify:full    # verify + production build + budgets + Playwright/axe e2e
 ```
 
@@ -28,7 +26,7 @@ Visual and content rules: [`DESIGN.md`](DESIGN.md).
 ```
 src/app/                    routing only — one-line re-exports of feature pages, layout, /health
 src/features/<context>/     api · domain · entities · params · components · hooks · index.ts
-src/shared/                 api (generated client) · config (env, rewrites, redirects) · lib · markdown · providers · sse · styles · ui
+src/shared/                 api (generated client) · config (env, rewrites) · lib · markdown · providers · sse · styles · ui
 ```
 
 Import layers are enforced (`eslint-plugin-boundaries`, proven by `npm run test:boundaries`):

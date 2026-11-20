@@ -15,8 +15,7 @@ SECRET_KEY = os.environ.get("AWS_SECRET_ACCESS_KEY", "")
 REGION            = "us-east-1"
 SIGNATURE_VERSION = "s3v4"   # MinIO requires v4 (default v2 fails)
 
-# Default client shape (the dd ingestion storage's): MinIO connection pool bumped
-# above aioboto3's default 10 so parallel write_many doesn't starve.
+# MinIO connection pool is above aioboto3's default 10 so parallel write_many doesn't starve.
 MAX_POOL_CONNECTIONS = 32
 
 # Timeouts — both REQUIRED. Without them aiobotocore put_object hangs silently

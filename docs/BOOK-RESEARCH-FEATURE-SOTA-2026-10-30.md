@@ -8,7 +8,7 @@ Status: decision + design only. Nothing built. The COELHO Search MCP failed to c
 
 **Feature naming update 2026-11-07:** the BD feature is named **Distill**. **Book Distiller** remains the product and bounded context; **Learning Guide** remains the reader-facing report.
 
-**Update 2026-11-02: named Book Distiller, and it is the third feature again.** The feature (book distillation + deep research over the distilled book and the live web) is called **Book Distiller**, the sibling of Docs Distiller; the name was chosen after a collision check (Knowledge Distiller reads as the ML model-compression technique; Scriptorium, Marginalia and Tome are taken in the AI space). Domain code `bd`: `domains/bd/`, `/api/v1/bd`, Celery queue `bd`. The user builds it by hand, to learn Deep Agents, LangChain, LangGraph and FastMCP. Tagline: "Distill any book, then research across it and the live web, with citations." The file name keeps "BOOK-RESEARCH" because it is dated and linked from elsewhere; read "Book Research" below as Book Distiller.
+**Update 2026-11-02: named Book Distiller.** The feature (book distillation + deep research over the distilled book and the live web) is called **Book Distiller**; the name was chosen after a collision check (Knowledge Distiller reads as the ML model-compression technique; Scriptorium, Marginalia and Tome are taken in the AI space). Domain code `bd`: `domains/bd/`, `/api/v1/bd`, Celery queue `bd`. The user builds it by hand, to learn Deep Agents, LangChain, LangGraph and FastMCP. Tagline: "Distill any book, then research across it and the live web, with citations." The file name keeps "BOOK-RESEARCH" because it is dated and linked from elsewhere; read "Book Research" below as Book Distiller.
 
 ---
 
@@ -19,7 +19,7 @@ Status: decision + design only. Nothing built. The COELHO Search MCP failed to c
 |---|---|---|
 | A. Deep Research only | Reject as headline | Most crowded space. LangChain archived `open_deep_research` (2026-08-21); DeerFlow ~75k stars; LangChain sells Managed Deep Agents with built-in search. The $0 search/LLM edge is invisible to a recruiter. |
 | B. Book Distillation only | Reject | Thin summarizer, many clones (`ebook-to-mindmap` ~1.2k stars, `condensr`, `book-to-skill`), low senior signal. |
-| **C. Combined, research-first** | **Pick** | Exercises what Abu Dhabi postings actually list: chunking, hybrid search, reranking, citations, retrieval evals, supervisor-worker fan-out, state compression, cross-document reconciliation, hallucination verification, observability. Reuses Docs Distiller planner/synth patterns. Little direct competition. |
+| **C. Combined, research-first** | **Pick** | Exercises what Abu Dhabi postings actually list: chunking, hybrid search, reranking, citations, retrieval evals, supervisor-worker fan-out, state compression, cross-document reconciliation, hallucination verification, observability. Reuses LangGraph planning and synthesis patterns. Little direct competition. |
 | C-lite (web research, books as one source type) | Fallback | Ships faster but loses the structured-distillation story. Use only if time-boxed. |
 
 Honest limit: no posting asks for "book distillation", and the hiring evidence is aggregator-only. The feature is a vehicle to show the skills above; deployment, evals and observability matter as much as the feature (the Open Innovation AI JDs skew infra/K8s/ArgoCD).

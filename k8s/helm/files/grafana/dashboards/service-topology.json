@@ -24,12 +24,6 @@
       "targetBlank": false
     },
     {
-      "title": "DD Pipeline",
-      "type": "link",
-      "url": "/d/coelhonexus-dd-pipeline",
-      "targetBlank": false
-    },
-    {
       "title": "YCS Ask",
       "type": "link",
       "url": "/d/coelhonexus-ycs-retrieval",

@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { Section } from "./section";
 import { SectionBar } from "./section-bar";
 
-const nav = vi.hoisted(() => ({ pathname: "/dd", search: "" }));
+const nav = vi.hoisted(() => ({ pathname: "/bd", search: "" }));
 vi.mock("next/navigation", () => ({
   usePathname: () => nav.pathname,
   useSearchParams: () => new URLSearchParams(nav.search),
@@ -12,15 +12,17 @@ vi.mock("next/navigation", () => ({
 
 const SECTIONS: Section[] = [
   {
-    href: "/dd",
-    title: "Docs Distiller",
-    description: "Ingest docs, plan distillation, study what was distilled",
-    defaultTab: "catalog",
-    carryParam: "slug",
+    href: "/bd",
+    title: "Book Distiller",
+    description: "Upload, distill, study, ask, and inspect book knowledge",
+    defaultTab: "ingestion",
+    carryParam: "book",
     tabs: [
-      { key: "catalog", label: "Catalog", href: "/dd", tab: true, carry: false },
-      { key: "ingestion", label: "Ingestion", href: "/dd/ingestion", tab: true, carry: true },
-      { key: "planner", label: "Planner", href: "/dd/planner", tab: false, carry: true },
+      { key: "ingestion", label: "Ingestion", href: "/bd/ingestion", tab: true, carry: true },
+      { key: "pages", label: "Pages", href: "/bd/pages", tab: true, carry: true },
+      { key: "distill", label: "Distill", href: "/bd/distill", tab: true, carry: true },
+      { key: "study", label: "Study", href: "/bd/study", tab: true, carry: true },
+      { key: "report", label: "Report", href: "/bd/report", tab: false, carry: false },
     ],
   },
   { href: "/settings", title: "Settings", description: "The connections", tabs: [] },
@@ -34,31 +36,39 @@ function renderAt(pathname: string, search = "") {
 
 describe("SectionBar", () => {
   it("shows the page title as the one heading, with its description", () => {
-    renderAt("/dd");
-    expect(screen.getByRole("heading", { level: 1, name: "Docs Distiller" })).toBeInTheDocument();
-    expect(screen.getByText("Ingest docs, plan distillation, study what was distilled")).toBeInTheDocument();
+    renderAt("/bd");
+    expect(screen.getByRole("heading", { level: 1, name: "Book Distiller" })).toBeInTheDocument();
+    expect(screen.getByText("Upload, distill, study, ask, and inspect book knowledge")).toBeInTheDocument();
   });
 
   it("lists the stage tabs, and marks the current one with aria-current", () => {
-    renderAt("/dd/ingestion");
-    const tabs = within(screen.getByRole("navigation", { name: "Docs Distiller stages" }));
-    expect(tabs.getAllByRole("link").map((link) => link.textContent)).toEqual(["Catalog", "Ingestion"]);
+    renderAt("/bd/ingestion");
+    const tabs = within(screen.getByRole("navigation", { name: "Book Distiller stages" }));
+    expect(tabs.getAllByRole("link").map((link) => link.textContent)).toEqual([
+      "Ingestion",
+      "Pages",
+      "Distill",
+      "Study",
+    ]);
     expect(tabs.getByRole("link", { name: "Ingestion" })).toHaveAttribute("aria-current", "page");
-    expect(tabs.getByRole("link", { name: "Catalog" })).not.toHaveAttribute("aria-current");
+    expect(tabs.getByRole("link", { name: "Pages" })).not.toHaveAttribute("aria-current");
   });
 
-  it("keeps the framework on the tabs that take it, never on the catalog", () => {
-    renderAt("/dd/ingestion", "slug=next-js");
+  it("keeps the book identifier on tabs that accept it", () => {
+    renderAt("/bd/pages", "book=next-js");
+    expect(screen.getByRole("link", { name: "Pages" })).toHaveAttribute(
+      "href",
+      "/bd/pages?book=next-js",
+    );
     expect(screen.getByRole("link", { name: "Ingestion" })).toHaveAttribute(
       "href",
-      "/dd/ingestion?slug=next-js",
+      "/bd/ingestion?book=next-js",
     );
-    expect(screen.getByRole("link", { name: "Catalog" })).toHaveAttribute("href", "/dd");
   });
 
   it("shows a deep-link stage only while the reader is on it", () => {
-    renderAt("/dd/planner");
-    expect(screen.getByRole("link", { name: "Planner" })).toHaveAttribute("aria-current", "page");
+    renderAt("/bd/report");
+    expect(screen.getByRole("link", { name: "Report" })).toHaveAttribute("aria-current", "page");
   });
 
   it("has no tab strip for a section without stages", () => {
