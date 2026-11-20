@@ -347,6 +347,8 @@ def _mermaid_text(value: str) -> str:
         .replace('"', "#quot;")
         .replace("<", "#lt;")
         .replace(">", "#gt;")
+        .replace("(", "#40;")
+        .replace(")", "#41;")
         .replace("|", "#124;")
     )
 

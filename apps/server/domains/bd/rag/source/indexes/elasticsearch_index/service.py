@@ -209,3 +209,37 @@ async def delete_book_revision(
     if existing_indexes:
         await client.indices.refresh(index = existing_indexes)
     return deleted
+
+
+async def delete_book(book_id: str) -> int:
+    """Delete every indexed snapshot of one book from all BD index generations."""
+    client = infra.elasticsearch.service.new_es()
+    index_patterns = (
+        f"{infra.elasticsearch.keys.INDEX_BD_INGESTION}*",
+        f"{infra.elasticsearch.keys.INDEX_BD_RAG_PASSAGES}*",
+    )
+    query = {"term": {"book_id": book_id}}
+    deleted = 0
+    errors: dict[str, str] = {}
+    try:
+        for index_pattern in index_patterns:
+            try:
+                result = await client.delete_by_query(
+                    index = index_pattern,
+                    query = query,
+                    conflicts = "proceed",
+                    refresh = True,
+                    allow_no_indices = True,
+                    ignore_unavailable = True,
+                )
+                if result.get("timed_out") or result.get("failures") or result.get("version_conflicts", 0):
+                    raise RuntimeError("Elasticsearch reported an incomplete delete")
+                deleted += int(result.get("deleted", 0))
+            except Exception as error:  # noqa: BLE001 — try both stores even if one index family fails.
+                errors[index_pattern] = f"{type(error).__name__}: {error}"
+    finally:
+        await client.close()
+    if errors:
+        details = "; ".join(f"{name}: {error}" for name, error in errors.items())
+        raise RuntimeError(f"Elasticsearch book cleanup failed ({details})")
+    return deleted

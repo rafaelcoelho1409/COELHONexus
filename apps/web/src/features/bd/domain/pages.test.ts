@@ -12,6 +12,7 @@ import {
   pageFlags,
   readableMarkdown,
   shownPage,
+  splitPageHeading,
 } from "./pages";
 import { EMPTY_RUN, runReducer } from "./run-state";
 
@@ -68,6 +69,29 @@ describe("mergePages", () => {
   it("lists a streamed page the manifest does not have yet", () => {
     const live = runReducer(EMPTY_RUN, { type: "event", event: bdEventSchema.parse(pageEvent(4)) });
     expect(mergePages([pageEntry(1)], live.pages).map((row) => row.page)).toEqual([1, 4]);
+  });
+});
+
+describe("splitPageHeading", () => {
+  it("lifts the heading that opens a page and leaves the body", () => {
+    expect(splitPageHeading("\n## Chapter 1: Structural Analysis\n\nBody text.\n")).toEqual({
+      heading: { title: "Chapter 1: Structural Analysis", depth: 2 },
+      body: "Body text.\n",
+    });
+  });
+
+  it("reads inline markdown as words and drops closing hashes", () => {
+    expect(splitPageHeading("### The `fit()` **method** ##\n\nText.").heading).toEqual({
+      title: "The fit() method",
+      depth: 3,
+    });
+  });
+
+  it("keeps a page that does not open with a heading whole", () => {
+    const text = "Plain opening.\n\n## Later\n\nBody.";
+    expect(splitPageHeading(text)).toEqual({ heading: null, body: text });
+    expect(splitPageHeading("```md\n## Not a heading\n```").heading).toBeNull();
+    expect(splitPageHeading("   ")).toEqual({ heading: null, body: "   " });
   });
 });
 

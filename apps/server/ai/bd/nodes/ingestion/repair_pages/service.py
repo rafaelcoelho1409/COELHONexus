@@ -100,7 +100,7 @@ async def verify_source_patches(
     verifier: PatchVerifier | None,
     read_source_page_image: graphs.ingestion.entities.SourcePageImageReader | None,
 ) -> tuple[set[str], dict[str, str], list[dict[str, object]], list[str], int]:
-    """Confirm eligible corrections against the original page image; any doubt leaves text unchanged."""
+    """Record advisory source-image evidence without gating automatic proposal application."""
     candidates = domain.source_verification_candidates(markdown, proposals)
     if not candidates:
         return set(), {}, [], [], 0
@@ -373,9 +373,15 @@ async def repair_pages(
         if not source_context:
             return [], f"{role}: assigned issue evidence was not found in the source page", 0, 0
         payload = {
-            "task": "Propose minimal evidence-backed patches only within the supplied source context for these assigned issues.",
+            "task": (
+                "Correct every assigned issue with one or more minimal patches within the supplied source context. "
+                "The user has authorized automatic application of every proposed text correction, regardless of "
+                "risk, confidence, protected-content classification, or image-verification outcome. Do not omit "
+                "an assigned issue because a correction feels uncertain; use your best correction."
+            ),
             "role": role,
             "markdown": source_context,
+            "required_issue_ids": assigned_ids,
             "assigned_issues": [{
                 "issue_id": issue.issue_id,
                 "code": issue.code.value,
@@ -401,7 +407,6 @@ async def repair_pages(
                 source_sha256 = source_sha256,
                 assigned_issues = assigned,
                 role = agents.schemas.SpecialistRole(role),
-                allowed_context = source_context,
             ),
             term_counts = book.term_counts,
             page_edges = book.page_edges,
@@ -413,7 +418,10 @@ async def repair_pages(
             request = payload if not last_error else {
                 **payload,
                 "previous_attempt_rejected": last_error,
-                "response_contract": "Return PatchDraftBatch JSON with a `proposals` array; copy target_text verbatim from `markdown`."
+                "response_contract": (
+                    "Return PatchDraftBatch JSON with a `proposals` array and include at least one proposal for "
+                    "every required_issue_ids entry; copy target_text verbatim from `markdown`."
+                )
                 + (" You ran out of turns: call `check_patches` once at most, then answer." if "model-call limit" in last_error else ""),
             }
             try:
@@ -434,8 +442,14 @@ async def repair_pages(
                     markdown = markdown,
                     assigned_issues = assigned,
                     role = agents.schemas.SpecialistRole(role),
-                    allowed_context = source_context,
                 )
+                proposed_issue_ids = {proposal.issue_id for proposal in proposals}
+                missing_issue_ids = set(assigned_ids) - proposed_issue_ids
+                if missing_issue_ids:
+                    raise ValueError(
+                        "specialist omitted assigned issue IDs: "
+                        + ", ".join(sorted(missing_issue_ids))
+                    )
                 return proposals, None, len(source_context) * attempts, attempts
             except Exception as error:
                 last_error = str(error)[:300]
@@ -473,11 +487,6 @@ async def repair_pages(
                 status = "running",
                 repair_skipped = repair_skipped,
             )
-            oversized = (
-                domains.bd.ingestion.ai.inventory.domain.effective_length(markdown)
-                > domains.bd.ingestion.ai.params.MAX_PAGE_MARKDOWN_CHARS
-            ) and not repair_skipped
-
             issue_list = assessment.issues
             issues = {issue.issue_id: issue for issue in issue_list}
             _, _, mechanically_resolved_before_repair = (
@@ -495,7 +504,7 @@ async def repair_pages(
                 ]
                 if remaining_refs:
                     assigned_items.append({**item, "issue_refs": remaining_refs})
-            responses = [] if oversized or repair_skipped else await asyncio.gather(*(
+            responses = [] if repair_skipped else await asyncio.gather(*(
                 run_specialist(item, markdown, page_number, source_sha256, issues)
                 for item in assigned_items
             ))
@@ -531,11 +540,6 @@ async def repair_pages(
                     for proposal in proposals
                 ]
             audit_warnings.extend(source_verification_warnings)
-            if oversized:
-                errors.append(
-                    f"Page exceeds the {domains.bd.ingestion.ai.params.MAX_PAGE_MARKDOWN_CHARS}-character "
-                    "repair limit; the original Markdown was preserved and the run continued."
-                )
             if repair_skipped:
                 normalized, auto_applied, proposal_reviews = markdown, [], []
             else:

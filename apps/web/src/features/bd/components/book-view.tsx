@@ -968,9 +968,7 @@ function BookDetail({
             units={units}
             chapters={state.chapters.length > 0 ? state.chapters : manifest.chapters}
             onOpenUsage={() => setUsageOpen(true)}
-            replayDisabled={
-              !agentic.run || !["done", "failed", "cancelled"].includes(agentic.status ?? "")
-            }
+            replayDisabled={!agentic.run || !["done", "failed", "cancelled"].includes(agentic.status ?? "")}
             replayPending={replayAgenticNode.isPending}
             replayPendingNodeId={replayPendingNodeId}
             onPlayNode={(nodeId) => void replayAgenticFromNode(nodeId)}
@@ -1030,11 +1028,7 @@ function BookDetail({
             ) : (
               <PageReader
                 bookId={bookId}
-                bookMetadata={{
-                  status,
-                  sizeBytes: manifest.size_bytes,
-                  pageCount: displayedPageCount,
-                }}
+                bookTitle={title}
                 page={page}
                 row={row}
                 nPages={displayedPageCount}
@@ -1082,6 +1076,7 @@ function BookDetail({
             ) : (
               <PageReader
                 bookId={bookId}
+                bookTitle={title}
                 page={page}
                 row={row}
                 nPages={displayedPageCount}
@@ -1094,7 +1089,6 @@ function BookDetail({
                 units={units}
                 content={content}
                 toolbar={activeView === "materials" ? pageNavigationToolbar : undefined}
-                framed={false}
                 previewMode={previewMode}
                 onPreviewModeChange={setPreviewMode}
                 showViewControls={activeView !== "materials"}

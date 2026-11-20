@@ -9,6 +9,7 @@ ISSUES_BY_ROLE = {
         "soft_hyphen",
         "fused_marker",
         "text_corruption",
+        "other",
     }),
     "structure": frozenset({"structure", "toc_noise", "table_or_index_layout"}),
 }

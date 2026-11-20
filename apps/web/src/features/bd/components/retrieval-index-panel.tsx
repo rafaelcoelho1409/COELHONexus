@@ -3,22 +3,23 @@
 import { ChartNoAxesColumn, Info } from "lucide-react";
 import dynamic from "next/dynamic";
 import { useState } from "react";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/shared/ui/tabs";
 import { apiErrorMessage } from "@/shared/lib/api-error";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/shared/ui/tabs";
 import type { AgenticNodeResources, AgenticNodeStatus, AgenticNodeView } from "../domain/agentic-progress";
 import {
   retrievalIndexNeedsUpdate,
+  retrievalIndexReplayBlocker,
   retrievalIndexStatusLabel,
 } from "../domain/retrieval-index";
 import type { AgenticRunStatus, AgenticUsage, RetrievalIndexStatus } from "../entities";
+import { useAgenticUsage } from "../hooks/use-agentic-run";
+import { useReplayRetrievalIndexNode, useResumeRetrievalIndex } from "../hooks/use-bd-data";
 import { SideSheet } from "../rag/components/side-sheet";
 import { ActionButton } from "./action-button";
 import type { AgenticFlowConnection, AgenticFlowPosition } from "./agentic-flow";
 import { AgenticNodeDetailsList, AgenticNodeList, AgenticPills, AgenticStatusBadge } from "./agentic-parts";
 import { AgenticUsageBreakdown, AgenticUsageSheet } from "./agentic-pipeline";
 import { ToggleGroup } from "./toggle-group";
-import { useReplayRetrievalIndexNode } from "../hooks/use-bd-data";
-import { useAgenticUsage } from "../hooks/use-agentic-run";
 
 const AgenticFlow = dynamic(() => import("./agentic-flow").then((module) => module.AgenticFlow), {
   ssr: false,
@@ -134,6 +135,7 @@ export function RetrievalIndexPanel({ bookId, run, index }: Props) {
   const [replayMessage, setReplayMessage] = useState<string | null>(null);
   const [selectedNodeId, setSelectedNodeId] = useState<RetrievalNodeId>("pin_sources");
   const replayNode = useReplayRetrievalIndexNode();
+  const resumeIndex = useResumeRetrievalIndex();
   const live = index?.status === "queued" || index?.status === "running";
   const indexOutdated = retrievalIndexNeedsUpdate(index, run);
   const views = nodeViews(index);
@@ -149,11 +151,9 @@ export function RetrievalIndexPanel({ bookId, run, index }: Props) {
   const selectedNodeUsage = usageForNode(usage.data, selectedNodeId);
   const completedCount = views.filter((node) => node.status === "done").length;
   const statusText = retrievalIndexStatusLabel(index, run);
+  const replayPending = replayNode.isPending || resumeIndex.isPending;
   const canReplay = Boolean(
-    index &&
-      !live &&
-      !indexOutdated &&
-      ["done", "failed", "cancelled"].includes(index.status),
+    index && !live && !indexOutdated && ["done", "failed", "cancelled"].includes(index.status),
   );
 
   return (
@@ -205,7 +205,7 @@ export function RetrievalIndexPanel({ bookId, run, index }: Props) {
             onOpenNode={openNode}
             onPlayNode={replayFromNode}
             replayDisabled={!canReplay}
-            replayPending={replayNode.isPending}
+            replayPending={replayPending}
             replayPendingNodeId={replayNodeId}
             ariaLabel="Agentic RAG graph"
             className="h-[min(76vh,760px)] min-h-[640px]"
@@ -218,7 +218,7 @@ export function RetrievalIndexPanel({ bookId, run, index }: Props) {
               onOpen={openNode}
               onPlay={replayFromNode}
               replayDisabled={!canReplay}
-              replayPending={replayNode.isPending}
+              replayPending={replayPending}
               replayPendingNodeId={replayNodeId}
               label="Processed-book retrieval-index nodes"
             />
@@ -226,7 +226,14 @@ export function RetrievalIndexPanel({ bookId, run, index }: Props) {
         )}
       </div>
       {replayMessage ? (
-        <p role={replayMessage.startsWith("Replay failed") ? "alert" : "status"} className="mt-3 text-sm">
+        <p
+          role={
+            replayMessage.startsWith("Replay failed") || replayMessage.startsWith("Resume failed")
+              ? "alert"
+              : "status"
+          }
+          className="mt-3 text-sm"
+        >
           {replayMessage}
         </p>
       ) : null}
@@ -247,7 +254,10 @@ export function RetrievalIndexPanel({ bookId, run, index }: Props) {
           closeLabel="Close Agentic RAG details"
           onClose={() => setIndexInfoOpen(false)}
         >
-          <section aria-label="Retrieval index status" className="rounded-sm border border-border bg-card p-4">
+          <section
+            aria-label="Retrieval index status"
+            className="rounded-sm border border-border bg-card p-4"
+          >
             <h3 className="text-sm font-medium">Index status</h3>
             <div className="mt-3 flex flex-col gap-3">
               <Metric label="Completed nodes" value={`${completedCount} / ${INDEX_NODES.length}`} />
@@ -255,7 +265,10 @@ export function RetrievalIndexPanel({ bookId, run, index }: Props) {
                 label="Processed pages"
                 value={(index?.processed_page_count ?? run?.processed_page_count ?? 0).toLocaleString()}
               />
-              <Metric label="Active stage" value={index?.current_node ? nodeLabel(index.current_node) : "—"} />
+              <Metric
+                label="Active stage"
+                value={index?.current_node ? nodeLabel(index.current_node) : "—"}
+              />
               <Metric
                 label="Elasticsearch documents"
                 value={(index?.elasticsearch_document_count ?? 0).toLocaleString()}
@@ -267,16 +280,14 @@ export function RetrievalIndexPanel({ bookId, run, index }: Props) {
               <Metric label="Qdrant points" value={(index?.qdrant_point_count ?? 0).toLocaleString()} />
               <Metric
                 label="Neo4j nodes / relationships"
-                value={`${(index?.neo4j_node_count ?? 0).toLocaleString()} / ${
-                  (index?.neo4j_relationship_count ?? 0).toLocaleString()
-                }`}
+                value={`${(index?.neo4j_node_count ?? 0).toLocaleString()} / ${(
+                  index?.neo4j_relationship_count ?? 0
+                ).toLocaleString()}`}
               />
               {index && index.graph_batches_total > 0 ? (
                 <Metric
                   label="Graph extraction batches"
-                  value={
-                    `${index.graph_batches_completed.toLocaleString()} / ${index.graph_batches_total.toLocaleString()}`
-                  }
+                  value={`${index.graph_batches_completed.toLocaleString()} / ${index.graph_batches_total.toLocaleString()}`}
                 />
               ) : null}
               {indexOutdated ? <Metric label="Workflow" value="Update available" /> : null}
@@ -318,17 +329,13 @@ export function RetrievalIndexPanel({ bookId, run, index }: Props) {
                   {index.neo4j_node_write_batches_total > 0 ? (
                     <Metric
                       label="Node write batches"
-                      value={`${index.neo4j_node_write_batches_completed.toLocaleString()} / ${
-                        index.neo4j_node_write_batches_total.toLocaleString()
-                      }`}
+                      value={`${index.neo4j_node_write_batches_completed.toLocaleString()} / ${index.neo4j_node_write_batches_total.toLocaleString()}`}
                     />
                   ) : null}
                   {index.neo4j_relationship_write_batches_total > 0 ? (
                     <Metric
                       label="Relationship write batches"
-                      value={`${index.neo4j_relationship_write_batches_completed.toLocaleString()} / ${
-                        index.neo4j_relationship_write_batches_total.toLocaleString()
-                      }`}
+                      value={`${index.neo4j_relationship_write_batches_completed.toLocaleString()} / ${index.neo4j_relationship_write_batches_total.toLocaleString()}`}
                     />
                   ) : null}
                 </>
@@ -364,9 +371,34 @@ export function RetrievalIndexPanel({ bookId, run, index }: Props) {
   }
 
   function replayFromNode(nodeId: string) {
-    if (!isRetrievalNodeId(nodeId) || !index || replayNode.isPending || !canReplay) return;
+    if (!isRetrievalNodeId(nodeId) || !index || replayNode.isPending || resumeIndex.isPending || !canReplay)
+      return;
     setReplayMessage(null);
     setReplayNodeId(nodeId);
+    const blocker = retrievalIndexReplayBlocker(index, nodeId);
+    if (blocker && (index.status === "failed" || index.status === "cancelled")) {
+      resumeIndex.mutate(
+        { bookId, agenticRunId: index.agentic_run_id },
+        {
+          onSuccess: () => {
+            setReplayNodeId(null);
+            setReplayMessage(
+              `${nodeLabel(blocker)} is incomplete; Agentic RAG resumed to finish all pending stages.`,
+            );
+          },
+          onError: (error) => {
+            setReplayNodeId(null);
+            setReplayMessage(`Resume failed — ${apiErrorMessage(error)}`);
+          },
+        },
+      );
+      return;
+    }
+    if (blocker) {
+      setReplayNodeId(null);
+      setReplayMessage(`Cannot replay ${nodeLabel(nodeId)} yet: ${nodeLabel(blocker)} has not completed.`);
+      return;
+    }
     replayNode.mutate(
       { bookId, agenticRunId: index.agentic_run_id, nodeId },
       {
@@ -390,16 +422,17 @@ function nodeViews(index: RetrievalIndexStatus | null): AgenticNodeView[] {
     const liveLine = nodeLiveLine(index, node.id, status);
     const totalPages = index?.processed_page_count ?? 0;
     const pageProgress = PAGE_PROGRESS[node.id];
-    const progress = node.id === "neo4j" && index && totalPages > 0 && status !== "pending"
-      ? neo4jNodeProgress(index, status, totalPages)
-      : index && pageProgress && totalPages > 0 && status !== "pending"
-        ? {
-            current: status === "done" ? totalPages : Math.min(index[pageProgress.field], totalPages),
-            total: totalPages,
-            label: pageProgress.label,
-            active: 0,
-          }
-        : null;
+    const progress =
+      node.id === "neo4j" && index && totalPages > 0 && status !== "pending"
+        ? neo4jNodeProgress(index, status, totalPages)
+        : index && pageProgress && totalPages > 0 && status !== "pending"
+          ? {
+              current: status === "done" ? totalPages : Math.min(index[pageProgress.field], totalPages),
+              total: totalPages,
+              label: pageProgress.label,
+              active: 0,
+            }
+          : null;
 
     return {
       id: node.id,
@@ -516,8 +549,10 @@ function nodeKpi(
   if (!index || status !== "done") return null;
   if (nodeId === "pin_sources") return `${index.processed_page_count.toLocaleString()} pages`;
   if (nodeId === "elasticsearch") {
-    return `${index.elasticsearch_document_count.toLocaleString()} pages · ` +
-      `${index.elasticsearch_passage_count.toLocaleString()} passages`;
+    return (
+      `${index.elasticsearch_document_count.toLocaleString()} pages · ` +
+      `${index.elasticsearch_passage_count.toLocaleString()} passages`
+    );
   }
   if (nodeId === "qdrant") return `${index.qdrant_point_count.toLocaleString()} points`;
   if (nodeId === "neo4j") {

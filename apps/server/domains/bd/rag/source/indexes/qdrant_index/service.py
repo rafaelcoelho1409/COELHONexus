@@ -242,3 +242,52 @@ async def prune_stale_book_points(
         return len(stale_ids)
     finally:
         await client.close()
+
+
+async def delete_book(book_id: str) -> int:
+    """Delete a book's points from every current and retired BD collection."""
+    if not book_id:
+        raise ValueError("a book ID is required")
+    client = infra.qdrant.service.new_qdrant()
+    models = infra.qdrant.service.models
+    book_filter = models.Filter(must = [
+        models.FieldCondition(key = "book_id", match = models.MatchValue(value = book_id)),
+    ])
+    prefix = params.QDRANT_COLLECTION_PREFIX
+    errors: dict[str, str] = {}
+    deleted = 0
+    try:
+        collections = await client.get_collections()
+        collection_names = sorted(
+            collection.name
+            for collection in collections.collections
+            if collection.name == prefix or collection.name.startswith(f"{prefix}__")
+        )
+        for collection_name in collection_names:
+            try:
+                before = await client.count(
+                    collection_name = collection_name,
+                    count_filter = book_filter,
+                    exact = True,
+                )
+                await client.delete(
+                    collection_name = collection_name,
+                    points_selector = models.FilterSelector(filter = book_filter),
+                    wait = True,
+                )
+                remaining = await client.count(
+                    collection_name = collection_name,
+                    count_filter = book_filter,
+                    exact = True,
+                )
+                if remaining.count:
+                    raise RuntimeError(f"{remaining.count} book points remain after deletion")
+                deleted += before.count
+            except Exception as error:  # noqa: BLE001 — continue cleaning the other collections.
+                errors[collection_name] = f"{type(error).__name__}: {error}"
+    finally:
+        await client.close()
+    if errors:
+        details = "; ".join(f"{name}: {error}" for name, error in errors.items())
+        raise RuntimeError(f"Qdrant book cleanup failed ({details})")
+    return deleted

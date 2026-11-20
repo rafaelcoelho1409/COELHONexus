@@ -24,7 +24,7 @@ class QueryRequest(BaseModel):
     purpose."""
     app:   AppLiteral = "ycs"
     q:     str        = Field(default = "", description = "Free-text query. Empty = browse-all.")
-    limit: int        = Field(default = params.DEFAULT_LIMIT, ge = 1, le = params.MAX_LIMIT)
+    limit: int        = Field(default = params.DEFAULT_LIMIT, ge = 1)
     # Pagination is only meaningful for ES + Neo4j (Qdrant kNN is unranked
     # beyond `limit`). The Qdrant endpoint ignores this.
     offset: int = Field(default = 0, ge = 0)

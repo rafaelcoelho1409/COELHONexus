@@ -4,6 +4,7 @@ import ai
 import infra.celery
 from . import keys, params, replay, runs
 from .. import source
+from ... import ingestion
 from .... import settings
 
 import asyncio
@@ -33,16 +34,9 @@ def index_processed_book(self, book_id: str, agentic_run_id: str) -> dict:
         owner = f"{self.request.id or agentic_run_id}:{uuid.uuid4().hex}"
         async with infra.redis.service.client() as redis:
             lock_key = keys.lock_key(book_id, agentic_run_id)
-            acquired, current_owner = await infra.redis.service.try_lock(
-                redis,
-                lock_key,
-                owner,
-                params.RUN_LOCK_LEASE_S,
-            )
-            if not acquired:
-                return {"execution_lock_busy": True, "owner": current_owner}
-
             lease_lost = asyncio.Event()
+            heartbeat = None
+            checkpointer_initialized = False
 
             async def renew_execution_lease() -> None:
                 while True:
@@ -63,36 +57,48 @@ def index_processed_book(self, book_id: str, agentic_run_id: str) -> dict:
                         logger.error("[bd-retrieval-index] execution lease lost for %s", agentic_run_id)
                         return
 
-            heartbeat = asyncio.create_task(renew_execution_lease())
-            checkpointer_initialized = False
             try:
-                manifest = await runs.service.read_index(book_id, agentic_run_id, storage = storage)
-                if manifest is None:
-                    raise FileNotFoundError("retrieval-index run manifest was not found")
-                if manifest["status"] in {"done", "cancelled"}:
-                    return {
-                        "book_id": book_id,
-                        "agentic_run_id": agentic_run_id,
-                        "status": manifest["status"],
-                        "ignored_stale_delivery": True,
-                    }
-                if await runs.service.cancel_requested(book_id, agentic_run_id):
+                async with redis.lock(
+                    ingestion.ai.progress.keys.book_mutation_lock_key(book_id),
+                    timeout = 120,
+                    blocking_timeout = 30,
+                ):
+                    acquired, current_owner = await infra.redis.service.try_lock(
+                        redis,
+                        lock_key,
+                        owner,
+                        params.RUN_LOCK_LEASE_S,
+                    )
+                    if not acquired:
+                        return {"execution_lock_busy": True, "owner": current_owner}
+                    manifest = await runs.service.read_index(book_id, agentic_run_id, storage = storage)
+                    if manifest is None:
+                        raise FileNotFoundError("retrieval-index run manifest was not found")
+                    if manifest["status"] in {"done", "cancelled"}:
+                        return {
+                            "book_id": book_id,
+                            "agentic_run_id": agentic_run_id,
+                            "status": manifest["status"],
+                            "ignored_stale_delivery": True,
+                        }
+                    if await runs.service.cancel_requested(book_id, agentic_run_id):
+                        manifest.update(
+                            status = "cancelled",
+                            cancel_requested = False,
+                            finished_at = max(time.time(), manifest["created_at"]),
+                            error = None,
+                        )
+                        await runs.service.write_manifest(manifest, storage = storage)
+                        return {"book_id": book_id, "agentic_run_id": agentic_run_id, "status": "cancelled"}
+
                     manifest.update(
-                        status = "cancelled",
-                        cancel_requested = False,
-                        finished_at = max(time.time(), manifest["created_at"]),
+                        status = "running",
+                        updated_at = max(time.time(), manifest["created_at"]),
+                        finished_at = None,
                         error = None,
                     )
-                    await runs.service.write_manifest(manifest, storage = storage)
-                    return {"book_id": book_id, "agentic_run_id": agentic_run_id, "status": "cancelled"}
-
-                manifest.update(
-                    status = "running",
-                    updated_at = max(time.time(), manifest["created_at"]),
-                    finished_at = None,
-                    error = None,
-                )
-                manifest = await runs.service.write_manifest(manifest, storage = storage)
+                    manifest = await runs.service.write_manifest(manifest, storage = storage)
+                heartbeat = asyncio.create_task(renew_execution_lease())
                 await infra.postgres.service.init_checkpointer()
                 checkpointer_initialized = True
                 graph = ai.bd.graphs.rag.graphs.retrieval_index_graph(
@@ -343,9 +349,10 @@ def index_processed_book(self, book_id: str, agentic_run_id: str) -> dict:
                     return {"book_id": book_id, "agentic_run_id": agentic_run_id, "status": "cancelled"}
                 raise
             finally:
-                heartbeat.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await heartbeat
+                if heartbeat is not None:
+                    heartbeat.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await heartbeat
                 if checkpointer_initialized:
                     await infra.postgres.service.close_checkpointer()
                 await settings.chat.service.close_shared_http_client()

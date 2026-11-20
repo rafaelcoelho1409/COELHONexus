@@ -123,7 +123,7 @@ def parse_elasticsearch_body(text: str) -> entities.ParsedElasticsearchBody:
 
     synth_size = False
     if "size" not in body:
-        body["size"] = params.ES_MAX_SIZE // 10
+        body["size"] = params.ES_DEFAULT_SIZE
         synth_size = True
     else:
         try:
@@ -132,11 +132,6 @@ def parse_elasticsearch_body(text: str) -> entities.ParsedElasticsearchBody:
             raise errors.QueryNotAllowed(f"`size` must be an integer, got {body['size']!r}.") from error
         if size < 0:
             raise errors.QueryNotAllowed("`size` must be >= 0.")
-        if size > params.ES_MAX_SIZE:
-            raise errors.QueryNotAllowed(
-                f"`size` is {size} — the Query page caps at {params.ES_MAX_SIZE} "
-                "to keep response payloads bounded.",
-            )
 
     return entities.ParsedElasticsearchBody(body = body, synth_size = synth_size)
 
@@ -182,10 +177,6 @@ def parse_qdrant_body(text: str) -> entities.ParsedQdrantOperation:
             raise errors.QueryNotAllowed(f"`limit` must be an integer, got {limit!r}.") from error
         if limit < 1:
             raise errors.QueryNotAllowed("`limit` must be >= 1.")
-        if limit > params.QDRANT_MAX_QUERY_LIMIT:
-            raise errors.QueryNotAllowed(
-                f"`limit` is {limit} — Query page caps at {params.QDRANT_MAX_QUERY_LIMIT}.",
-            )
         body["limit"] = limit
 
     return entities.ParsedQdrantOperation(operation = operation, body = body)

@@ -631,7 +631,11 @@ async def cancel_book(book_id: str) -> dict:
 
 
 async def delete_book(book_id: str) -> dict:
-    return await domains.bd.ingestion.source.runtime.dispatch.service.wipe_book(book_id)
+    return await domains.bd.ingestion.source.runtime.dispatch.service.wipe_book(
+        book_id,
+        delete_indexed_book = domains.bd.rag.source.indexes.service.delete_book,
+        has_active_index_run = domains.bd.rag.ai.runs.service.has_active_index_run,
+    )
 
 
 async def wipe_extraction(book_id: str) -> dict:

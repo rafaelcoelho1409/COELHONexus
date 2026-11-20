@@ -118,6 +118,10 @@ async def replay_index_node(book_id: str, agentic_run_id: str, node_id: str) -> 
         raise ValueError(f"unknown retrieval-index graph node {node_id!r}")
     storage = infra.minio.service.get_storage()
     async with infra.redis.service.client() as redis, redis.lock(
+        ingestion.ai.progress.keys.book_mutation_lock_key(book_id),
+        timeout = 120,
+        blocking_timeout = 30,
+    ), redis.lock(
         keys.enqueue_lock_key(book_id, agentic_run_id),
         timeout = 120,
         blocking_timeout = 30,

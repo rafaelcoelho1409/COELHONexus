@@ -335,7 +335,7 @@ def parse_es_body(text: str) -> entities.ParsedESBody:
       - valid JSON
       - top-level `query` clause (refuse free-form `script`/`update`/
         `delete_by_query` payloads if the user smuggles them in)
-      - `size <= ES_MAX_SIZE` (default to `ES_MAX_SIZE/10` when absent)
+      - a default `size` when absent
     """
     if not text.strip():
         raise errors.QueryNotAllowed("Empty Elasticsearch body.")
@@ -359,7 +359,7 @@ def parse_es_body(text: str) -> entities.ParsedESBody:
 
     synth = False
     if "size" not in body:
-        body["size"] = params.ES_MAX_SIZE // 10
+        body["size"] = params.ES_DEFAULT_SIZE
         synth = True
     else:
         try:
@@ -368,11 +368,6 @@ def parse_es_body(text: str) -> entities.ParsedESBody:
             raise errors.QueryNotAllowed(f"`size` must be an integer, got {body['size']!r}.")
         if n < 0:
             raise errors.QueryNotAllowed("`size` must be >= 0.")
-        if n > params.ES_MAX_SIZE:
-            raise errors.QueryNotAllowed(
-                f"`size` is {n} — the Query page caps at {params.ES_MAX_SIZE} "
-                "to keep response payloads bounded.",
-            )
 
     return entities.ParsedESBody(body = body, synth_size = synth)
 
@@ -404,20 +399,16 @@ def parse_qdrant_body(text: str) -> entities.ParsedQdrantOp:
             f"Read-only ops: {', '.join(params.QDRANT_READ_OPS)}.",
         )
 
-    # Clamp limit / size. Different op names use different keys —
-    # `limit` (most), `count` (count). Always synthesize one.
+    # Validate `limit` for point-returning operations, and preserve the
+    # default when the caller omits it.
     if op in ("search", "scroll", "query_points"):
-        limit = body.get("limit", 20)
+        limit = body.get("limit", params.QDRANT_DEFAULT_LIMIT)
         try:
             n = int(limit)
         except (TypeError, ValueError):
             raise errors.QueryNotAllowed(f"`limit` must be an integer, got {limit!r}.")
         if n < 1:
             raise errors.QueryNotAllowed("`limit` must be >= 1.")
-        if n > params.QDRANT_MAX_LIMIT:
-            raise errors.QueryNotAllowed(
-                f"`limit` is {n} — Query page caps at {params.QDRANT_MAX_LIMIT}.",
-            )
         body["limit"] = n
 
     return entities.ParsedQdrantOp(op = op, body = body)

@@ -121,8 +121,8 @@ def validate_proposals(
     markdown: str,
     assigned_issues: dict[str, agents.schemas.PageIssue],
     role: agents.schemas.SpecialistRole,
-    allowed_context: str | None = None,
 ) -> list[agents.schemas.PatchProposal]:
+    """Validate source-bound proposals for automatic application without quality-based vetoes."""
     if isinstance(value, agents.schemas.PatchProposalBatch):
         proposals_to_validate = value.proposals
     else:
@@ -157,8 +157,6 @@ def validate_proposals(
                 ))
 
     proposals: list[agents.schemas.PatchProposal] = []
-    rejected: list[str] = []
-    seen_issue_ids: set[str] = set()
     for proposal in proposals_to_validate:
         if proposal.page_number != page_number:
             raise ValueError("patch proposal page does not match its source page")
@@ -166,72 +164,29 @@ def validate_proposals(
             raise ValueError("patch proposal was generated for a different source version")
         if proposal.issue_id not in assigned_issues:
             raise ValueError("patch proposal references an issue not assigned to this specialist")
-        if proposal.issue_id in seen_issue_ids:
-            # Keep the first source-validated proposal; a duplicate must not discard the whole batch.
-            continue
         if proposal.issue_code != assigned_issues[proposal.issue_id].code:
             raise ValueError("patch proposal issue code does not match its assigned issue")
         if proposal.issue_code not in agents.schemas.ALLOWED_ISSUES_BY_ROLE[role]:
             raise ValueError("patch proposal issue code is outside this specialist's scope")
-        if _invents_text(proposal):
-            continue
-        # A target the page cannot support loses only its own proposal; its issue stays unresolved and is reported.
         if not proposal.target_text or proposal.target_text not in markdown:
-            rejected.append("patch proposal target is not present in the source page")
-            continue
-        if allowed_context is not None and proposal.target_text not in allowed_context:
-            rejected.append("patch proposal target is outside the supplied repair context")
-            continue
+            raise ValueError("patch proposal target is not present in the source page")
         start = markdown.find(proposal.target_text)
-        if markdown.find(proposal.target_text, start + 1) >= 0 and not all(
-            _is_spacing_repair(proposal, markdown, found, found + len(proposal.target_text))
-            for found in _occurrences(markdown, proposal.target_text)
-        ):
-            # Only a verified space-only repair may name a phrase that occurs more than once: it is the same fix at each.
-            rejected.append("patch proposal target is ambiguous in the source page")
-            continue
         end = start + len(proposal.target_text)
-        # The target is exact and unique, so the patch is fully determined; quoted anchors only disambiguate and
-        # models often paraphrase them. A wrong anchor is dropped instead of discarding an otherwise valid patch.
+        # The target is source-bound; quoted anchors are descriptive and models sometimes paraphrase them.
         if proposal.context_before and not markdown[:start].endswith(proposal.context_before):
             proposal = proposal.model_copy(update = {"context_before": ""})
         if proposal.context_after and not markdown[end:].startswith(proposal.context_after):
             proposal = proposal.model_copy(update = {"context_after": ""})
-        if allowed_context is not None:
-            anchored_text = f"{proposal.context_before}{proposal.target_text}{proposal.context_after}"
-            if anchored_text not in allowed_context:
-                raise ValueError("patch proposal anchor is outside the supplied repair context")
         for evidence in proposal.evidence:
             if evidence.source != agents.schemas.EvidenceSource.PAGE_MARKDOWN:
                 raise ValueError("patch evidence must come from the supplied Markdown page")
             if evidence.page_number != page_number or evidence.excerpt not in markdown:
                 raise ValueError("patch evidence is not an exact excerpt from the supplied page")
         proposal = _expand_detached_heading_plural_suffix(proposal, markdown)
-        if allowed_context is not None and proposal.target_text not in allowed_context:
-            raise ValueError("expanded patch target is outside the supplied repair context")
-        seen_issue_ids.add(proposal.issue_id)
+        if proposal.target_text not in markdown:
+            raise ValueError("expanded patch target is not present in the source page")
         proposals.append(proposal)
-
-    if rejected and not proposals:
-        # Nothing usable survived, so let the caller retry with the reason instead of reporting a silent no-op.
-        raise ValueError(rejected[0])
     return proposals
-
-
-def _invents_text(proposal: agents.schemas.PatchProposal) -> bool:
-    """True when a replacement adds words, links, images or markers that the page never contained."""
-    target, replacement = proposal.target_text, proposal.replacement
-    # A page may end mid-sentence because its paragraph continues on the next page; added words are invented text.
-    if replacement.startswith(target) and len(replacement[len(target):].split()) > 1:
-        return True
-    squeezed_target = patterns.SPACE_RE.sub("", target)
-    return any(
-        patterns.SPACE_RE.sub("", introduced) not in squeezed_target
-        for introduced in (
-            *patterns.LINK_DESTINATION_RE.findall(replacement),
-            *patterns.HTML_COMMENT_RE.findall(replacement),
-        )
-    )
 
 
 def check_draft(
@@ -246,9 +201,8 @@ def check_draft(
     source_sha256: str,
     assigned_issues: dict[str, agents.schemas.PageIssue],
     role: agents.schemas.SpecialistRole,
-    allowed_context: str,
 ) -> str:
-    """Tell a specialist whether a draft passes the exact checks used before automatic application."""
+    """Check source and issue binding; risk and confidence do not gate automatic application."""
     if issue_id not in assigned_issues:
         return f"rejected: {issue_id!r} is not one of your assigned issues ({', '.join(assigned_issues)})"
     try:
@@ -267,12 +221,11 @@ def check_draft(
             markdown = markdown,
             assigned_issues = assigned_issues,
             role = role,
-            allowed_context = allowed_context,
         )
     except ValueError as error:
         return f"rejected: {str(error)[:300]}"
     if not accepted:
-        return "rejected: the replacement adds words, a link or a marker that the page does not contain"
+        return "rejected: no applicable patch was returned"
     proposal = accepted[0]
     starts = _occurrences(markdown, proposal.target_text)
     if starts:
@@ -308,37 +261,39 @@ def apply_proposals(
     markdown: str,
     proposals: list[agents.schemas.PatchProposal],
 ) -> tuple[str, list[str], list[str]]:
-    # One span per occurrence: a space-only repair of a phrase that appears twice is the same fix in both places.
+    # Every accepted patch applies to all exact occurrences of its target in this source version.
     spans = [
         (start, start + len(proposal.target_text), proposal)
         for proposal in proposals
         for start in _occurrences(markdown, proposal.target_text)
     ]
     spans.sort(key = lambda span: span[0])
-    # Every proposal that passed exact-source, issue-scope, and no-invented-content validation is applied. The user
-    # explicitly trusts these quality corrections; visual verification remains advisory. Identical proposals from
-    # separate issue records describe one edit and must be deduplicated before overlapping edits are evaluated.
+    # Identical proposals from separate issue records describe one edit and are deduplicated before overlap handling.
     edit_groups: dict[tuple[int, int, str], list[agents.schemas.PatchProposal]] = {}
     for start, end, proposal in spans:
         edit_groups.setdefault((start, end, proposal.replacement), []).append(proposal)
-    edits = sorted(edit_groups.items(), key = lambda item: item[0][0])
-    conflicting_issue_ids: set[str] = set()
-    for index, ((start, end, _), proposals_for_edit) in enumerate(edits):
-        for (previous_start, previous_end, _), previous_proposals in edits[:index]:
-            if start < previous_end and previous_start < end:
-                conflicting_issue_ids.update(proposal.issue_id for proposal in proposals_for_edit)
-                conflicting_issue_ids.update(proposal.issue_id for proposal in previous_proposals)
+    edits = list(edit_groups.items())
+    # Resolve conflicts locally: the longest exact source span wins; unrelated proposals still apply.
+    edits.sort(key = lambda item: (item[0][0], -(item[0][1] - item[0][0])))
 
     normalized = markdown
     applied_issue_ids: dict[str, None] = {}
     review_issue_ids: dict[str, None] = {}
-    for (start, end, replacement), grouped_proposals in reversed(edits):
+    selected_edits: list[tuple[tuple[int, int, str], list[agents.schemas.PatchProposal]]] = []
+    for edit, grouped_proposals in edits:
+        start, end, _ = edit
+        if any(
+            start < selected_edit[1] and selected_edit[0] < end
+            for selected_edit, _ in selected_edits
+        ):
+            review_issue_ids.update(dict.fromkeys(proposal.issue_id for proposal in grouped_proposals))
+            continue
+        selected_edits.append((edit, grouped_proposals))
+
+    for (start, end, replacement), grouped_proposals in reversed(selected_edits):
         issue_ids = {proposal.issue_id for proposal in grouped_proposals}
-        if issue_ids.isdisjoint(conflicting_issue_ids):
-            normalized = normalized[:start] + replacement + normalized[end:]
-            applied_issue_ids.update(dict.fromkeys(issue_ids))
-        else:
-            review_issue_ids.update(dict.fromkeys(issue_ids))
+        normalized = normalized[:start] + replacement + normalized[end:]
+        applied_issue_ids.update(dict.fromkeys(issue_ids))
     for issue_id in applied_issue_ids:
         review_issue_ids.pop(issue_id, None)
     return normalized, list(reversed(applied_issue_ids)), list(reversed(review_issue_ids))

@@ -1,8 +1,8 @@
-import { readerFont } from "@/shared/markdown/reader-font";
 import type { ReactNode } from "react";
-
-import { CONTENTS_ENTRIES_PER_PAGE } from "../params";
+import { readerFont } from "@/shared/markdown/reader-font";
 import type { ProcessedBook } from "../entities";
+import { CONTENTS_ENTRIES_PER_PAGE } from "../params";
+import { ReaderPageFrame } from "./reader-page-frame";
 
 type ContentsEntry = ProcessedBook["contents"][number];
 
@@ -26,22 +26,13 @@ export function GeneratedContentsPage({
   const pageEntries = entries.slice(start, start + CONTENTS_ENTRIES_PER_PAGE);
 
   return (
-    <article
-      aria-label={`Table of contents page ${pageIndex + 1} of ${pageCount}`}
-      className="min-w-0 rounded-md border border-border bg-card p-4 sm:p-5"
+    <ReaderPageFrame
+      ariaLabel={`Table of contents page ${pageIndex + 1} of ${pageCount}`}
+      label={`CONTENTS · ${pageIndex + 1} OF ${pageCount}`}
+      title="Table of Contents"
+      subtitle={bookTitle}
+      toolbar={toolbar}
     >
-      <header className="mb-5 border-b border-border pb-4">
-        <div className="flex items-center justify-between gap-2">
-          <p className="mono-label">
-            CONTENTS · {pageIndex + 1} OF {pageCount}
-          </p>
-          {toolbar}
-        </div>
-        <h2 className={`${readerFont.className} mt-2 text-2xl font-semibold tracking-tight`}>
-          Table of Contents
-        </h2>
-        <p className={`${readerFont.className} mt-1 text-base text-muted-foreground`}>{bookTitle}</p>
-      </header>
       <ol aria-label="Book sections" className={readerFont.className}>
         {pageEntries.map((entry) => (
           <li
@@ -63,6 +54,6 @@ export function GeneratedContentsPage({
           </li>
         ))}
       </ol>
-    </article>
+    </ReaderPageFrame>
   );
 }

@@ -14,12 +14,11 @@ class PatchCheck(BaseModel):
 
 @tool
 def check_patches(patches: list[PatchCheck], runtime: ToolRuntime) -> str:
-    """Check all the patches you plan to send, in one call, before you answer.
+    """Validate all proposed patches together before returning the final batch.
 
-    For each patch it says whether the application rejects it, sends it for source-image verification, or preserves and
-    reports it. Only a deterministic safe fix or an exact source-image-confirmed correction is applied automatically.
-    `issue_id` is one of your assigned issues; `target_text` must be copied exactly from the supplied Markdown.
-    Include the patch's actual risk and confidence so this check matches the final safety gate. This tool changes nothing.
+    It checks assigned issue scope and exact source text. Every valid patch is automatically applied, regardless of
+    risk, confidence, technical-content classification, or source-image verification. `issue_id` must be assigned to
+    this specialist, and `target_text` must be copied exactly from the supplied Markdown.
     """
     results = []
     for number, patch in enumerate(patches, start = 1):

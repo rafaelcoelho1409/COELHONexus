@@ -79,6 +79,37 @@ export function readableMarkdown(text: string): string {
     .trim();
 }
 
+const HEADING = /^(#{1,6})\s+(.*)$/;
+
+function headingText(raw: string): string {
+  return raw
+    .replace(/`([^`]*)`/g, "$1")
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/[*_~]/g, "")
+    .replace(/\s+#+\s*$/, "")
+    .trim();
+}
+
+/** A page that opens with a heading shows that heading once, above its text, instead of twice. The opening heading is
+ * lifted out; a page that starts with anything else keeps its markdown whole. */
+export function splitPageHeading(markdown: string): {
+  heading: { title: string; depth: number } | null;
+  body: string;
+} {
+  const lines = markdown.split(/\r?\n/);
+  const first = lines.findIndex((line) => line.trim() !== "");
+  if (first < 0) return { heading: null, body: markdown };
+  const match = HEADING.exec(lines[first]?.trim() ?? "");
+  if (!match?.[1] || match[2] === undefined) return { heading: null, body: markdown };
+  const title = headingText(match[2]);
+  if (!title) return { heading: null, body: markdown };
+  return {
+    heading: { title, depth: match[1].length },
+    body: [...lines.slice(0, first), ...lines.slice(first + 1)].join("\n").trimStart(),
+  };
+}
+
 const BREADCRUMB_SEPARATOR = " › ";
 
 /** "Part I › Chapter 2 › Limits", or an empty string for a page before the first heading. */

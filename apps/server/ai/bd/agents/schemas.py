@@ -114,6 +114,7 @@ ALLOWED_ISSUES_BY_ROLE = {
         IssueCode.SOFT_HYPHEN,
         IssueCode.FUSED_MARKER,
         IssueCode.TEXT_CORRUPTION,
+        IssueCode.OTHER,
     }),
     SpecialistRole.STRUCTURE: frozenset({
         IssueCode.STRUCTURE,

@@ -76,16 +76,16 @@ export function RetrievalIndexProgress({
   const wipeIndex = async () => {
     if (!run || !index || live || busy) return;
     const confirmed = await confirm({
-      title: "Wipe Agentic RAG index?",
+      title: "Wipe all BD indexes for this book?",
       message:
-        "Deletes this run’s retrieval index from Elasticsearch, Qdrant, and Neo4j, along with its index artifacts and checkpoints. The processed pages and uploaded book are preserved.",
+        "Deletes this book’s indexed data from Elasticsearch, Qdrant, and Neo4j across all runs and revisions, plus its Agentic RAG artifacts, manifests, and usage counters. The uploaded book, Docling extraction, and processed pages are preserved. Stop Docling extraction and all BD Agentic AI/RAG runs for this book before wiping.",
       confirmLabel: "Wipe",
     });
     if (!confirmed) return;
     wipe.mutate(
       { bookId, agenticRunId },
       {
-        onSuccess: () => notice("Agentic RAG index wiped. Ingestion pages are unchanged."),
+        onSuccess: () => notice("All BD indexes for this book were wiped. Ingestion pages are unchanged."),
         onError: (cause) => notice(apiErrorMessage(cause), "error"),
       },
     );

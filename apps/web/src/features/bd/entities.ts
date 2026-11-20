@@ -179,7 +179,7 @@ export const agenticRunStatusSchema = z.looseObject({
 export type AgenticRunStatus = z.infer<typeof agenticRunStatusSchema>;
 export type AgenticProgress = z.infer<typeof agenticProgressSchema>;
 
-export const RETRIEVAL_INDEX_WORKFLOW_VERSION = "6.0";
+export const RETRIEVAL_INDEX_WORKFLOW_VERSION = "7.0";
 
 export const retrievalIndexStatusSchema = z.looseObject({
   workflow_version: z.string().catch("1.0"),

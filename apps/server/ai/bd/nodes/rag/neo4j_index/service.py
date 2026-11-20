@@ -1,14 +1,20 @@
 """Application service for Neo4j graph-indexing orchestration."""
 from __future__ import annotations
-import domains
-from .... import graphs
 
 import asyncio
+import logging
+import random
 from collections.abc import Coroutine, Iterable
 from typing import Any
 
 from langchain_core.documents import Document
 from langchain_neo4j import LLMGraphTransformer
+
+import domains
+
+from .... import graphs
+
+logger = logging.getLogger(__name__)
 
 
 async def extract_graph_facts(
@@ -69,46 +75,84 @@ async def index_book_graph(
         batch_rows: list[dict[str, Any]],
     ) -> dict[str, Any]:
         nonlocal active_llm_calls, completed_batches, pages_completed
-        async with extraction_semaphore:
-            if await context.cancel_check():
-                raise RuntimeError("processed-book retrieval indexing was cancelled")
-            registered = False
-            try:
-                async with progress_lock:
-                    active_llm_calls += 1
-                    registered = True
-                    await context.progress_callback(
-                        "neo4j",
-                        "running",
-                        {"neo4j_llm_calls_active": active_llm_calls},
-                    )
-                with domains.settings.llm_counter.service.llm_context(
-                    ns = "bd",
-                    run_id = domains.bd.rag.ai.keys.usage_run_id(
-                        graph_state["book_id"],
-                        graph_state["agentic_run_id"],
-                    ),
-                    node_id = "neo4j",
-                    stage = "agentic_rag",
-                ):
-                    extraction = await extract_graph_facts(
-                        context.graph_transformer,
-                        batch_rows,
-                        section_title = section_title,
-                    )
-            except BaseException:
-                if registered:
+        extraction: dict[str, list[dict[str, Any]]] | None = None
+        page_numbers = sorted({row["processed_page_number"] for row in batch_rows})
+        retry_attempts = domains.bd.rag.ai.params.GRAPH_EXTRACTION_RETRY_ATTEMPTS
+        for attempt in range(1, retry_attempts + 1):
+            retry_error: Exception | None = None
+            async with extraction_semaphore:
+                if await context.cancel_check():
+                    raise RuntimeError("processed-book retrieval indexing was cancelled")
+                registered = False
+                try:
                     async with progress_lock:
-                        active_llm_calls -= 1
+                        active_llm_calls += 1
+                        registered = True
                         await context.progress_callback(
                             "neo4j",
                             "running",
                             {"neo4j_llm_calls_active": active_llm_calls},
                         )
-                raise
+                    with domains.settings.llm_counter.service.llm_context(
+                        ns = "bd",
+                        run_id = domains.bd.rag.ai.keys.usage_run_id(
+                            graph_state["book_id"],
+                            graph_state["agentic_run_id"],
+                        ),
+                        node_id = "neo4j",
+                        stage = "agentic_rag",
+                    ):
+                        extraction = await extract_graph_facts(
+                            context.graph_transformer,
+                            batch_rows,
+                            section_title = section_title,
+                        )
+                except Exception as error:
+                    if (
+                        attempt >= retry_attempts
+                        or not domains.settings.chat.domain.is_transient_provider_error(error)
+                    ):
+                        raise
+                    retry_error = error
+                finally:
+                    if registered:
+                        async with progress_lock:
+                            active_llm_calls -= 1
+                            await context.progress_callback(
+                                "neo4j",
+                                "running",
+                                {"neo4j_llm_calls_active": active_llm_calls},
+                            )
+
+            if retry_error is None:
+                break
+            delay_cap = min(
+                domains.bd.rag.ai.params.GRAPH_EXTRACTION_RETRY_INITIAL_INTERVAL_S * 2 ** (attempt - 1),
+                domains.bd.rag.ai.params.GRAPH_EXTRACTION_RETRY_MAX_INTERVAL_S,
+            )
+            retry_delay = random.uniform(delay_cap / 2, delay_cap)
+            logger.warning(
+                "[bd-rag-neo4j] transient graph extraction error; retrying attempt %d/%d "
+                "for pages %s in %.1f seconds (%s)",
+                attempt + 1,
+                retry_attempts,
+                page_numbers,
+                retry_delay,
+                type(retry_error).__name__,
+            )
+            retry_deadline = asyncio.get_running_loop().time() + retry_delay
+            while True:
+                if await context.cancel_check():
+                    raise RuntimeError("processed-book retrieval indexing was cancelled") from retry_error
+                remaining = retry_deadline - asyncio.get_running_loop().time()
+                if remaining <= 0:
+                    break
+                await asyncio.sleep(min(1.0, remaining))
+
+        if extraction is None:
+            raise RuntimeError("Neo4j graph extraction completed without a result")
 
         async with progress_lock:
-            active_llm_calls -= 1
             for row in batch_rows:
                 page_number = row["processed_page_number"]
                 chunks_remaining_by_page[page_number] -= 1

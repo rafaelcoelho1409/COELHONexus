@@ -9,6 +9,7 @@ import os
 import tempfile
 import time
 import uuid
+from collections.abc import Awaitable, Callable
 
 import infra
 
@@ -143,8 +144,13 @@ async def read_snapshot(book_id: str) -> dict | None:
     return domain.snapshot(manifest, progress)
 
 
-async def wipe_book(book_id: str) -> dict:
-    """Delete a book — its objects, its progress and its events — unless a run holds it."""
+async def wipe_book(
+    book_id: str,
+    *,
+    delete_indexed_book: Callable[[str], Awaitable[dict[str, int]]],
+    has_active_index_run: Callable[[str], Awaitable[bool]],
+) -> dict:
+    """Delete a book and its retrieval projections unless a run still holds it."""
     async with (
         infra.redis.service.client() as r,
         r.lock(
@@ -158,8 +164,28 @@ async def wipe_book(book_id: str) -> dict:
         active_agentic = await _active_agentic_run(book_id)
         if active_agentic is not None:
             return {"book_id": book_id, "deleted": False, "reason": "an Agentic AI run is running"}
-        await infra.redis.service.delete_matching(r, source.runtime.progress.keys.book_keys_pattern(book_id))
+        try:
+            if await has_active_index_run(book_id):
+                return {"book_id": book_id, "deleted": False, "reason": "a BD Agentic RAG run is running"}
+        except Exception as error:
+            logger.exception(f"[bd-delete] unable to verify retrieval-index run state for {book_id}")
+            return {
+                "book_id": book_id,
+                "deleted": False,
+                "reason": f"Agentic RAG run state could not be verified; the uploaded book was retained. {error}",
+            }
+        try:
+            index_cleanup = await delete_indexed_book(book_id)
+        except Exception as error:
+            logger.exception(f"[bd-delete] index cleanup failed for {book_id}")
+            return {
+                "book_id": book_id,
+                "deleted": False,
+                "reason": f"Indexed data could not be fully deleted; the uploaded book was retained. {error}",
+            }
+        logger.info(f"[bd-delete] removed indexed data for {book_id}: {index_cleanup}")
         removed = await source.storage.service.wipe_book(infra.minio.service.get_storage(), book_id)
+        await infra.redis.service.delete_matching(r, source.runtime.progress.keys.book_keys_pattern(book_id))
         return {"book_id": book_id, "deleted": True, "objects": removed}
 
 

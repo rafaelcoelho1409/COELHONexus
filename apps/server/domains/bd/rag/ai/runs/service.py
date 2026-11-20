@@ -115,10 +115,36 @@ async def read_current_index(
         return None
     return {**pointer, "status": manifest["status"], "index": manifest}
 
+
+async def has_active_index_run(book_id: str) -> bool:
+    """Check every retrieval-index run and execution lease for one book."""
+    storage = infra.minio.service.get_storage()
+    run_ids = await storage.list_subfolders(ingestion.source.storage.keys.agentic_runs_prefix(book_id))
+    async with infra.redis.service.client() as redis:
+        for agentic_run_id in run_ids:
+            if agentic_run_id == "current" or not domain.safe_segment(agentic_run_id):
+                continue
+            if await redis.exists(keys.lock_key(book_id, agentic_run_id)):
+                return True
+            manifest = await read_index(book_id, agentic_run_id, storage = storage)
+            if manifest is not None and manifest["status"] in {"queued", "running"}:
+                return True
+    return False
+
+
 async def queue_index(book_id: str, agentic_run_id: str) -> dict[str, Any]:
     """Idempotently queue the post-publication retrieval branch for one completed run."""
     if not domain.safe_segment(book_id) or not domain.safe_segment(agentic_run_id):
         raise ValueError("book_id and agentic_run_id must be safe path segments")
+    async with infra.redis.service.client() as redis, redis.lock(
+        ingestion.ai.progress.keys.book_mutation_lock_key(book_id),
+        timeout = 120,
+        blocking_timeout = 30,
+    ):
+        return await _queue_index_locked(redis, book_id, agentic_run_id)
+
+
+async def _queue_index_locked(redis, book_id: str, agentic_run_id: str) -> dict[str, Any]:
     storage = infra.minio.service.get_storage()
     run = await ingestion.ai.service.read_ingestion_ai_run(
         book_id,
@@ -140,7 +166,7 @@ async def queue_index(book_id: str, agentic_run_id: str) -> dict[str, Any]:
     if processed.extraction_run_id != run.get("extraction_run_id"):
         raise ValueError("the processed book does not match the completed Ingestion run")
 
-    async with infra.redis.service.client() as redis, redis.lock(
+    async with redis.lock(
         keys.enqueue_lock_key(book_id, agentic_run_id),
         timeout = 120,
         blocking_timeout = 30,
@@ -218,10 +244,10 @@ async def queue_index(book_id: str, agentic_run_id: str) -> dict[str, Any]:
 async def resume_index(book_id: str, agentic_run_id: str) -> dict[str, Any]:
     storage = infra.minio.service.get_storage()
     async with infra.redis.service.client() as redis, redis.lock(
-        keys.enqueue_lock_key(book_id, agentic_run_id),
+        ingestion.ai.progress.keys.book_mutation_lock_key(book_id),
         timeout = 120,
         blocking_timeout = 30,
-    ):
+    ), redis.lock(keys.enqueue_lock_key(book_id, agentic_run_id), timeout = 120, blocking_timeout = 30):
         manifest = await read_index(book_id, agentic_run_id, storage = storage)
         if manifest is None:
             raise FileNotFoundError("retrieval-index run not found")
@@ -269,124 +295,104 @@ async def request_cancel(book_id: str, agentic_run_id: str) -> dict[str, Any]:
         return await read_index(book_id, agentic_run_id, storage = storage) or manifest
 
 async def wipe_index(book_id: str, agentic_run_id: str) -> dict[str, Any]:
-    """Delete one stopped retrieval index without touching its processed-book source."""
+    """Delete all BD retrieval projections for one book, preserving its processed source."""
     if not domain.safe_segment(book_id) or not domain.safe_segment(agentic_run_id):
         raise ValueError("book_id and agentic_run_id must be safe path segments")
     storage = infra.minio.service.get_storage()
     async with infra.redis.service.client() as redis, redis.lock(
-        keys.enqueue_lock_key(book_id, agentic_run_id),
+        ingestion.ai.progress.keys.book_mutation_lock_key(book_id),
         timeout = 120,
         blocking_timeout = 30,
-    ):
-        manifest = await read_index(book_id, agentic_run_id, storage = storage)
-        if manifest is None:
-            raise FileNotFoundError("retrieval-index run not found")
-        if manifest["status"] in {"queued", "running"}:
-            raise ValueError("stop the Agentic RAG run and wait for it to finish before wiping it")
-        if await redis.exists(keys.lock_key(book_id, agentic_run_id)):
-            raise ValueError("the retrieval-index worker is still active")
-
-        # A delayed Celery delivery must observe a terminal status before the manifest is removed.
-        manifest.update(
-            status = "cancelled",
-            current_node = None,
-            finished_at = max(time.time(), manifest["created_at"]),
-            error = None,
-        )
-        await write_manifest(manifest, storage = storage)
-        if await redis.exists(keys.lock_key(book_id, agentic_run_id)):
-            raise ValueError("the retrieval-index worker is still active")
-
-        revision = manifest["processed_book_revision"]
-        es_index = manifest.get("elasticsearch_index") or infra.elasticsearch.keys.INDEX_BD_INGESTION
-        es = infra.elasticsearch.service.new_es()
-        try:
-            if es_index == infra.elasticsearch.keys.INDEX_BD_INGESTION:
-                await source.indexes.elasticsearch_index.service.delete_book_revision(
-                    es,
-                    book_id = book_id,
-                    agentic_run_id = manifest["agentic_run_id"],
-                    revision = revision,
-                )
-            else:
-                # Previously published manifests may still point to an isolated per-book index.
-                await es.indices.delete(index = es_index, ignore_unavailable = True)
-                await source.indexes.elasticsearch_index.service.delete_book_revision(
-                    es,
-                    book_id = book_id,
-                    agentic_run_id = manifest["agentic_run_id"],
-                    revision = revision,
-                    indexes = (infra.elasticsearch.keys.INDEX_BD_RAG_PASSAGES,),
-                )
-        finally:
-            await es.close()
-
-        collection = manifest.get("qdrant_collection")
-        if collection:
-            qdrant = infra.qdrant.service.new_qdrant()
-            try:
-                if await qdrant.collection_exists(collection):
-                    models = infra.qdrant.service.models
-                    await qdrant.delete(
-                        collection_name = collection,
-                        points_selector = models.FilterSelector(
-                            filter = models.Filter(must = [
-                                models.FieldCondition(
-                                    key = "book_id",
-                                    match = models.MatchValue(value = book_id),
-                                ),
-                                models.FieldCondition(
-                                    key = "agentic_run_id",
-                                    match = models.MatchValue(value = agentic_run_id),
-                                ),
-                                models.FieldCondition(
-                                    key = "processed_book_revision",
-                                    match = models.MatchValue(value = revision),
-                                ),
-                            ]),
-                        ),
-                    )
-            finally:
-                await qdrant.close()
-
-        await source.indexes.neo4j_index.service.delete_graph(
+    ), redis.lock(keys.enqueue_lock_key(book_id, agentic_run_id), timeout = 120, blocking_timeout = 30):
+        if await ingestion.source.runtime.progress.service.read_lock(redis, book_id):
+            raise ValueError("stop Docling extraction before wiping this book's retrieval indexes")
+        active_ingestion_run = await ingestion.ai.service.find_active_ingestion_ai_run(
             book_id,
-            agentic_run_id,
-            revision,
+            storage = storage,
         )
-        checkpointer = await infra.postgres.service.init_checkpointer()
-        await checkpointer.adelete_thread(
-            keys.thread_id(
-                book_id,
-                manifest["extraction_run_id"],
-                agentic_run_id,
-                manifest["workflow_version"],
-                revision,
-                manifest.get("qdrant_index_profile_fingerprint"),
-                manifest.get("checkpoint_generation", 0),
+        if active_ingestion_run is not None:
+            raise ValueError("stop all BD Agentic AI runs for this book before wiping its retrieval indexes")
+
+        run_ids = set(await storage.list_subfolders(ingestion.source.storage.keys.agentic_runs_prefix(book_id)))
+        run_ids.add(agentic_run_id)
+        manifests: dict[str, dict[str, Any]] = {}
+        for run_id in sorted(run_ids):
+            if not domain.safe_segment(run_id):
+                continue
+            if await ingestion.ai.progress.service.run_execution_lock_is_held(redis, book_id, run_id):
+                raise ValueError("wait for all BD Agentic AI workers to stop before wiping this book's indexes")
+            if await redis.exists(keys.lock_key(book_id, run_id)):
+                raise ValueError("stop all BD Agentic RAG runs for this book before wiping its indexes")
+            run_manifest = await read_index(book_id, run_id, storage = storage)
+            if run_id == agentic_run_id and run_manifest is None:
+                raise FileNotFoundError("retrieval-index run not found")
+            if run_manifest is None:
+                continue
+            if run_manifest["status"] in {"queued", "running"}:
+                raise ValueError("stop all BD Agentic RAG runs for this book before wiping its indexes")
+            manifests[run_id] = run_manifest
+
+        if agentic_run_id not in manifests:
+            raise FileNotFoundError("retrieval-index run not found")
+
+        # Prevent delayed deliveries from rebuilding an index while the book-wide purge runs.
+        for run_id, run_manifest in manifests.items():
+            run_manifest.update(
+                status = "cancelled",
+                cancel_requested = False,
+                current_node = None,
+                finished_at = max(time.time(), run_manifest["created_at"]),
+                error = None,
             )
-        )
+            await write_manifest(run_manifest, storage = storage)
+
+        legacy_indexes = {
+            run_manifest["elasticsearch_index"]
+            for run_manifest in manifests.values()
+            if isinstance(run_manifest.get("elasticsearch_index"), str)
+            and run_manifest["elasticsearch_index"]
+            and run_manifest["elasticsearch_index"] != infra.elasticsearch.keys.INDEX_BD_INGESTION
+        }
+        if legacy_indexes:
+            es = infra.elasticsearch.service.new_es()
+            try:
+                for index_name in sorted(legacy_indexes):
+                    await es.indices.delete(index = index_name, ignore_unavailable = True)
+            finally:
+                await es.close()
+
+        await source.indexes.service.delete_book(book_id)
+
+        checkpointer = await infra.postgres.service.init_checkpointer()
+        for run_id, run_manifest in manifests.items():
+            await checkpointer.adelete_thread(
+                keys.thread_id(
+                    book_id,
+                    run_manifest["extraction_run_id"],
+                    run_id,
+                    run_manifest["workflow_version"],
+                    run_manifest["processed_book_revision"],
+                    run_manifest.get("qdrant_index_profile_fingerprint"),
+                    run_manifest.get("checkpoint_generation", 0),
+                )
+            )
 
         pointer_key = ingestion.source.storage.keys.current_retrieval_index_key(book_id)
         if await storage.exists(pointer_key):
-            pointer = json.loads(await storage.read_text(pointer_key))
-            if (
-                pointer.get("agentic_run_id") == agentic_run_id
-                and pointer.get("processed_book_revision") == revision
-            ):
-                await storage.delete(pointer_key)
+            await storage.delete(pointer_key)
 
-        objects_deleted = await storage.delete_prefix(
-            ingestion.source.storage.keys.agentic_retrieval_index_prefix(
-                book_id,
-                agentic_run_id,
-            ),
-        )
-        await redis.delete(keys.cancel_key(book_id, agentic_run_id))
-        await settings.llm_counter.service.delete_run(
-            "bd",
-            keys.usage_run_id(book_id, agentic_run_id),
-        )
+        objects_deleted = 0
+        for run_id in run_ids:
+            if not domain.safe_segment(run_id):
+                continue
+            objects_deleted += await storage.delete_prefix(
+                ingestion.source.storage.keys.agentic_retrieval_index_prefix(book_id, run_id),
+            )
+            await redis.delete(keys.cancel_key(book_id, run_id))
+            await settings.llm_counter.service.delete_run(
+                "bd",
+                keys.usage_run_id(book_id, run_id),
+            )
         return {
             "book_id": book_id,
             "agentic_run_id": agentic_run_id,

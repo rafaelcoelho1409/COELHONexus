@@ -15,16 +15,8 @@ const RESOLUTION_STYLE = {
   none: "text-muted-foreground",
 } as const;
 
-function autonomousPatchStatus(status: string | null | undefined): string {
-  if (status === "source_mismatch") return "Source image disagreed; original retained: ";
-  if (status === "reading_mismatch") return "Source reading was not exact; original retained: ";
-  if (status === "source_reading_applied") {
-    return "Source reading supported this correction, but a later safety check retained the original: ";
-  }
-  if (status === "confirmed") return "Source confirmed it, but safety checks kept the original: ";
-  if (status === "uncertain") return "Source image was unclear; original retained: ";
-  if (status === "unavailable") return "Source verification was unavailable; original retained: ";
-  return "Safety checks did not allow automatic application; original retained: ";
+function autonomousPatchStatus(): string {
+  return "This proposal overlapped another correction, so the original span was retained: ";
 }
 
 /** Shared quality report UI used by page readers. */
@@ -39,7 +31,7 @@ export function PageQualityDisplay({
   unit: string;
   page: number;
   defaultOpen?: boolean;
-  /** BD leaves uncertain source text unchanged automatically; this mode explains that no approval is required. */
+  /** BD automatically applies valid repairs and explains any irreconcilable patch overlaps. */
   autonomous?: boolean;
 }) {
   const counts = issueCounts(report);
@@ -54,7 +46,7 @@ export function PageQualityDisplay({
           <span className="font-medium">Quality</span>
           {report.status === "review_required" ? (
             <span className="text-xs font-medium text-warning-text">
-              {autonomous ? "No approval needed · original retained where uncertain" : "Needs review"}
+              {autonomous ? "Automatic repair incomplete" : "Needs review"}
             </span>
           ) : (
             <span className="text-xs font-medium text-success-text">Checked</span>
@@ -98,7 +90,7 @@ export function PageQualityDisplay({
                     <p className="mt-1 break-words text-xs">
                       <span className="text-muted-foreground">
                         {autonomous
-                          ? autonomousPatchStatus(issue.proposal.verification_status)
+                          ? autonomousPatchStatus()
                           : "Suggested fix, not applied: "}
                       </span>
                       <del className="font-mono text-destructive-text">{issue.proposal.target_text}</del>

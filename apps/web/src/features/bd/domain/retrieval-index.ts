@@ -1,6 +1,13 @@
-import { RETRIEVAL_INDEX_WORKFLOW_VERSION, type AgenticRunStatus, type RetrievalIndexStatus } from "../entities";
+import {
+  type AgenticRunStatus,
+  RETRIEVAL_INDEX_WORKFLOW_VERSION,
+  type RetrievalIndexStatus,
+} from "../entities";
 
-export function retrievalIndexNeedsUpdate(index: RetrievalIndexStatus | null, run: AgenticRunStatus | null): boolean {
+export function retrievalIndexNeedsUpdate(
+  index: RetrievalIndexStatus | null,
+  run: AgenticRunStatus | null,
+): boolean {
   return Boolean(
     index &&
       (index.workflow_version !== RETRIEVAL_INDEX_WORKFLOW_VERSION ||
@@ -16,10 +23,7 @@ export function retrievalIndexProgress(
   totalNodes: number,
 ): number {
   if (index?.status === "done") return 100;
-  return Math.min(
-    100,
-    Math.max(0, Math.round((completedNodes / Math.max(1, totalNodes)) * 100)),
-  );
+  return Math.min(100, Math.max(0, Math.round((completedNodes / Math.max(1, totalNodes)) * 100)));
 }
 
 export function retrievalIndexStatusLabel(
@@ -34,4 +38,17 @@ export function retrievalIndexStatusLabel(
   if (index.status === "queued") return "Queued";
   if (index.status === "failed") return "Failed";
   return "Stopped";
+}
+
+const REPLAY_PREREQUISITES: Record<string, readonly string[]> = {
+  pin_sources: [],
+  elasticsearch: ["pin_sources"],
+  qdrant: ["elasticsearch", "neo4j"],
+  neo4j: ["elasticsearch", "qdrant"],
+  publish_retrieval_index: ["qdrant", "neo4j"],
+};
+
+export function retrievalIndexReplayBlocker(index: RetrievalIndexStatus, nodeId: string): string | null {
+  const prerequisites = REPLAY_PREREQUISITES[nodeId] ?? [];
+  return prerequisites.find((prerequisite) => index.node_status[prerequisite] !== "done") ?? null;
 }

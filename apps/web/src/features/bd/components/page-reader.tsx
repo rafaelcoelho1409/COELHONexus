@@ -9,14 +9,14 @@ import { Markdown } from "@/shared/markdown";
 import { readerFont } from "@/shared/markdown/reader-font";
 
 import { figureUrl } from "../api";
-import { type BookStatus, type BookUnits, fmtBytes } from "../domain/books";
-import { breadcrumb, type PageRow, pageChips, readableMarkdown } from "../domain/pages";
+import type { BookUnits } from "../domain/books";
+import { breadcrumb, type PageRow, pageChips, readableMarkdown, splitPageHeading } from "../domain/pages";
 import { useModalDialog } from "../hooks/use-modal-dialog";
 import type { PageContent, PageVersion } from "../hooks/use-page-content";
 import { ActionButton } from "./action-button";
 import { PageChanges } from "./page-changes";
 import { PageQualityPanel } from "./page-quality";
-import { StatusChip } from "./status-chip";
+import { ReaderPageFrame } from "./reader-page-frame";
 import { ToggleGroup } from "./toggle-group";
 
 const PREVIEW_MODES = [
@@ -31,11 +31,11 @@ const VERSIONS: readonly { id: PageVersion; label: string }[] = [
 const EMPTY_FIGURES: readonly string[] = [];
 /** One extracted content unit: its section path, what it contains, what the Agentic AI step did to it, its text and its
  * figures. The text itself (and the outline drawn beside it) comes from `usePageContent`, one level up, so the page, the
- * outline column and the reading window all show the same thing. The page frames it as a card; the reading window
- * shows it bare. */
+ * outline column and the reading window all show the same thing. Both views use the same card and header as the
+ * generated contents pages. */
 export function PageReader({
   bookId,
-  bookMetadata,
+  bookTitle,
   page,
   row,
   nPages,
@@ -43,18 +43,13 @@ export function PageReader({
   processedPageCount,
   units,
   content,
-  framed = true,
   toolbar,
   previewMode: controlledPreviewMode,
   onPreviewModeChange,
   showViewControls = true,
 }: {
   bookId: string;
-  bookMetadata?: {
-    status: BookStatus;
-    sizeBytes: number;
-    pageCount: number;
-  };
+  bookTitle: string;
   page: number | null;
   row: PageRow | undefined;
   nPages: number;
@@ -62,8 +57,7 @@ export function PageReader({
   processedPageCount?: number;
   units: BookUnits;
   content: PageContent;
-  framed?: boolean;
-  /** Navigation controls in the page metadata row. */
+  /** Navigation controls in the page header. */
   toolbar?: ReactNode;
   previewMode?: (typeof PREVIEW_MODES)[number]["id"];
   onPreviewModeChange?: (mode: (typeof PREVIEW_MODES)[number]["id"]) => void;
@@ -85,10 +79,25 @@ export function PageReader({
   const { body, raw, hasAi, version, source } = content;
   const convertedFigures =
     version === "docling" ? EMPTY_FIGURES : (body.data?.converted_figures ?? EMPTY_FIGURES);
-  const renderedText = useMemo(
-    () => inlineFigures(source, figures, convertedFigures, bookId, page ?? 0, units.singular),
-    [source, figures, convertedFigures, bookId, page, units.singular],
-  );
+  const {
+    heading,
+    body: pageBody,
+    renderedText,
+  } = useMemo(() => {
+    const split = splitPageHeading(source);
+    return {
+      heading: split.heading,
+      body: split.body,
+      renderedText: inlineFigures(
+        split.heading ? split.body : source,
+        figures,
+        convertedFigures,
+        bookId,
+        page ?? 0,
+        units.singular,
+      ),
+    };
+  }, [source, figures, convertedFigures, bookId, page, units.singular]);
   const markdownComponents = useMemo<Components>(
     () => ({
       p: ({ children }) => {
@@ -128,72 +137,65 @@ export function PageReader({
   }
 
   const unitName = `${units.singular[0]?.toUpperCase()}${units.singular.slice(1)}`;
-  const expandedPage = processedPageNumber ?? page;
+  const pageNumber = processedPageNumber ?? page;
+  const expandedPage = pageNumber;
   const sourcePageLabel = processedPageNumber === undefined ? "" : ` · source ${page}`;
   const expandedVisualLocation = `${unitName} ${expandedPage}${sourcePageLabel}`;
   const display = previewMode === "rendered" ? renderedText : source;
   const chips = pageChips(row);
   const trail = breadcrumb(row.sectionPath);
+  const title = heading?.title ?? row.sectionPath.at(-1) ?? `${unitName} ${pageNumber}`;
+  const showTrail = trail !== "" && trail.toLocaleLowerCase() !== title.toLocaleLowerCase();
+  const titleId =
+    heading && (heading.depth === 2 || heading.depth === 3) ? content.outline[0]?.id : undefined;
+  const pageCount = processedPageCount ?? nPages;
+  const pageLabel = `${unitName} ${pageNumber}${pageCount > 0 ? ` of ${pageCount}` : ""}${
+    processedPageNumber !== undefined ? ` · source ${page}` : ""
+  }`;
+  const sourceLabel = hasAi
+    ? version === "docling"
+      ? "Docling extraction (before Agentic AI)"
+      : version === "changes"
+        ? "Docling extraction compared with AI-processed content"
+        : "AI-processed content"
+    : "Docling extraction";
   const loadingVersion = version !== "ai" && raw.isPending && raw.fetchStatus !== "idle";
 
   return (
-    <article
-      aria-label={`${unitName} ${page}`}
-      className={`min-w-0 ${framed ? "rounded-md border border-border bg-card p-4 sm:p-5" : ""}`}
+    <ReaderPageFrame
+      ariaLabel={`${unitName} ${page}`}
+      label={pageLabel}
+      title={title}
+      titleId={titleId}
+      subtitle={bookTitle}
+      toolbar={toolbar}
+      headerContent={
+        <PageQualityPanel bookId={bookId} page={page} unit={unitName} enabled={hasAi} defaultOpen={false} />
+      }
     >
-      <header className="mb-4 border-b border-border pb-4">
-        {bookMetadata ? (
-          <div className="min-w-0">
-            <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
-              <StatusChip status={bookMetadata.status} />
-              <span>{fmtBytes(bookMetadata.sizeBytes)}</span>
-              <span className="tabular">
-                {bookMetadata.pageCount} {units.plural}
-              </span>
-            </p>
-          </div>
-        ) : null}
-        <div
-          className={`flex min-w-0 flex-wrap items-center justify-between gap-3 ${bookMetadata ? "mt-3" : ""}`}
-        >
-          <div className="min-w-0 flex-1">
-            <p className="mono-label">
-              {unitName} {processedPageNumber ?? page}
-              {(processedPageCount ?? nPages) > 0 ? " of " + (processedPageCount ?? nPages) : ""}
-              {processedPageNumber !== undefined ? " · source " + page : ""}
-            </p>
-            <p className="mt-1 text-xs text-muted-foreground" aria-live="polite">
-              {hasAi
-                ? version === "docling"
-                  ? "Docling extraction (before Agentic AI)"
-                  : version === "changes"
-                    ? "Docling extraction compared with AI-processed content"
-                    : "AI-processed content"
-                : "Docling extraction"}
-            </p>
-          </div>
-          <div className="ml-auto flex min-w-0 max-w-full flex-wrap items-center justify-end gap-2">
-            {chips.length > 0 ? (
-              <ul
-                aria-label={`What the ${units.singular} contains`}
-                className="flex max-w-full flex-wrap justify-start gap-2"
-              >
-                {chips.map((chip) => (
-                  <li
-                    key={chip}
-                    className="whitespace-nowrap rounded-sm border border-border px-2 py-0.5 text-xs text-muted-foreground"
-                  >
-                    {chip}
-                  </li>
-                ))}
-              </ul>
-            ) : null}
-            {toolbar}
-          </div>
+      <div className="mb-4 flex min-w-0 flex-wrap items-start justify-between gap-2">
+        <div className="min-w-0">
+          <p className="text-xs text-muted-foreground" aria-live="polite">
+            {sourceLabel}
+          </p>
+          {showTrail ? <p className="mt-1 break-words text-sm text-muted-foreground">{trail}</p> : null}
         </div>
-        {trail ? <p className="mt-2 w-full break-words text-sm text-muted-foreground">{trail}</p> : null}
-        <PageQualityPanel bookId={bookId} page={page} unit={unitName} enabled={hasAi} defaultOpen={framed} />
-      </header>
+        {chips.length > 0 ? (
+          <ul
+            aria-label={`What the ${units.singular} contains`}
+            className="flex max-w-full flex-wrap justify-start gap-2"
+          >
+            {chips.map((chip) => (
+              <li
+                key={chip}
+                className="whitespace-nowrap rounded-sm border border-border px-2 py-0.5 text-xs text-muted-foreground"
+              >
+                {chip}
+              </li>
+            ))}
+          </ul>
+        ) : null}
+      </div>
       {showViewControls ? (
         <div className="flex flex-wrap items-center justify-between gap-2">
           {version === "changes" ? (
@@ -245,7 +247,7 @@ export function PageReader({
             </p>
           ) : body.isPending || loadingVersion ? (
             <p className="text-sm text-muted-foreground">Loading the {units.singular}…</p>
-          ) : (
+          ) : heading && pageBody.trim() === "" ? null : (
             <p className="text-sm text-muted-foreground">No readable text in this {units.singular}.</p>
           )}
         </section>
@@ -290,7 +292,7 @@ export function PageReader({
           onClose={() => setExpandedVisual(null)}
         />
       ) : null}
-    </article>
+    </ReaderPageFrame>
   );
 }
 

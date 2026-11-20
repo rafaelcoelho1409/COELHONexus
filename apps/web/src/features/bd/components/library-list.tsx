@@ -81,7 +81,7 @@ export function LibraryPicker({
   const remove = async (row: BookRow) => {
     const yes = await confirm({
       title: "Delete this book?",
-      message: `This deletes ${titleOf(row)} — the uploaded book and everything extracted from it — permanently.`,
+      message: `This permanently deletes ${titleOf(row)}, its extracted files, and all related Elasticsearch, Qdrant, and Neo4j data.`,
       confirmLabel: "Delete",
     });
     if (!yes) return;
@@ -91,7 +91,7 @@ export function LibraryPicker({
           notice(result.reason ?? "The book could not be deleted.", "error");
           return;
         }
-        notice(`Deleted ${titleOf(row)}.`);
+        notice(`Deleted ${titleOf(row)} and its indexed data.`);
         if (row.book_id === selected) onOpen(null);
       },
       onError: (error) => notice(apiErrorMessage(error), "error"),

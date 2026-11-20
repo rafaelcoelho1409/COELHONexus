@@ -160,3 +160,22 @@ async def delete_graph(book_id: str, agentic_run_id: str, revision: int) -> int:
             record = await result.single()
             return record["deleted"] if record else 0
         return await session.execute_write(delete_nodes)
+
+
+async def delete_book(book_id: str) -> int:
+    """Delete all graph nodes for one book, including every historical run and revision."""
+    async with infra.neo4j.service.session() as session:
+        async def delete_nodes(transaction):
+            result = await transaction.run(
+                """
+                MATCH (node {book_id: $book_id})
+                WHERE node:COELHONexus:BD OR node:BD OR node:BDNode
+                WITH collect(node) AS nodes, count(node) AS deleted
+                FOREACH (node IN nodes | DETACH DELETE node)
+                RETURN deleted
+                """,
+                book_id = book_id,
+            )
+            record = await result.single()
+            return record["deleted"] if record else 0
+        return await session.execute_write(delete_nodes)

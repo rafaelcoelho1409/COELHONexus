@@ -11,11 +11,8 @@ import infra.elasticsearch
 
 from . import entities
 
-# Result-set sizing. `MAX_LIMIT` is the hard ceiling — clamps any
-# client-supplied `limit` so a stray `?limit=10000` can't fan out into a
-# multi-megabyte ES + Qdrant + Neo4j payload.
+# Default result-set sizing for query requests that omit a size or limit.
 DEFAULT_LIMIT: int = 20
-MAX_LIMIT:     int = 100
 
 # Per-hit text snippet cap. The raw `Document.text` / transcript `content`
 # fields can be tens of kilobytes; we truncate at projection time so the
@@ -70,9 +67,9 @@ CYPHER_WRITE_KEYWORDS: tuple[str, ...] = (
     "drop", "load", "foreach", "detach",
 )
 
-ES_MAX_SIZE = 200
+ES_DEFAULT_SIZE = 20
+QDRANT_DEFAULT_LIMIT = 20
 QDRANT_READ_OPS: tuple[str, ...] = ("search", "scroll", "query_points", "count")
-QDRANT_MAX_LIMIT = 200
 
 # Qdrant payload field shape — must match `domains.ycs.ingestion.domain
 # .build_payload`. Keep this list in sync if the writer changes.

@@ -6,6 +6,13 @@ import { VisualizationFrame } from "./visualization-frame";
 
 type Drawn = { svg: string } | { failed: true };
 
+function renderableSource(source: string): string {
+  return source.replace(
+    /\|([^|\r\n]*)\|/g,
+    (_match, label: string) => `|${label.replaceAll("(", "#40;").replaceAll(")", "#41;")}|`,
+  );
+}
+
 /** The mermaid library is large, so it is fetched the first time a diagram appears, not with the page. */
 export function MermaidDiagram({
   source,
@@ -30,7 +37,7 @@ export function MermaidDiagram({
           securityLevel: "strict",
           theme: document.documentElement.dataset.theme === "light" ? "default" : "dark",
         });
-        const { svg } = await mermaid.render(id, source);
+        const { svg } = await mermaid.render(id, renderableSource(source));
         if (alive) setDrawn({ svg });
       } catch {
         if (alive) setDrawn({ failed: true });
