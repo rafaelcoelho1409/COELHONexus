@@ -77,7 +77,7 @@ inputs = {
   enable_local_expose = false
 
   # Defaults from variables.tf are appropriate:
-  #   chart 18.6.2, standalone, 10Gi PVC, 50m/200Mi/384Mi resources,
-  #   max_connections=100, shared_buffers=128MB, ServiceMonitor enabled,
+  #   chart 18.6.2, standalone, 10Gi PVC, 50m/512Mi/1Gi resources,
+  #   max_connections=100, shared_buffers=256MB, ServiceMonitor enabled,
   #   backup CronJob daily 02:00, retention=30.
 }

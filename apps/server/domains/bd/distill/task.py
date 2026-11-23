@@ -26,7 +26,7 @@ def run_distill(self, book_id: str, run_id: str) -> dict:
     async def execute() -> dict:
         checkpointer_initialized = False
         try:
-            manifest = await service.mark_run_started(book_id, run_id)
+            manifest = await service.mark_run_started(book_id, run_id, self.request.id)
             if manifest["status"] in {"done", "cancelled"}:
                 return {
                     "book_id": book_id,

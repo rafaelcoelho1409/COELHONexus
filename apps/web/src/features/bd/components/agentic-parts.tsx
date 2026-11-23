@@ -4,7 +4,7 @@
  * stage graphs do: a glyph for the state, the state also in words, a headline number once the node is done and a
  * monospace line while it runs. */
 
-import { Check, Circle, CircleDot, LoaderCircle, Play, X } from "lucide-react";
+import { Check, Circle, CircleDot, Info, LoaderCircle, Play, X } from "lucide-react";
 
 import type {
   AgenticNodeProgress,
@@ -123,10 +123,13 @@ export function AgenticNodeList({
                 <span className="flex min-w-0 items-center gap-1.5">
                   <AgenticStatusGlyph status={row.status} />
                   <span className="text-sm">{row.label}</span>
-                  <span className="sr-only">— {AGENTIC_STATUS_LABEL[row.status]}</span>
+                  <span className="sr-only">— {row.statusLabel ?? AGENTIC_STATUS_LABEL[row.status]}</span>
                 </span>
+                <Info aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
                 {row.kpi ? (
-                  <span className="min-w-0 truncate text-xs text-muted-foreground tabular-nums">{row.kpi}</span>
+                  <span className="min-w-0 truncate text-xs text-muted-foreground tabular-nums">
+                    {row.kpi}
+                  </span>
                 ) : null}
               </span>
               <span className="mt-0.5 block font-mono text-xs text-muted-foreground">{row.id}</span>

@@ -1,12 +1,10 @@
 """Prepare chapter inputs and route chapter synthesis batches."""
 from __future__ import annotations
+import domains
+from .... import graphs
 
 from langgraph.runtime import Runtime
 from langgraph.types import Send
-
-import domains
-
-from .... import graphs
 
 
 def dispatch_chapters(state: graphs.distill.states.DistillRunState) -> list[Send]:

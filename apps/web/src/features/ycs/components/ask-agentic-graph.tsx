@@ -2,10 +2,11 @@
 
 /** Adaptive YCS Ask LangGraph with live node state, graph/list views, and per-node resources. */
 
+import { Gauge } from "lucide-react";
 import dynamic from "next/dynamic";
 import { useState } from "react";
-
 import type { AskTurn } from "../ask";
+import { ASK_MODES } from "../params";
 import { ActionButton } from "./action-button";
 import { AskAgenticNodeList } from "./ask-agentic-node-list";
 import { AskAgenticNodeSheet } from "./ask-agentic-node-sheet";
@@ -26,6 +27,13 @@ const VIEWS = [
   { id: "list", label: "List" },
 ] as const;
 
+const MODE_HINT: Record<string, string> = {
+  "": "Picks Fast, Standard or Deep for each question.",
+  fast: "One quick pass over the best video matches.",
+  standard: "Retrieve, grade, then answer from transcript evidence.",
+  deep: "Plans sub-questions, researches each, then merges the findings.",
+};
+
 type ViewMode = (typeof VIEWS)[number]["id"];
 type AskRoute = "conversation" | "standard" | "deep" | "";
 
@@ -40,10 +48,45 @@ const RESOURCES = {
     skills: ["Answer conversational turns without transcript claims"],
     tools: ["Chat model"],
   },
-  run_standard: {
+  retrieve: {
     agents: [],
-    skills: ["Retrieve and grade transcript evidence", "Generate and verify a cited answer"],
+    skills: ["Search indexed transcripts in the selected channel scope"],
     tools: ["Elasticsearch", "Qdrant", "Neo4j"],
+  },
+  grade_documents: {
+    agents: [],
+    skills: ["Keep transcript passages relevant to the question"],
+    tools: ["Document grader", "Chat model"],
+  },
+  rewrite_query: {
+    agents: [],
+    skills: ["Refine the search when evidence is insufficient"],
+    tools: ["Chat model"],
+  },
+  generate: {
+    agents: [],
+    skills: ["Write an answer grounded in transcript evidence and conversation history"],
+    tools: ["Chat model"],
+  },
+  check_hallucination: {
+    agents: [],
+    skills: ["Check answer claims against retrieved transcripts"],
+    tools: ["Chat model"],
+  },
+  fallback_answer: {
+    agents: [],
+    skills: ["Provide a candid answer when no transcript evidence passes grading"],
+    tools: ["Chat model", "Optional external search"],
+  },
+  corroborate: {
+    agents: [],
+    skills: ["Check an unverified answer against external sources"],
+    tools: ["Chat model", "Optional external search"],
+  },
+  format_citations: {
+    agents: [],
+    skills: ["Attach transcript source cards to the answer"],
+    tools: [],
   },
   plan_research: {
     agents: ["research_planner"],
@@ -91,12 +134,66 @@ const NODE_DEFINITIONS: ReadonlyArray<{
     aliases: ["direct_answer"],
   },
   {
-    id: "run_standard",
-    label: "Run standard video RAG",
+    id: "retrieve",
+    label: "Retrieve transcript evidence",
     description:
-      "Invoke the standard transcript workflow, which retrieves and grades evidence, generates and checks the answer, and formats citations before ending the turn.",
+      "Search Elasticsearch, Qdrant, and Neo4j in the selected channel scope, merging the best transcript matches.",
     group: "standard",
-    aliases: ["run_standard"],
+    aliases: ["retrieve", "run_standard"],
+  },
+  {
+    id: "grade_documents",
+    label: "Grade transcript evidence",
+    description:
+      "Assess which retrieved transcript passages directly support the question before answer generation.",
+    group: "standard",
+    aliases: ["grade_documents"],
+  },
+  {
+    id: "rewrite_query",
+    label: "Refine the retrieval query",
+    description:
+      "Rewrite the search when grading finds insufficient evidence, then run one bounded retrieval retry.",
+    group: "standard",
+    aliases: ["rewrite_query"],
+  },
+  {
+    id: "generate",
+    label: "Generate a grounded answer",
+    description: "Write a response from the relevant transcript passages and recent conversation history.",
+    group: "standard",
+    aliases: ["generate"],
+  },
+  {
+    id: "check_hallucination",
+    label: "Verify transcript support",
+    description: "Check whether the generated claims are grounded in the retrieved transcript passages.",
+    group: "standard",
+    aliases: ["check_hallucination"],
+  },
+  {
+    id: "fallback_answer",
+    label: "Answer with limited evidence",
+    description:
+      "When no transcript passage passes grading, use the closest matches and available external context while stating the evidence limits.",
+    group: "standard",
+    aliases: ["fallback_answer"],
+  },
+  {
+    id: "corroborate",
+    label: "Corroborate an uncertain answer",
+    description:
+      "After the bounded rewrite path is exhausted, make a best-effort external check and add a short note when the evidence is decisive.",
+    group: "standard",
+    aliases: ["corroborate"],
+  },
+  {
+    id: "format_citations",
+    label: "Format video citations",
+    description:
+      "Build the deduplicated source cards that connect the answer to its videos and transcript passages.",
+    group: "standard",
+    aliases: ["format_citations"],
   },
   {
     id: "plan_research",
@@ -184,6 +281,7 @@ function nodeStatus(
   if (active && graph.status === "running") return "active";
   if (visited) return "done";
   if (group !== "shared" && route && group !== route) return "skipped";
+  if (graph.status === "done" && group !== "shared") return "skipped";
   if (graph.status === "done" && group === "shared") return "done";
   return "queued";
 }
@@ -200,7 +298,7 @@ function graphStatus(turn: AskTurn | null): {
 
 function activityForNode(nodeId: keyof typeof RESOURCES, turn: AskTurn | null): string | undefined {
   if (!turn) return undefined;
-  if (nodeId === "run_standard" && turn.graph.retrieval_sources.length > 0) {
+  if ((nodeId === "retrieve" || nodeId === "run_subagents") && turn.graph.retrieval_sources.length > 0) {
     return turn.graph.retrieval_sources
       .map((source) => RETRIEVAL_SOURCE_LABELS[source] ?? source)
       .join(" · ");
@@ -215,8 +313,18 @@ function activityForNode(nodeId: keyof typeof RESOURCES, turn: AskTurn | null): 
   if (nodeId === "critic" && turn.confidence !== null) {
     return `Confidence ${(turn.confidence * 100).toFixed(0)}%`;
   }
-  if (nodeId === "direct_answer") return turn.stages.generate.action || undefined;
-  if (nodeId === "run_standard") return turn.stages.generate.action || undefined;
+  if (nodeId === "direct_answer" || nodeId === "generate" || nodeId === "fallback_answer") {
+    return turn.stages.generate.action || undefined;
+  }
+  if (nodeId === "grade_documents") return turn.stages.grade.action || undefined;
+  if (nodeId === "rewrite_query") return turn.stages.retrieve.action || undefined;
+  if (nodeId === "check_hallucination" || nodeId === "corroborate" || nodeId === "critic") {
+    if (turn.confidence !== null) return `Confidence ${(turn.confidence * 100).toFixed(0)}%`;
+    return turn.stages.verify.action || undefined;
+  }
+  if (nodeId === "format_citations" && turn.citations.length) {
+    return `${turn.citations.length} video source${turn.citations.length === 1 ? "" : "s"} attached`;
+  }
   return undefined;
 }
 
@@ -233,8 +341,18 @@ function nodeViews(turn: AskTurn | null): AskAgenticNode[] {
   }));
 }
 
-export function YcsAskAgenticGraph({ turn }: { turn: AskTurn | null }) {
-  const [mode, setMode] = useState<ViewMode>("graph");
+export function YcsAskAgenticGraph({
+  turn,
+  mode,
+  onMode,
+  onUsage,
+}: {
+  turn: AskTurn | null;
+  mode: string;
+  onMode: (mode: string) => void;
+  onUsage: () => void;
+}) {
+  const [viewMode, setViewMode] = useState<ViewMode>("graph");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const nodes = nodeViews(turn);
   const selectedNode = nodes.find((node) => node.id === selectedId);
@@ -261,23 +379,51 @@ export function YcsAskAgenticGraph({ turn }: { turn: AskTurn | null }) {
           <span className="font-medium text-foreground">Route:</span> {routeLabel(turn, route)}
         </p>
 
-        <fieldset className="mt-3 mb-0 flex w-full overflow-hidden rounded-sm border border-border bg-background p-0">
-          <legend className="sr-only">Adaptive Agentic RAG shown as</legend>
-          {VIEWS.map((view) => (
-            <ActionButton
-              key={view.id}
-              type="button"
-              aria-pressed={mode === view.id}
-              onClick={() => setMode(view.id)}
-              className="min-h-9 min-w-0 flex-1 justify-center whitespace-nowrap rounded-none border-0 border-r border-r-border px-2 last:border-r-0"
+        <div className="mt-2 grid w-full min-w-0 grid-cols-3 gap-2">
+          <label htmlFor="ycs-ask-mode" className="flex h-10 min-w-0 items-center gap-1 text-xs">
+            <span className="shrink-0 font-medium max-[400px]:hidden">Effort</span>
+            <select
+              id="ycs-ask-mode"
+              name="ycs-ask-mode"
+              aria-label="Retrieval effort"
+              value={mode}
+              title={MODE_HINT[mode] ?? MODE_HINT[""]}
+              onChange={(event) => onMode(event.target.value)}
+              className="h-10 min-w-0 flex-1 rounded-sm border border-input bg-background px-1.5 text-xs text-foreground outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
             >
-              {view.label}
-            </ActionButton>
-          ))}
-        </fieldset>
+              {ASK_MODES.map((option) => (
+                <option key={option.id || "auto"} value={option.id}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <ActionButton
+            type="button"
+            onClick={onUsage}
+            className="h-10 w-full min-w-0 justify-center gap-1 px-1.5 text-xs whitespace-nowrap"
+          >
+            <Gauge aria-hidden data-icon="inline-start" className="max-[400px]:hidden" />
+            LLM usage
+          </ActionButton>
+          <fieldset className="m-0 flex min-w-0 overflow-hidden rounded-sm border border-border bg-background p-0">
+            <legend className="sr-only">Adaptive RAG shown as</legend>
+            {VIEWS.map((view) => (
+              <ActionButton
+                key={view.id}
+                type="button"
+                aria-pressed={viewMode === view.id}
+                onClick={() => setViewMode(view.id)}
+                className="h-10 min-w-0 flex-1 justify-center whitespace-nowrap rounded-none border-0 border-r border-r-border px-1.5 text-xs last:border-r-0"
+              >
+                {view.label}
+              </ActionButton>
+            ))}
+          </fieldset>
+        </div>
 
-        <div className="mt-3 min-w-0 overflow-auto rounded-sm border border-border bg-background p-1">
-          {mode === "graph" ? (
+        <div className="mt-3 min-w-0 overflow-hidden rounded-sm border border-border bg-background p-1">
+          {viewMode === "graph" ? (
             <AskAgenticFlow nodes={nodes} onOpen={setSelectedId} />
           ) : (
             <AskAgenticNodeList nodes={nodes} onOpen={setSelectedId} />

@@ -49,9 +49,15 @@ def learning_extraction_from_agent_result(result: Any) -> schemas.LearningExtrac
 
 def structured_model_from_agent_result(result: Any, response_model: type[BaseModel]) -> BaseModel | None:
     """Validate a typed DeepAgent response, recovering a JSON object from assistant text if needed."""
-    if not isinstance(result, dict):
+    if isinstance(result, response_model):
+        return result
+    if isinstance(result, BaseModel):
+        result = {"structured_response": result}
+    if not isinstance(result, Mapping):
         return None
     candidates = [result.get("structured_response"), result.get("parsed")]
+    if any(field in result for field in response_model.model_fields):
+        candidates.append(result)
     raw = result.get("raw")
     for message in [*(result.get("messages") or []), *([raw] if raw is not None else [])]:
         candidates.extend(_tool_call_arguments(message))
@@ -59,10 +65,94 @@ def structured_model_from_agent_result(result: Any, response_model: type[BaseMod
     for candidate in candidates:
         if candidate is None:
             continue
+        if isinstance(candidate, response_model):
+            return candidate
+        if isinstance(candidate, BaseModel):
+            candidate = candidate.model_dump(mode = "python")
         try:
             return response_model.model_validate(candidate)
         except ValidationError:
             continue
+    return None
+
+
+def report_review_from_agent_result(result: Any) -> schemas.ReportReviewOutput | None:
+    """Recover a report review while validating every finding against the public schema.
+
+    Some OpenAI-compatible providers include extra wrapper or metadata fields around
+    structured output. Those fields are irrelevant to editorial findings, so retain
+    only the schema fields while still rejecting malformed findings.
+    """
+    if isinstance(result, schemas.ReportReviewOutput):
+        return result
+    if isinstance(result, BaseModel):
+        result = {"structured_response": result}
+    if not isinstance(result, Mapping):
+        return None
+
+    candidates: list[Any] = [result.get("structured_response"), result.get("parsed")]
+    if "findings" in result:
+        candidates.append(result)
+    raw = result.get("raw")
+    for message in [*(result.get("messages") or []), *([raw] if raw is not None else [])]:
+        candidates.extend(_tool_call_arguments(message))
+        candidates.extend(_json_objects(_assistant_content(message)))
+
+    review_fields = ("severity", "area", "issue", "recommendation")
+    for candidate in candidates:
+        if isinstance(candidate, schemas.ReportReviewOutput):
+            return candidate
+        if isinstance(candidate, BaseModel):
+            candidate = candidate.model_dump(mode = "python")
+        for _ in range(3):
+            if not isinstance(candidate, Mapping) or "findings" in candidate:
+                break
+            nested = next(
+                (
+                    candidate.get(key)
+                    for key in ("report_review", "review", "output", "result")
+                    if isinstance(candidate.get(key), (Mapping, BaseModel))
+                ),
+                None,
+            )
+            if nested is None:
+                break
+            candidate = nested.model_dump(mode = "python") if isinstance(nested, BaseModel) else nested
+        if not isinstance(candidate, Mapping):
+            continue
+
+        findings = candidate.get("findings")
+        if isinstance(findings, str):
+            try:
+                findings = loads(findings)
+            except JSONDecodeError:
+                continue
+        if isinstance(findings, Mapping):
+            findings = [findings]
+        if not isinstance(findings, list):
+            continue
+
+        parsed_findings: list[schemas.ReportReviewFinding] = []
+        for finding in findings:
+            if isinstance(finding, str):
+                try:
+                    finding = loads(finding)
+                except JSONDecodeError:
+                    break
+            if isinstance(finding, BaseModel):
+                finding = finding.model_dump(mode = "python")
+            if not isinstance(finding, Mapping):
+                break
+            try:
+                parsed_findings.append(
+                    schemas.ReportReviewFinding.model_validate({
+                        key: finding.get(key) for key in review_fields
+                    }),
+                )
+            except ValidationError:
+                break
+        else:
+            return schemas.ReportReviewOutput(findings = parsed_findings)
     return None
 
 
@@ -92,6 +182,36 @@ def chapter_synthesis_from_agent_result(result: Any) -> schemas.ChapterSynthesis
             if synthesis is not None:
                 return synthesis
     return None
+
+
+def chapter_synthesis_validation_issues(result: Any) -> list[str]:
+    """Return safe schema paths and error types for an invalid chapter response."""
+    if isinstance(result, schemas.ChapterSynthesis):
+        return []
+    if isinstance(result, BaseModel):
+        candidates: list[Any] = [result]
+    elif isinstance(result, dict):
+        candidates = [result.get("structured_response"), result.get("parsed")]
+        raw = result.get("raw")
+        for message in [*(result.get("messages") or []), *([raw] if raw is not None else [])]:
+            candidates.extend(_tool_call_arguments(message))
+            candidates.extend(_json_objects(_assistant_content(message)))
+    else:
+        return ["no_valid_agent_response"]
+
+    issues: list[str] = []
+    for value in candidates:
+        for candidate in _chapter_synthesis_candidates(value):
+            try:
+                schemas.ChapterSynthesis.model_validate(candidate)
+            except ValidationError as error:
+                issues.extend(
+                    f"{'.'.join(str(part) for part in item['loc']) or '$'}:{item['type']}"
+                    for item in error.errors(include_input = False)
+                )
+            else:
+                return []
+    return list(dict.fromkeys(issues))[:20] or ["no_valid_json_object"]
 
 
 def book_synthesis_from_agent_result(result: Any) -> schemas.BookSynthesis | None:
@@ -204,11 +324,24 @@ def _book_synthesis_output_candidates(result: Any) -> Iterator[Any]:
     if isinstance(result, BaseModel):
         yield result.model_dump(mode = "python")
         return
-    if not isinstance(result, dict):
+    if not isinstance(result, Mapping):
         return
 
     yield result.get("structured_response")
     yield result.get("parsed")
+    output_fields = set(schemas.BookSynthesisOutput.model_fields)
+    accepted_root_fields = output_fields | set(_BOOK_SYNTHESIS_OUTPUT_ALIASES)
+    required_root_fields = output_fields - {"cross_chapter_connections"}
+    has_connections = (
+        "cross_chapter_connections" in result
+        or "connections" in result
+    )
+    if (
+        required_root_fields.issubset(result)
+        and has_connections
+        and set(result).issubset(accepted_root_fields)
+    ):
+        yield dict(result)
     raw = result.get("raw")
     for message in [*(result.get("messages") or []), *([raw] if raw is not None else [])]:
         yield from _tool_call_arguments(message)
@@ -227,7 +360,7 @@ def _chapter_synthesis_candidates(value: Any) -> Iterator[dict[str, Any]]:
         if len(candidate) != 1:
             return
         key, nested = next(iter(candidate.items()))
-        if key not in {"chapter", "output", "result", "section", "synthesis"}:
+        if key not in {"chapter", "data", "output", "response", "result", "section", "synthesis"}:
             return
         if isinstance(nested, BaseModel):
             nested = nested.model_dump(mode = "python")
@@ -288,11 +421,30 @@ def _assistant_content(message: Any) -> str | None:
 
 
 def _tool_call_arguments(message: Any) -> Iterator[dict[str, Any]]:
-    for call in getattr(message, "tool_calls", None) or []:
-        if isinstance(call, dict) and isinstance(call.get("args"), dict):
-            yield call["args"]
+    tool_calls = message.get("tool_calls") if isinstance(message, dict) else getattr(message, "tool_calls", None)
+    for call in tool_calls or []:
+        if not isinstance(call, dict):
+            continue
+        arguments = call.get("args")
+        if isinstance(arguments, dict):
+            yield arguments
+            continue
+        function = call.get("function")
+        arguments = function.get("arguments") if isinstance(function, dict) else None
+        if isinstance(arguments, dict):
+            yield arguments
+        elif isinstance(arguments, str):
+            try:
+                value = loads(arguments)
+            except JSONDecodeError:
+                continue
+            if isinstance(value, dict):
+                yield value
 
-    additional = getattr(message, "additional_kwargs", None) or {}
+    additional = (
+        message.get("additional_kwargs") if isinstance(message, dict)
+        else getattr(message, "additional_kwargs", None)
+    ) or {}
     calls = additional.get("tool_calls") if isinstance(additional, dict) else None
     for call in calls or []:
         function = call.get("function") if isinstance(call, dict) else None
@@ -422,6 +574,13 @@ def split_source_page(
 
 def quote_is_supported(quote: str, source_text: str) -> bool:
     """Check that a citation quote resolves to the supplied source after whitespace normalization."""
+    normalized_quote = _WHITESPACE_RE.sub(" ", quote).strip()
+    normalized_source = _WHITESPACE_RE.sub(" ", source_text).strip()
+    return bool(normalized_quote) and normalized_quote in normalized_source
+
+
+def external_quote_is_supported(quote: str, source_text: str) -> bool:
+    """Require an external evidence quote to occur verbatim, allowing only whitespace changes."""
     normalized_quote = _WHITESPACE_RE.sub(" ", quote).strip()
     normalized_source = _WHITESPACE_RE.sub(" ", source_text).strip()
     return bool(normalized_quote) and normalized_quote in normalized_source

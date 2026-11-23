@@ -36,6 +36,10 @@
   fill: var(--neutral-8);
 }
 
+.bd-agentic-flow .react-flow__edge.agentic-edge-feedback .react-flow__edge-path {
+  stroke-dasharray: 4 4;
+}
+
 .bd-agentic-flow .react-flow__controls {
   overflow: hidden;
   border: 1px solid var(--border);

@@ -13,6 +13,7 @@ export function askHref(bookId?: string | null, threadId?: string): string {
 export const THREAD_LABEL_MAX = 28;
 export const ASK_FAILED_ANSWER_PREFIX = "Error generating answer:";
 export const ASK_STAGES: ReadonlyArray<{ id: string; label: string }> = [
+  { id: "plan", label: "Plan" },
   { id: "retrieve", label: "Retrieve" },
   { id: "grade", label: "Grade" },
   { id: "generate", label: "Generate" },
@@ -28,6 +29,8 @@ export const ASK_EXAMPLES: ReadonlyArray<string> = [
   "Summarize the book's central argument.",
   "Which ideas connect the main chapters?",
   "What evidence supports the author's conclusions?",
+  "Explain the difference between RAG and fine-tuning.",
+  "What are the latest developments in quantum computing?",
 ];
 export const HISTORY_POLL_MS = 2500;
 export const STALL_TICKS_THRESHOLD = 6;

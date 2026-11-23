@@ -24,6 +24,12 @@ def _all_source_refs(report: domains.bd.distill.schemas.StudyGuideDocument):
         yield from chapter.overview_source_refs
         for lesson in [*chapter.lessons, *chapter.open_questions]:
             yield from lesson.source_refs
+        for objective in chapter.learning_objectives:
+            yield from objective.source_refs
+        for item in chapter.practice_items:
+            yield from item.source_refs
+        for figure in chapter.source_figures:
+            yield from figure.source_refs
         for timeline in chapter.timelines:
             for event in timeline.events:
                 yield from event.source_refs
@@ -84,6 +90,17 @@ def assess_report_structure(
         errors.append("source_page_manifest_has_invalid_or_duplicate_page_numbers")
     if set(pages) != expected_pages:
         errors.append("source_page_manifest_does_not_cover_expected_page_range")
+    for chapter in report.chapters:
+        for figure in chapter.source_figures:
+            source_page = pages.get(figure.page_number)
+            source_text = source_text_by_page.get(figure.page_number)
+            if (
+                source_page is None
+                or figure.figure_name not in source_page.get("figures", [])
+                or source_text is None
+                or not domains.bd.distill.domain.quote_is_supported(figure.caption, source_text)
+            ):
+                errors.append("report_source_figure_has_unverified_identity_or_caption")
 
     research = report.research_context
     research_ids = [source.source_id for source in research.sources]
@@ -97,13 +114,35 @@ def assess_report_structure(
     if research.status != "complete" and research.sources:
         errors.append("research_sources_have_an_inconsistent_status")
     research_source_ids = set(research_ids)
+    research_sources_by_id = {source.source_id: source for source in research.sources}
     if any(
         not finding.source_ids or set(finding.source_ids) - research_source_ids
         for finding in research.findings
     ):
         errors.append("research_finding_references_an_unknown_external_source")
+    verified_external_ids = set()
+    for finding in research.findings:
+        quote_source_ids = {item.source_id for item in finding.evidence_quotes}
+        if (
+            not finding.evidence_quotes
+            or quote_source_ids != set(finding.source_ids)
+            or any(
+                item.source_id not in research_sources_by_id
+                or research_sources_by_id[item.source_id].full_text_sha256 is None
+                for item in finding.evidence_quotes
+            )
+        ):
+            errors.append("research_finding_lacks_verified_full_source_evidence")
+        else:
+            verified_external_ids.update(quote_source_ids)
     if research.findings and research.status != "complete":
         errors.append("research_findings_have_an_inconsistent_status")
+    if report.decision_brief is not None:
+        decision_external_ids = set(report.decision_brief.recommendation.external_source_ids)
+        for item in [*report.decision_brief.options, *report.decision_brief.action_plan]:
+            decision_external_ids.update(item.external_source_ids)
+        if decision_external_ids - verified_external_ids:
+            errors.append("decision_brief_references_external_sources_without_verified_findings")
 
     substantive_pages = {
         number for number, page in pages.items()
@@ -176,7 +215,13 @@ def assess_report_structure(
 
 def evidence_page_numbers(report: domains.bd.distill.schemas.StudyGuideDocument) -> list[int]:
     """Return sorted unique pages needed to validate all report evidence."""
-    return sorted({page_number for page_number, _ in _all_evidence_quotes(report)})
+    pages = {page_number for page_number, _ in _all_evidence_quotes(report)}
+    pages.update(
+        figure.page_number
+        for chapter in report.chapters
+        for figure in chapter.source_figures
+    )
+    return sorted(pages)
 
 
 class HumanLearningReview(BaseModel):

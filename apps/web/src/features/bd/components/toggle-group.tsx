@@ -7,12 +7,14 @@ export function ToggleGroup<Id extends string>({
   value,
   onChange,
   fullWidth = false,
+  compact = false,
 }: {
   legend: string;
   options: readonly { id: Id; label: string }[];
   value: Id;
   onChange: (id: Id) => void;
   fullWidth?: boolean;
+  compact?: boolean;
 }) {
   return (
     <fieldset
@@ -24,7 +26,7 @@ export function ToggleGroup<Id extends string>({
           key={option.id}
           aria-pressed={value === option.id}
           onClick={() => onChange(option.id)}
-          className={`rounded-none border-0 border-r border-r-border px-2.5 last:border-r-0 ${fullWidth ? "min-h-10 min-w-0 flex-1 justify-center" : "min-h-9"}`}
+          className={`rounded-none border-0 border-r border-r-border ${compact ? "px-1.5" : "px-2.5"} last:border-r-0 ${fullWidth ? "min-h-10 min-w-0 flex-1 justify-center" : "min-h-9"}`}
         >
           {option.label}
         </ActionButton>

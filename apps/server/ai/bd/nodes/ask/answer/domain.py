@@ -7,8 +7,6 @@ def format_citations(state: dict) -> dict:
     documents = state.get("documents") or []
     requested = set(state.get("evidence_ids") or [])
     selected = [item for item in documents if item.get("id") in requested]
-    if not selected and state.get("grounded"):
-        selected = documents[:3]
     citations = []
     seen = set()
     for item in selected:

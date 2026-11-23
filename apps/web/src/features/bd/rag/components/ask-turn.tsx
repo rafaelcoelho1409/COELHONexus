@@ -9,13 +9,14 @@ import { createContext, memo, useContext } from "react";
 
 import { Markdown } from "@/shared/markdown";
 import {
-  type AskTurn,
+  askRouteLabel,
   citeMarkdown,
   citeNumber,
   failedAnswerReason,
   formatTurnDuration,
   STALLED_SUBTITLE,
   turnFailure,
+  type AskTurn,
   usageLabel,
 } from "../ask";
 import type { AskCitation } from "../entities";
@@ -115,11 +116,11 @@ function AskTurnViewBase({
       </h3>
 
       <div className="flex flex-col gap-3 pl-0 sm:pl-4">
-        {turn.mode || took || tokens ? (
+        {turn.graph.route || turn.mode || took || tokens ? (
           <p className="m-0 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
-            {turn.mode ? (
-              <span className="rounded-sm border border-border px-1.5 py-px font-medium capitalize">
-                {turn.mode}
+            {turn.graph.route || turn.mode ? (
+              <span className="rounded-sm border border-border px-1.5 py-px font-medium">
+                {askRouteLabel(turn.graph.route, turn.mode)}
               </span>
             ) : null}
             {took ? <span>{failure ? `Ended ${took}` : `Answered ${took}`}</span> : null}

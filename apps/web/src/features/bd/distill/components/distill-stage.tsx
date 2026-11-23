@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Suspense, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { ContextBar } from "@/shared/layout/context-bar";
 import { apiErrorMessage } from "@/shared/lib/api-error";
 import { ActionButton } from "../../components/action-button";
@@ -27,7 +27,7 @@ import {
   useDistillRuns,
   useSaveContentSelection,
 } from "../hooks/use-distill-data";
-import { DISTILL_RUN_PARAM, distillHref, distillStudyHref } from "../params";
+import { DISTILL_CANCEL_RETRY_MS, DISTILL_RUN_PARAM, distillHref, distillStudyHref } from "../params";
 import { DistillNodeBoard } from "./distill-node-board";
 import { DistillOutputPanel } from "./distill-output-panel";
 import { DistillProcessProgress } from "./distill-process-progress";
@@ -74,7 +74,6 @@ function DistillStage({ view }: { view: "agents" | "study" }) {
               selected={bookId}
               onOpen={(id) => router.push(view === "study" ? distillStudyHref(id) : distillHref(id))}
               showActions={false}
-              showSelectedTitle={false}
             />
             {selectedBook ? (
               <p className="text-xs text-muted-foreground">
@@ -82,16 +81,6 @@ function DistillStage({ view }: { view: "agents" | "study" }) {
               </p>
             ) : null}
           </>
-        }
-        end={
-          selectedBook ? (
-            <p
-              className="ml-auto min-w-0 max-w-[min(48vw,40rem)] break-words text-right text-base font-semibold text-foreground max-sm:w-full max-sm:max-w-full"
-              title={selectedBook.title.trim() || selectedBook.filename}
-            >
-              {selectedBook.title.trim() || selectedBook.filename}
-            </p>
-          ) : undefined
         }
       />
       <div className="mx-auto w-full max-w-screen-2xl p-4">
@@ -231,6 +220,20 @@ function DistillWorkspaceView({
   const stopping = activeRun !== null && stoppingRunId === activeRun.run_id;
   const actionPending =
     actions.start.isPending || actions.resume.isPending || actions.cancel.isPending || actions.wipe.isPending;
+  useEffect(() => {
+    if (stoppingRunId && activeRun?.run_id !== stoppingRunId) setStoppingRunId(null);
+  }, [activeRun?.run_id, stoppingRunId]);
+  useEffect(() => {
+    if (!stoppingRunId || activeRun?.run_id !== stoppingRunId || actions.cancel.isPending) return;
+    const retry = window.setTimeout(() => {
+      actions.cancel.mutate(stoppingRunId, {
+        onSuccess: (result) => {
+          if (!isDistillLive(result.status)) setStoppingRunId(null);
+        },
+      });
+    }, DISTILL_CANCEL_RETRY_MS);
+    return () => window.clearTimeout(retry);
+  }, [actions.cancel.isPending, actions.cancel.mutate, activeRun?.run_id, stoppingRunId]);
   const canExecute = capabilities.data?.execution_enabled === true;
   const canReplaceQueuedRun = activeRun?.status === "queued";
   const startDisabledReason = capabilities.isPending

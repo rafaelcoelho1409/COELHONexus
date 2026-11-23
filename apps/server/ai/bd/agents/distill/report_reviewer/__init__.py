@@ -1,5 +1,5 @@
 from __future__ import annotations
 
-from . import agent
+from . import agent, entities, service
 
-__all__ = ["agent"]
+__all__ = ["agent", "entities", "service"]

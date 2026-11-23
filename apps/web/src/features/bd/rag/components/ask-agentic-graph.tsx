@@ -1,13 +1,268 @@
 "use client";
 
-import {
-  AgenticGraphPanel,
-  type AgenticGraphStep,
-  type AgenticStepStatus,
-} from "@/shared/agentic-graph/agentic-graph-panel";
-import type { AskTurn } from "../ask";
+import dynamic from "next/dynamic";
+import { Gauge } from "lucide-react";
+import { useState } from "react";
+import type { AgenticFlowConnection, AgenticFlowPosition } from "../../components/agentic-flow";
+import { AgenticNodeDetailsList, AgenticNodeList, AgenticStatusGlyph } from "../../components/agentic-parts";
+import { ToggleGroup } from "../../components/toggle-group";
+import type { AgenticNodeStatus, AgenticNodeView } from "../../domain/agentic-progress";
+import { type AskTurn, askRouteLabel } from "../ask";
+import { ASK_MODES } from "../params";
+import { AskSources } from "./ask-sources";
+import { RagActionButton as Button } from "./rag-action-button";
+import { SideSheet } from "./side-sheet";
 
-function stepStatus(graph: AskTurn["graph"], aliases: string[], selected: boolean): AgenticStepStatus {
+const AgenticFlow = dynamic(
+  () => import("../../components/agentic-flow").then((module) => module.AgenticFlow),
+  {
+    ssr: false,
+    loading: () => (
+      <p role="status" className="p-4 text-xs text-muted-foreground">
+        Loading graph…
+      </p>
+    ),
+  },
+);
+
+const VIEWS = [
+  {
+    id: "plan_research",
+    label: "Understand the question",
+    description: "Choose a conversation reply or book research, then select an answer path.",
+  },
+  {
+    id: "direct_answer",
+    label: "Conversation reply",
+    description: "Answer conversational questions without searching the book or making book claims.",
+  },
+  {
+    id: "run_subagent",
+    label: "Retrieve book evidence",
+    description: "Search the full-text index, vector index, and knowledge graph concurrently.",
+  },
+  {
+    id: "search_external",
+    label: "Search configured source",
+    description: "Use the optional Search MCP only when the plan calls for current or outside information.",
+  },
+  {
+    id: "grade_documents",
+    label: "Check evidence coverage",
+    description: "Assess whether the retrieved evidence supports the question.",
+  },
+  {
+    id: "rewrite_query",
+    label: "Refine the search",
+    description: "If evidence coverage is weak, refine the query and retrieve once more.",
+  },
+  {
+    id: "generate",
+    label: "Write a grounded answer",
+    description: "Answer from the selected book and external evidence.",
+  },
+  {
+    id: "synthesize",
+    label: "Synthesize research",
+    description: "Combine the planned sub-question findings into a book-grounded answer.",
+  },
+  {
+    id: "critic",
+    label: "Verify answer support",
+    description: "Check that answer claims are supported by the retrieved evidence.",
+  },
+  {
+    id: "format_citations",
+    label: "Format citations",
+    description: "Attach source references to the answer.",
+  },
+] as const;
+
+type AskNodeId = (typeof VIEWS)[number]["id"];
+type AskNodeStatus = "queued" | "active" | "done" | "failed" | "skipped";
+type AskView = (typeof VIEWS)[number] & { status: AskNodeStatus; detail: string | null };
+type ViewMode = "graph" | "list";
+
+type AskNodeDetails = {
+  reads: readonly string[];
+  writes: readonly string[];
+  llm: string;
+  resources: AgenticNodeView["resources"];
+};
+
+const NO_RESOURCES: AskNodeDetails["resources"] = { agents: [], skills: [], tools: [] };
+const ASK_PLANNER = { agents: ["BD Ask planner"], skills: ["ask_planner"], tools: [] };
+const ASK_GRADER = { agents: ["BD Ask evidence grader"], skills: ["ask_grader"], tools: [] };
+const ASK_ANSWERER = { agents: ["BD Ask answerer"], skills: ["ask_answerer"], tools: [] };
+const ASK_CRITIC = { agents: ["BD Ask evidence critic"], skills: ["ask_critic"], tools: [] };
+
+const NODE_DETAILS: Record<AskNodeId, AskNodeDetails> = {
+  plan_research: {
+    reads: ["Question", "Recent thread turns", "Optional suggested sub-questions"],
+    writes: ["Intent", "Response effort", "Research plan", "Search queries"],
+    llm: "Planner DeepAgent returns a validated response plan.",
+    resources: ASK_PLANNER,
+  },
+  direct_answer: {
+    reads: ["Question", "Recent thread turns"],
+    writes: ["Conversation reply"],
+    llm: "One configured chat-model call with a bounded retry and timeout.",
+    resources: NO_RESOURCES,
+  },
+  run_subagent: {
+    reads: ["Book retrieval index manifest", "Planned search queries"],
+    writes: ["Ranked evidence", "Evidence source labels"],
+    llm: "No model call; bounded searches run concurrently.",
+    resources: { agents: [], skills: [], tools: [] },
+  },
+  search_external: {
+    reads: ["Planned outside-information query", "Ready Search MCP connection from Settings"],
+    writes: ["External evidence", "Source citations", "Search outcome"],
+    llm: "No model call inside this step.",
+    resources: { agents: [], skills: [], tools: ["Configured search tool", "Optional page-read tool"] },
+  },
+  grade_documents: {
+    reads: ["Question", "Book and external evidence"],
+    writes: ["Relevant evidence", "Coverage decision"],
+    llm: "Evidence grader DeepAgent returns a validated relevance assessment.",
+    resources: ASK_GRADER,
+  },
+  rewrite_query: {
+    reads: ["Question", "Initial queries", "Retrieval coverage feedback"],
+    writes: ["One bounded set of revised queries"],
+    llm: "The planner DeepAgent rewrites the search after weak coverage.",
+    resources: ASK_PLANNER,
+  },
+  generate: {
+    reads: ["Question", "Recent thread turns", "Selected evidence"],
+    writes: ["Grounded answer", "Evidence ids"],
+    llm: "Answerer DeepAgent returns a validated answer and evidence references.",
+    resources: ASK_ANSWERER,
+  },
+  synthesize: {
+    reads: ["Question", "Research plan", "Sub-question findings", "Selected evidence"],
+    writes: ["Synthesized answer", "Evidence ids"],
+    llm: "Answerer DeepAgent synthesizes the planned findings into a validated answer.",
+    resources: ASK_ANSWERER,
+  },
+  critic: {
+    reads: ["Question", "Draft answer", "Referenced evidence"],
+    writes: ["Support assessment", "Confidence score", "Fallback when unsupported"],
+    llm: "Evidence critic DeepAgent returns a validated support assessment.",
+    resources: ASK_CRITIC,
+  },
+  format_citations: {
+    reads: ["Draft answer", "Selected evidence ids", "Evidence citations"],
+    writes: ["Final answer with source references", "Citation records"],
+    llm: "Deterministic formatting; no model call.",
+    resources: NO_RESOURCES,
+  },
+};
+
+const CONNECTIONS: readonly AgenticFlowConnection[] = [
+  {
+    source: "plan_research",
+    target: "direct_answer",
+    sourceHandle: "source-bottom-left",
+  },
+  {
+    source: "plan_research",
+    target: "run_subagent",
+    sourceHandle: "source-bottom-right",
+  },
+  {
+    source: "run_subagent",
+    target: "search_external",
+    sourceHandle: "source-bottom-left",
+    targetHandle: "target-top-right",
+  },
+  { source: "run_subagent", target: "grade_documents" },
+  {
+    source: "search_external",
+    target: "grade_documents",
+    sourceHandle: "source-right",
+    targetHandle: "target-top-left",
+  },
+  {
+    source: "grade_documents",
+    target: "rewrite_query",
+    sourceHandle: "source-left",
+    targetHandle: "target-right",
+  },
+  { source: "grade_documents", target: "generate" },
+  {
+    source: "grade_documents",
+    target: "synthesize",
+    sourceHandle: "source-bottom-left",
+  },
+  {
+    source: "rewrite_query",
+    target: "run_subagent",
+    sourceHandle: "source-left",
+    targetHandle: "target-bottom-left",
+    feedback: true,
+  },
+  { source: "generate", target: "critic" },
+  {
+    source: "synthesize",
+    target: "critic",
+    sourceHandle: "source-right",
+    targetHandle: "target-top-right",
+  },
+  { source: "critic", target: "format_citations" },
+];
+
+const POSITIONS: Readonly<Record<string, AgenticFlowPosition>> = {
+  plan_research: { x: 284, y: 16 },
+  direct_answer: { x: 16, y: 182 },
+  run_subagent: { x: 284, y: 182 },
+  search_external: { x: 16, y: 400 },
+  grade_documents: { x: 284, y: 566 },
+  rewrite_query: { x: 16, y: 566 },
+  generate: { x: 284, y: 732 },
+  synthesize: { x: 16, y: 732 },
+  critic: { x: 284, y: 898 },
+  format_citations: { x: 284, y: 1064 },
+};
+
+const VIEW_MODES: readonly { id: ViewMode; label: string }[] = [
+  { id: "graph", label: "Graph" },
+  { id: "list", label: "List" },
+];
+
+const MODE_HINT: Record<string, string> = {
+  "": "Choose a direct reply or book research, then select retrieval effort automatically.",
+  fast: "One quick pass over the best book matches.",
+  standard: "Search focused facets, check the evidence, then answer.",
+  deep: "Research focused sub-questions, then synthesize the findings.",
+};
+
+const STATUS_LABEL: Record<AskNodeStatus, string> = {
+  queued: "Waiting",
+  active: "Running",
+  done: "Done",
+  failed: "Failed",
+  skipped: "Not selected",
+};
+
+function flowStatus(status: AskNodeStatus): AgenticNodeStatus {
+  if (status === "active") return "running";
+  if (status === "done" || status === "failed") return status;
+  return "pending";
+}
+
+function graphState(turn: AskTurn | null): AskTurn["graph"] {
+  const graph = turn?.graph ?? {
+    route: "",
+    active_node: null,
+    visited_nodes: [],
+    retrieval_sources: [],
+    status: "idle" as const,
+  };
+  return turn?.error && graph.status !== "failed" ? { ...graph, status: "failed" } : graph;
+}
+
+function stepStatus(graph: AskTurn["graph"], aliases: readonly string[], selected: boolean): AskNodeStatus {
   const hasVisited = aliases.some((node) => graph.visited_nodes.includes(node));
   const isActive = aliases.includes(graph.active_node ?? "");
   const lastVisited = graph.visited_nodes.at(-1);
@@ -22,123 +277,387 @@ function stepStatus(graph: AskTurn["graph"], aliases: string[], selected: boolea
   return selected ? "queued" : "skipped";
 }
 
-export function BdAskAgenticGraph({ turn }: { turn: AskTurn | null }) {
-  const graph = turn?.graph ?? {
-    route: "",
-    active_node: null,
-    visited_nodes: [],
-    retrieval_sources: [],
-    status: "idle" as const,
-  };
-  const deep = graph.route === "deep" || turn?.mode === "deep";
-  const selectedRoute = graph.route || (turn?.mode ? (deep ? "deep" : "standard") : "");
-  const isSelected = (key: string) => key === selectedRoute;
-  const retrievalStatus = stepStatus(graph, ["run_subagent"], true);
-  const sources = new Set(graph.retrieval_sources.map((source) => source.toLowerCase()));
-  const sourceDetail = (source: "qdrant" | "neo4j") => {
-    if (retrievalStatus === "queued") return "Waiting for retrieval";
-    if (retrievalStatus === "active") return "Searching in parallel";
-    return [...sources].some((item) => item.includes(source)) ? "Evidence returned" : "Lookup completed";
-  };
-
-  const steps: AgenticGraphStep[] = [
-    {
-      id: "plan_research",
-      label: "Plan book research",
-      description: "Choose focused search queries and a retrieval route for the question.",
-      status: stepStatus(graph, ["plan_research"], true),
-      detail: turn?.deep?.planText || undefined,
-    },
-    {
-      id: "run_subagent",
-      label: "Retrieve book evidence",
-      description: "Search both indexed evidence stores in parallel.",
-      status: retrievalStatus,
-      children: [
-        {
-          id: "qdrant",
-          label: "Qdrant vector search",
-          detail: sourceDetail("qdrant"),
-          status: retrievalStatus,
-        },
-        { id: "neo4j", label: "Neo4j graph search", detail: sourceDetail("neo4j"), status: retrievalStatus },
-      ],
-    },
-    {
-      id: "grade_documents",
-      label: "Grade retrieved evidence",
-      description: "Check relevance, with a query refinement loop when coverage is weak.",
-      status: stepStatus(graph, ["grade_documents"], true),
-    },
-  ];
-
-  steps.push({
-    id: "rewrite_query",
-    label: "Refine and search again (when needed)",
-    description: "The graph can return to retrieval when evidence needs better coverage.",
-    status: stepStatus(
-      graph,
-      ["rewrite_query"],
-      graph.status !== "done" || graph.visited_nodes.includes("rewrite_query"),
-    ),
-  });
-
-  steps.push(
-    {
-      id: "answer_route",
-      label: "Choose answer strategy",
-      description: "Use direct grounded generation or synthesize planned sub-question findings.",
-      status: selectedRoute ? (graph.status === "done" ? "done" : "active") : "queued",
-      children: [
-        {
-          id: "generate",
-          label: "Standard · grounded answer",
-          status: isSelected("standard")
-            ? stepStatus(graph, ["generate"], true)
-            : selectedRoute
-              ? "skipped"
-              : "queued",
-        },
-        {
-          id: "synthesize",
-          label: "Deep · synthesize findings",
-          status: isSelected("deep")
-            ? stepStatus(graph, ["synthesize"], true)
-            : selectedRoute
-              ? "skipped"
-              : "queued",
-        },
-      ],
-    },
-    {
-      id: "critic",
-      label: "Verify answer support",
-      description: "Assess grounding and confidence against retrieved book evidence.",
-      status: stepStatus(graph, ["critic"], true),
-    },
-    {
-      id: "format_citations",
-      label: "Format page citations",
-      description: "Link answer references back to the indexed book pages.",
-      status: stepStatus(graph, ["format_citations"], true),
-    },
+function hasSource(sources: ReadonlySet<string>, source: "elasticsearch" | "qdrant" | "neo4j"): boolean {
+  return [...sources].some(
+    (item) => item.includes(source) || (source === "elasticsearch" && item.includes("bm25")),
   );
+}
 
-  const route = !turn
-    ? "Awaiting a question"
-    : !graph.route && !turn.mode
-      ? "Adaptive · planning retrieval"
-      : `${isSelected("deep") ? "Deep" : "Standard"} · book-scoped evidence`;
+function makeViews(turn: AskTurn | null): AskView[] {
+  const graph = graphState(turn);
+  const route = graph.route || turn?.mode || "";
+  const routeKnown = Boolean(route);
+  const isConversation = route === "conversation";
+  const bookRoute = !isConversation;
+  const externalVisited = graph.visited_nodes.includes("search_external");
+  const externalNotRequested = turn?.externalSearchStatus?.toLowerCase() === "not_requested";
+  const externalPastDecision =
+    graph.visited_nodes.includes("grade_documents") ||
+    (isConversation && graph.visited_nodes.includes("direct_answer") && !externalVisited);
+  const externalSkipped =
+    externalNotRequested ||
+    (graph.status === "done" && !externalVisited) ||
+    (externalPastDecision && !externalVisited);
+  let externalStatus: AskNodeStatus = externalSkipped
+    ? "skipped"
+    : stepStatus(graph, ["search_external"], true);
+  if (turn?.externalSearchStatus === "unavailable" && graph.status !== "failed") {
+    externalStatus = "failed";
+  }
+  const rewriteVisited = graph.visited_nodes.includes("rewrite_query");
+  const rewriteResolved =
+    rewriteVisited || graph.visited_nodes.includes("generate") || graph.visited_nodes.includes("synthesize");
+  const rewriteStatus =
+    !bookRoute || ((graph.status === "done" || rewriteResolved) && !rewriteVisited)
+      ? "skipped"
+      : stepStatus(graph, ["rewrite_query"], true);
+
+  const statusFor = (id: AskNodeId): AskNodeStatus => {
+    if (id === "plan_research") return stepStatus(graph, [id], true);
+    if (id === "direct_answer")
+      return isConversation ? stepStatus(graph, [id], true) : routeKnown ? "skipped" : "queued";
+    if (id === "run_subagent") return stepStatus(graph, [id], bookRoute);
+    if (id === "search_external") return externalStatus;
+    if (id === "grade_documents") return stepStatus(graph, [id], bookRoute);
+    if (id === "rewrite_query") return rewriteStatus;
+    if (id === "generate")
+      return !isConversation && route !== "deep"
+        ? stepStatus(graph, [id], true)
+        : routeKnown
+          ? "skipped"
+          : "queued";
+    if (id === "synthesize")
+      return route === "deep" ? stepStatus(graph, [id], true) : routeKnown ? "skipped" : "queued";
+    if (id === "critic" || id === "format_citations") return stepStatus(graph, [id], bookRoute);
+    return "queued";
+  };
+
+  return VIEWS.map((view) => {
+    const status = statusFor(view.id);
+    let detail: string | null = null;
+    if (view.id === "plan_research") detail = turn?.deep?.planText || null;
+    if (view.id === "run_subagent") {
+      detail =
+        status === "active"
+          ? "Searching ElasticSearch, Qdrant, and Neo4j in parallel."
+          : status === "done"
+            ? `${graph.retrieval_sources.length} retrieval source${graph.retrieval_sources.length === 1 ? "" : "s"} returned evidence.`
+            : status === "failed"
+              ? "Book evidence retrieval did not complete."
+              : null;
+    }
+    if (view.id === "search_external") {
+      const external = turn?.externalSearchStatus?.toLowerCase();
+      detail =
+        external === "complete"
+          ? "External sources were added to the evidence set."
+          : external === "no_results"
+            ? "The configured search returned no usable sources."
+            : external === "unavailable"
+              ? "The configured search source could not be used; book evidence remains available."
+              : external === "invalid_query"
+                ? "A search query could not be prepared."
+                : status === "skipped"
+                  ? "Not used for this question."
+                  : "Optional. Used when the question needs current or outside information.";
+    }
+    if (view.id === "rewrite_query" && status === "done")
+      detail = "The search query was refined and retrieval ran again.";
+    if (view.id === "critic" && turn?.confidence !== null && turn?.confidence !== undefined) {
+      detail = `Confidence assessment: ${(turn.confidence * 100).toFixed(0)}%.`;
+    }
+    if (view.id === "format_citations" && turn?.citations.length) {
+      detail = `${turn.citations.length} source${turn.citations.length === 1 ? "" : "s"} attached to the answer.`;
+    }
+    if (
+      (view.id === "generate" || view.id === "synthesize" || view.id === "direct_answer") &&
+      status === "active"
+    ) {
+      detail = "Writing the response.";
+    }
+    return { ...view, status, detail };
+  });
+}
+
+function toNodeViews(steps: readonly AskView[]): AgenticNodeView[] {
+  return steps.map((step) => ({
+    id: step.id,
+    label: step.label,
+    status: flowStatus(step.status),
+    statusLabel: STATUS_LABEL[step.status],
+    kpi: STATUS_LABEL[step.status],
+    liveLine: step.detail,
+    resources: NO_RESOURCES,
+    progress: null,
+  }));
+}
+
+function externalStatusText(status: AskNodeStatus, included: boolean): string {
+  if (status === "skipped") return "Not used for this question.";
+  if (status === "queued") return "Waiting for the retrieval step.";
+  if (status === "active") return "Searching the configured external source.";
+  if (status === "failed") return "Search was unavailable or could not complete.";
+  return included
+    ? "Evidence from this index was included."
+    : "No evidence tagged from this index was returned.";
+}
+
+function AskNodeSheet({
+  step,
+  turn,
+  sources,
+  onClose,
+}: {
+  step: AskView;
+  turn: AskTurn | null;
+  sources: ReadonlySet<string>;
+  onClose: () => void;
+}) {
+  const details = NODE_DETAILS[step.id];
   return (
-    <AgenticGraphPanel
-      title="Adaptive Agentic RAG"
-      description="BD Ask · book-grounded answers"
-      route={route}
-      status={turn?.error ? "failed" : graph.status}
-      steps={steps}
-      footer={
-        turn ? <p className="m-0 text-xs text-muted-foreground">Current turn: {turn.question}</p> : undefined
-      }
-    />
+    <SideSheet
+      title={step.label}
+      subtitle={`LangGraph node · ${step.id}`}
+      closeLabel={`Close ${step.label} details`}
+      onClose={onClose}
+    >
+      <div className="flex flex-col gap-4">
+        <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+          <AgenticStatusGlyph status={flowStatus(step.status)} />
+          {STATUS_LABEL[step.status]}
+        </span>
+        <section>
+          <h3 className="text-sm font-medium">What this step does</h3>
+          <p className="mt-1 text-sm leading-relaxed text-muted-foreground">{step.description}</p>
+          {step.detail ? <p className="mt-2 break-words text-sm leading-relaxed">{step.detail}</p> : null}
+        </section>
+        <section className="grid gap-4 border-t border-border pt-4 sm:grid-cols-2">
+          <div>
+            <h3 className="text-sm font-medium">Reads</h3>
+            <ul className="mt-1 flex list-disc flex-col gap-1 pl-5 text-xs leading-relaxed text-muted-foreground">
+              {details.reads.map((item) => (
+                <li key={item}>{item}</li>
+              ))}
+            </ul>
+          </div>
+          <div>
+            <h3 className="text-sm font-medium">Writes</h3>
+            <ul className="mt-1 flex list-disc flex-col gap-1 pl-5 text-xs leading-relaxed text-muted-foreground">
+              {details.writes.map((item) => (
+                <li key={item}>{item}</li>
+              ))}
+            </ul>
+          </div>
+        </section>
+        <section>
+          <h3 className="text-sm font-medium">Agent resources</h3>
+          <AgenticNodeDetailsList resources={details.resources} />
+          <div className="mt-3">
+            <h4 className="text-xs font-medium text-muted-foreground">Model work</h4>
+            <p className="mt-1 text-xs leading-relaxed">{details.llm}</p>
+          </div>
+        </section>
+        {step.id === "run_subagent" ? (
+          <section>
+            <h3 className="text-sm font-medium">Book retrieval sources</h3>
+            <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+              These are parallel retrieval operations inside this LangGraph node.
+            </p>
+            <ul className="mt-3 flex list-none flex-col gap-3 border-l border-border pl-3">
+              {(
+                [
+                  ["elasticsearch", "ElasticSearch · full-text"],
+                  ["qdrant", "Qdrant · vector"],
+                  ["neo4j", "Neo4j · knowledge graph"],
+                ] as const
+              ).map(([source, label]) => (
+                <li key={source} className="flex flex-col gap-1">
+                  <span className="text-sm font-medium">{label}</span>
+                  <span className="text-xs text-muted-foreground">
+                    {externalStatusText(step.status, hasSource(sources, source))}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </section>
+        ) : null}
+        {step.id === "search_external" ? (
+          <section className="rounded-sm border border-border bg-muted/30 p-3">
+            <h3 className="text-sm font-medium">Optional Search MCP</h3>
+            <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+              This lane runs only when a ready connection is configured in Settings and the plan requests
+              outside information.
+            </p>
+          </section>
+        ) : null}
+        {step.id === "plan_research" && turn?.deep ? (
+          <section>
+            <h3 className="text-sm font-medium">Research plan</h3>
+            {turn.deep.planText ? (
+              <p className="mt-1 whitespace-pre-wrap text-sm text-muted-foreground">{turn.deep.planText}</p>
+            ) : null}
+            {turn.deep.cards.length ? (
+              <ol className="mt-3 flex list-decimal flex-col gap-3 pl-5">
+                {turn.deep.cards.map((card) => (
+                  <li key={card.question} className="pl-1 text-sm">
+                    <p>{card.question}</p>
+                    {card.answer ? (
+                      <p className="mt-1 whitespace-pre-wrap text-xs leading-relaxed text-muted-foreground">
+                        {card.answer}
+                      </p>
+                    ) : null}
+                  </li>
+                ))}
+              </ol>
+            ) : null}
+          </section>
+        ) : null}
+        {step.id === "format_citations" ? (
+          <section>
+            <h3 className="mb-2 text-sm font-medium">Sources attached to this answer</h3>
+            <AskSources citations={turn?.citations ?? []} highlight={null} heading="Answer sources" />
+          </section>
+        ) : null}
+        {turn?.error ? (
+          <p role="alert" className="rounded-sm border border-destructive p-3 text-sm text-destructive-text">
+            {turn.error}
+          </p>
+        ) : null}
+      </div>
+    </SideSheet>
+  );
+}
+
+export function BdAskAgenticGraph({
+  turn,
+  mode,
+  onMode,
+  onUsage,
+}: {
+  turn: AskTurn | null;
+  mode: string;
+  onMode: (mode: string) => void;
+  onUsage: () => void;
+}) {
+  const [viewMode, setViewMode] = useState<ViewMode>("graph");
+  const [selectedNode, setSelectedNode] = useState<AskNodeId | null>(null);
+  const steps = makeViews(turn);
+  const graph = graphState(turn);
+  const route = graph.route || turn?.mode || "";
+  const routeLabel = !turn
+    ? "Awaiting a question"
+    : !route
+      ? "Adaptive · planning"
+      : `${askRouteLabel(route, turn.mode)} · ${route === "conversation" ? "direct response" : "book evidence"}`;
+  const flowNodes = toNodeViews(steps);
+  const activeStep = steps.find((step) => step.id === selectedNode);
+  const sourceSet = new Set(graph.retrieval_sources.map((source) => source.toLowerCase()));
+  const overallStatus = turn?.error ? "failed" : graph.status;
+  const overallStatusLabel =
+    overallStatus === "idle"
+      ? "Ready"
+      : overallStatus === "done"
+        ? "Complete"
+        : overallStatus === "failed"
+          ? "Failed"
+          : "Running";
+
+  return (
+    <section
+      aria-label="Adaptive Agentic RAG graph"
+      className="rounded-sm border border-border bg-background"
+    >
+      <header className="border-b border-border px-3 py-3">
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0">
+            <h2 className="m-0 text-sm font-semibold tracking-tight">Adaptive Agentic RAG</h2>
+            <p className="mt-1 mb-0 text-xs leading-4 text-muted-foreground">
+              BD Ask · live workflow and node details
+            </p>
+          </div>
+          <span
+            className={`shrink-0 rounded-sm border px-2 py-1 text-xs ${overallStatus === "failed" ? "border-destructive text-destructive-text" : "border-border text-muted-foreground"}`}
+          >
+            {overallStatusLabel}
+          </span>
+        </div>
+        <p className="mt-3 mb-0 text-xs text-muted-foreground">
+          <span className="font-medium text-foreground">Route:</span> {routeLabel}
+        </p>
+        <div className="mt-2 grid w-full min-w-0 grid-cols-3 gap-2">
+          <label htmlFor="bd-ask-mode" className="flex h-10 min-w-0 items-center gap-1 text-xs">
+            <span className="shrink-0 font-medium max-[400px]:hidden">Effort</span>
+            <select
+              id="bd-ask-mode"
+              name="bd-ask-mode"
+              aria-label="Retrieval effort"
+              value={mode}
+              title={MODE_HINT[mode] ?? MODE_HINT[""]}
+              onChange={(event) => onMode(event.target.value)}
+              className="h-10 min-w-0 flex-1 rounded-sm border border-input bg-background px-1.5 text-xs text-foreground outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+            >
+              {ASK_MODES.map((option) => (
+                <option key={option.id || "auto"} value={option.id}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <Button
+            type="button"
+            onClick={onUsage}
+            className="w-full min-w-0 justify-center gap-1 px-1.5 text-xs whitespace-nowrap"
+          >
+            <Gauge aria-hidden data-icon="inline-start" className="max-[400px]:hidden" />
+            LLM usage
+          </Button>
+          <div className="min-w-0">
+            <ToggleGroup
+              legend="Adaptive RAG shown as"
+              options={VIEW_MODES}
+              value={viewMode}
+              onChange={setViewMode}
+              fullWidth
+              compact
+            />
+          </div>
+        </div>
+      </header>
+      <div className="min-w-0 overflow-hidden">
+        {viewMode === "graph" ? (
+          <AgenticFlow
+            views={flowNodes}
+            onOpenNode={(nodeId) => setSelectedNode(nodeId as AskNodeId)}
+            ariaLabel="BD Ask LangGraph execution graph"
+            connections={CONNECTIONS}
+            positions={POSITIONS}
+            fitView
+            fitViewOptions={{ padding: 0.12 }}
+            className="h-[min(78vh,900px)] min-h-[500px]"
+          />
+        ) : (
+          <div className="p-3">
+            <AgenticNodeList
+              rows={flowNodes}
+              onOpen={(nodeId) => setSelectedNode(nodeId as AskNodeId)}
+              label="BD Ask workflow nodes"
+            />
+          </div>
+        )}
+      </div>
+      {turn ? (
+        <footer className="border-t border-border px-3 py-3">
+          <p className="m-0 break-words text-xs text-muted-foreground">Current turn: {turn.question}</p>
+        </footer>
+      ) : null}
+      {activeStep ? (
+        <AskNodeSheet
+          step={activeStep}
+          turn={turn}
+          sources={sourceSet}
+          onClose={() => setSelectedNode(null)}
+        />
+      ) : null}
+    </section>
   );
 }

@@ -190,19 +190,33 @@ async def checkpoint_before_node(
     remains available as an audit trail because this operation creates a new
     branch.
     """
-    async for snapshot in graph.aget_state_history(config):
-        next_nodes = tuple(snapshot.next or ())
-        if node_id not in next_nodes:
-            continue
-        if any(next_node != node_id for next_node in next_nodes):
-            raise ValueError(
-                f"node {node_id!r} shares a pending checkpoint with different nodes; "
-                "it cannot be replayed independently"
+    for attempt in range(params.CHECKPOINT_LOOKUP_RETRY_ATTEMPTS):
+        try:
+            async for snapshot in graph.aget_state_history(config):
+                next_nodes = tuple(snapshot.next or ())
+                if node_id not in next_nodes:
+                    continue
+                if any(next_node != node_id for next_node in next_nodes):
+                    raise ValueError(
+                        f"node {node_id!r} shares a pending checkpoint with different nodes; "
+                        "it cannot be replayed independently"
+                    )
+                snapshot_config = snapshot.config
+                if isinstance(snapshot_config, dict):
+                    return snapshot_config
+            raise ValueError(f"no saved checkpoint schedules node {node_id!r}")
+        except psycopg.OperationalError as error:
+            if attempt + 1 >= params.CHECKPOINT_LOOKUP_RETRY_ATTEMPTS:
+                raise
+            delay_s = params.CHECKPOINT_LOOKUP_RETRY_BACKOFF_S * (attempt + 1)
+            logger.warning(
+                "[checkpointer] state history read failed; retrying attempt=%s/%s delay_s=%.1f error=%s",
+                attempt + 1,
+                params.CHECKPOINT_LOOKUP_RETRY_ATTEMPTS,
+                delay_s,
+                str(error)[:240],
             )
-        snapshot_config = snapshot.config
-        if isinstance(snapshot_config, dict):
-            return snapshot_config
-    raise ValueError(f"no saved checkpoint schedules node {node_id!r}")
+            await asyncio.sleep(delay_s)
 
 
 # Public surface for the rest of the code (the re-exports are intentional).

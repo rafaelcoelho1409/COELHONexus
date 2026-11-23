@@ -1,5 +1,7 @@
 """Application service for Neo4j graph-indexing orchestration."""
 from __future__ import annotations
+import domains
+from .... import graphs
 
 import asyncio
 import logging
@@ -10,9 +12,6 @@ from typing import Any
 from langchain_core.documents import Document
 from langchain_neo4j import LLMGraphTransformer
 
-import domains
-
-from .... import graphs
 
 logger = logging.getLogger(__name__)
 

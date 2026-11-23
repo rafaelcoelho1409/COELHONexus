@@ -4,14 +4,12 @@ This fixed-call transformer is an explicit exception to the DeepAgent modules
 in this package. It does not plan or invoke tools.
 """
 from __future__ import annotations
+import domains
+from .... import prompts
 
 from typing import Any
 
 from langchain_neo4j import LLMGraphTransformer
-
-import domains
-
-from .... import prompts
 
 
 def graph_transformer(model: Any) -> LLMGraphTransformer:

@@ -243,8 +243,6 @@ function AskConversation({
         start={
           <div className="w-full min-w-0">
             <AskToolbar
-              mode={mode}
-              onMode={setMode}
               scope={locked ? lockedScope : scope}
               scopeLocked={locked}
               onScope={setScope}
@@ -258,12 +256,11 @@ function AskConversation({
                 setHighlight(null);
                 setSheet("sources");
               }}
-              onUsage={() => setSheet("usage")}
             />
           </div>
         }
       />
-      <div className="grid gap-4 lg:grid-cols-[minmax(20rem,35fr)_minmax(0,65fr)] lg:gap-x-6">
+      <div className="grid gap-4 lg:grid-cols-[minmax(24rem,35fr)_minmax(0,65fr)] lg:gap-x-6">
         <fieldset className="m-0 grid grid-cols-2 gap-2 border-0 p-0 lg:hidden">
           <legend className="sr-only">Ask workspace view</legend>
           <ActionButton
@@ -291,7 +288,12 @@ function AskConversation({
           className={`${mobilePane === "graph" ? "block" : "hidden"} min-w-0 lg:col-start-1 lg:row-span-2 lg:row-start-1 lg:block`}
         >
           <div className="lg:sticky lg:top-[calc(var(--chrome-top)+1.5rem)] lg:max-h-[calc(100dvh-var(--chrome-top)-2.5rem)] lg:overflow-y-auto lg:pr-1">
-            <YcsAskAgenticGraph turn={turns.at(-1) ?? null} />
+            <YcsAskAgenticGraph
+              turn={turns.at(-1) ?? null}
+              mode={mode}
+              onMode={setMode}
+              onUsage={() => setSheet("usage")}
+            />
           </div>
         </aside>
         {/* Tall enough that the message box sits at the bottom of the screen even before there is a conversation. */}

@@ -1,6 +1,6 @@
 """Synthesize chapter Distill node."""
 from __future__ import annotations
 
-from . import node, service
+from . import errors, node, service
 
-__all__ = ["node", "service"]
+__all__ = ["errors", "node", "service"]

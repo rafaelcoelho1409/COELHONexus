@@ -1,13 +1,17 @@
 "use client";
 
-/** The Ask stage: a book-scoped conversation over the Agentic RAG index. The book and thread live in the URL, so a refresh or
- * shared link restores the same context. Reads search params, so it sits inside a Suspense boundary. */
+/** The Ask stage can reply directly, research the selected book, and use configured external search.
+ * The book and thread live in the URL, so a refresh or shared link restores the same context. Reads
+ * search params, so it sits inside a Suspense boundary. */
 
 import { useQueryClient } from "@tanstack/react-query";
 import { ArrowDown, MessageSquare, Workflow } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import type { JSX } from "react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+
+import { ContextBar } from "@/shared/layout/context-bar";
+
 import { LibraryPicker } from "../../components/library-list";
 import { useBdOverlays } from "../../hooks/use-overlays";
 import { branchThread, deleteThread } from "../api";
@@ -38,9 +42,10 @@ export function AskStage(): JSX.Element {
     return (
       <div className="flex min-h-[calc(100dvh-16rem)] flex-col items-start justify-center gap-4">
         <div>
-          <h2 className="m-0 text-lg font-semibold tracking-tight">Choose a book to ask</h2>
+          <h2 className="m-0 text-lg font-semibold tracking-tight">Choose a book for BD Ask</h2>
           <p className="mt-1 max-w-xl text-sm text-muted-foreground">
-            Ask searches one distilled book at a time and cites the pages used in each answer.
+            Choose a book to open BD Ask. It can answer directly, research the book, and use configured search
+            for current or outside questions.
           </p>
         </div>
         <LibraryPicker selected={null} showActions={false} onOpen={(id) => router.push(askHref(id))} />
@@ -240,22 +245,26 @@ function AskConversation({
 
   return (
     <div className="flex flex-col gap-4">
-      <AskToolbar
-        mode={mode}
-        onMode={setMode}
-        bookId={bookId}
-        onOpenBook={onOpenBook}
-        threadId={threadId}
-        threadTitle={turns[0]?.question ?? ""}
-        onSwitchThread={(id) => (running ? busyNotice("switch threads") : onOpenThread(id))}
-        onDeleteThread={(id) => void onDeleteThread(id)}
-        onNewThread={() => (running ? busyNotice("start a new thread") : onNewThread())}
-        onSources={() => {
-          if (sourcesTurn === null) setSourcesTurn(lastSourcedTurn(turns));
-          setHighlight(null);
-          setSheet("sources");
-        }}
-        onUsage={() => setSheet("usage")}
+      <ContextBar
+        pinned
+        start={
+          <div className="w-full min-w-0">
+            <AskToolbar
+              bookId={bookId}
+              onOpenBook={onOpenBook}
+              threadId={threadId}
+              threadTitle={turns[0]?.question ?? ""}
+              onSwitchThread={(id) => (running ? busyNotice("switch threads") : onOpenThread(id))}
+              onDeleteThread={(id) => void onDeleteThread(id)}
+              onNewThread={() => (running ? busyNotice("start a new thread") : onNewThread())}
+              onSources={() => {
+                if (sourcesTurn === null) setSourcesTurn(lastSourcedTurn(turns));
+                setHighlight(null);
+                setSheet("sources");
+              }}
+            />
+          </div>
+        }
       />
 
       <fieldset className="m-0 grid grid-cols-2 gap-2 border-0 p-0 lg:hidden">
@@ -284,13 +293,18 @@ function AskConversation({
         </Button>
       </fieldset>
 
-      <div className="grid gap-6 lg:grid-cols-[minmax(16rem,35fr)_minmax(0,65fr)]">
+      <div className="grid gap-6 lg:grid-cols-[minmax(24rem,35fr)_minmax(0,65fr)]">
         <aside
           aria-label="Adaptive Agentic RAG graph"
           className={`${mobilePane === "graph" ? "block" : "hidden"} min-w-0 lg:block`}
         >
           <div className="lg:sticky lg:top-[calc(var(--chrome-top)+1.5rem)] lg:max-h-[calc(100dvh-var(--chrome-top)-2.5rem)] lg:overflow-y-auto lg:pr-1">
-            <BdAskAgenticGraph turn={turns.at(-1) ?? null} />
+            <BdAskAgenticGraph
+              turn={turns.at(-1) ?? null}
+              mode={mode}
+              onMode={setMode}
+              onUsage={() => setSheet("usage")}
+            />
           </div>
         </aside>
         {/* Tall enough that the message box sits at the bottom of the screen even before there is a conversation. */}
@@ -306,9 +320,11 @@ function AskConversation({
 
           {isEmpty ? (
             <div className="flex-1 py-10">
-              <h2 className="m-0 text-lg font-semibold tracking-tight">Ask about this book</h2>
+              <h2 className="m-0 text-lg font-semibold tracking-tight">Ask a question</h2>
               <p className="mt-1 mb-4 text-sm text-muted-foreground">
-                Answers come from indexed book pages and link back to the passages they use.
+                BD Ask can reply directly, research this book across its indexes, or use the configured
+                external search source when you explicitly ask for current or outside information. Book
+                answers link back to their passages.
               </p>
               <ul
                 aria-label="Example questions"

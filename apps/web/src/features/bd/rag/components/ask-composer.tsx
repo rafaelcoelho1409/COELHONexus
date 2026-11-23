@@ -47,7 +47,7 @@ export function AskComposer({
     >
       <div className="flex items-end gap-2">
         <label htmlFor="bd-ask-input" className="sr-only">
-          Ask about this book
+          Ask a question in BD Ask
         </label>
         <textarea
           id="bd-ask-input"
@@ -65,7 +65,7 @@ export function AskComposer({
               onStop();
             }
           }}
-          placeholder="Ask about this book…"
+          placeholder="Ask a question…"
           className="min-h-10 flex-1 resize-none rounded-sm border border-input bg-background px-3 py-2 text-sm leading-relaxed outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
         />
         {running ? (

@@ -140,8 +140,12 @@ export function pageOutline(page: StudyPage, report: LearningGuide): TocEntry[] 
     return [
       entry(`${anchor}-title`, chapter.title),
       entry(`${anchor}-overview`, "Overview"),
+      ...(chapter.learning_objectives.length ? [entry(`${anchor}-objectives`, "Learning objectives")] : []),
       ...(chapter.lessons.length ? [entry(`${anchor}-lessons`, "Key lessons")] : []),
+      ...(chapter.practice_items.length ? [entry(`${anchor}-practice`, "Practice and feedback")] : []),
       ...(chapter.open_questions.length ? [entry(`${anchor}-questions`, "Open questions")] : []),
+      ...(chapter.coverage_review ? [entry(`${anchor}-coverage`, "Chapter coverage review")] : []),
+      ...(chapter.source_figures.length ? [entry(`${anchor}-source-figures`, "Figures from the book")] : []),
       ...(chapter.diagrams.length +
       chapter.equations.length +
       chapter.charts.length +
@@ -224,8 +228,12 @@ export function pageFacts(page: StudyPage, report: LearningGuide): string[] {
     ]).size;
     return [
       `${chapter.lessons.length} lessons`,
+      ...(chapter.learning_objectives.length ? [`${chapter.learning_objectives.length} objectives`] : []),
+      ...(chapter.practice_items.length ? [`${chapter.practice_items.length} practice prompts`] : []),
       `${sources} cited pages`,
-      ...(visuals ? [`${visuals} visual artifacts`] : []),
+      ...(visuals || chapter.source_figures.length
+        ? [`${visuals + chapter.source_figures.length} visual artifacts`]
+        : []),
     ];
   }
   if (page.kind === "glossary") {
@@ -262,7 +270,17 @@ export function needsReview(page: StudyPage, report: LearningGuide | undefined):
     return (
       chapter !== undefined &&
       (chapter.open_questions.length > 0 ||
-        chapter.lessons.some((lesson) => lesson.verification_status === "unverified"))
+        chapter.lessons.some((lesson) => lesson.verification_status === "unverified") ||
+        chapter.coverage_review?.review_required === true ||
+        chapter.coverage_review?.passed === false ||
+        chapter.coverage_review?.complete === false ||
+        ["failed", "incomplete", "needs_review", "partial", "uncovered"].includes(
+          chapter.coverage_review?.status?.toLocaleLowerCase() ?? "",
+        ) ||
+        (chapter.coverage_review !== null &&
+          chapter.coverage_review !== undefined &&
+          (chapter.coverage_review.uncovered_objective_ids.length > 0 ||
+            chapter.coverage_review.uncovered_learning_unit_ids.length > 0)))
     );
   }
   if (page.kind === "glossary")
@@ -294,6 +312,15 @@ export function guideMetrics(report: LearningGuide, quality: GuideQuality) {
       group.maps.length,
     0,
   );
+  const objectives = report.chapters.reduce(
+    (total, chapter) => total + chapter.learning_objectives.length,
+    0,
+  );
+  const practiceItems = report.chapters.reduce((total, chapter) => total + chapter.practice_items.length, 0);
+  const figures = report.chapters.reduce(
+    (total, chapter) => total + chapter.source_figures.length,
+    0,
+  );
   const coverageRate =
     quality?.page_coverage_rate ?? (expectedPages > 0 ? coveredPages / expectedPages : null);
   return [
@@ -310,7 +337,11 @@ export function guideMetrics(report: LearningGuide, quality: GuideQuality) {
     },
     { label: "Key takeaways", value: report.key_takeaways.length.toLocaleString() },
     { label: "Distilled sections", value: report.chapters.length.toLocaleString() },
-    { label: "Visual artifacts", value: visuals.toLocaleString() },
+    { label: "Learning objectives", value: objectives.toLocaleString() },
+    { label: "Practice prompts", value: practiceItems.toLocaleString() },
+    { label: "External research sources", value: report.research_context.sources.length.toLocaleString() },
+    { label: "External findings", value: report.research_context.findings.length.toLocaleString() },
+    { label: "Visual artifacts", value: (visuals + figures).toLocaleString() },
   ];
 }
 

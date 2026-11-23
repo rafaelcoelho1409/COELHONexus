@@ -1,6 +1,7 @@
 """Synthesize source-grounded chapter learning guides."""
 from __future__ import annotations
 import domains
+from . import errors
 from .... import graphs, prompts, skills
 
 import json
@@ -64,17 +65,27 @@ async def _synthesize_chapter_with_llm(
         if attempt:
             payload["response_retry"] = (
                 "The previous answer was empty or did not validate as ChapterSynthesis. Return the full typed schema. "
-                "Keep only supplied learning-unit IDs and include the required overview, lessons, and open_questions. "
+                "Correct every schema path named in validation_issue and return one JSON object, not prose or a wrapper. "
+                "Keep only supplied learning-unit IDs and include overview, lessons, open_questions, learning_objectives, "
+                "and practice_items. Practice objective_ids must reference objectives in the same response. "
                 "Leave visual collections empty; the visual specialist handles them."
             )
             if last_error is not None:
-                payload["validation_issue"] = f"{type(last_error).__name__}: {str(last_error)[:900]}"
+                issue = (
+                    str(last_error)
+                    if isinstance(last_error, errors.ChapterSynthesisOutputError)
+                    else type(last_error).__name__
+                )
+                payload["validation_issue"] = f"{type(last_error).__name__}: {issue[:500]}"
         try:
             result = await run_agent_call(payload)
             synthesis = domains.bd.distill.domain.chapter_synthesis_from_agent_result(result)
             if synthesis is not None:
                 return synthesis
-            last_error = ValueError("chapter DeepAgent returned no valid ChapterSynthesis")
+            issues = domains.bd.distill.domain.chapter_synthesis_validation_issues(result)
+            last_error = errors.ChapterSynthesisOutputError(
+                "chapter DeepAgent returned invalid ChapterSynthesis: " + ", ".join(issues),
+            )
         except Exception as error:  # noqa: BLE001 — graph retry handles provider failures; schema retries stay local.
             last_error = error
             if domains.settings.chat.domain.is_transient_provider_error(error):
@@ -88,7 +99,12 @@ async def _synthesize_chapter_with_llm(
             response_attempts,
             type(last_error).__name__ if last_error else "InvalidAgentResponse",
         )
-    raise ValueError("chapter synthesizer returned no valid ChapterSynthesis after DeepAgent retries") from last_error
+    if last_error is not None and not isinstance(last_error, errors.ChapterSynthesisOutputError):
+        raise last_error
+    issue = str(last_error) if last_error is not None else "unknown schema issue"
+    raise errors.ChapterSynthesisOutputError(
+        f"chapter synthesizer returned no valid ChapterSynthesis after {response_attempts} attempts: {issue}",
+    ) from last_error
 
 
 async def _ensure_chapter_citations(
@@ -110,7 +126,8 @@ async def _ensure_chapter_citations(
             + "that are not present in this section's input. Return a complete corrected chapter "
             + "guide. Preserve supported prose, but use only exact IDs from the supplied section; "
             + "never invent, infer, or copy an ID from another section. Every overview, lesson, "
-            + "and open question must cite at least one allowed ID.\nAllowed IDs: "
+            + "open question, learning objective, and practice item must cite at least one allowed ID. "
+            + "Practice objective_ids must refer to objectives in the same response.\nAllowed IDs: "
             + json.dumps(sorted(allowed_ids), ensure_ascii = False)
             + "\nValidation findings: "
             + json.dumps(issues, ensure_ascii = False)
@@ -194,12 +211,26 @@ async def synthesize_chapter(
         + "must use only the available learning_unit_ids.\n"
         + json.dumps({"section": chapter_input, "learning_units": units}, ensure_ascii = False)
     )
-    synthesis = await _synthesize_chapter_with_llm(
-        dependencies,
-        state["run_id"],
-        ref["chapter_id"],
-        prompt,
-    )
+    synthesis_review_flags: list[str] = []
+    try:
+        synthesis = await _synthesize_chapter_with_llm(
+            dependencies,
+            state["run_id"],
+            ref["chapter_id"],
+            prompt,
+        )
+    except errors.ChapterSynthesisOutputError as error:
+        synthesis = domains.bd.distill.synthesize.domain.fallback_chapter_synthesis(units)
+        synthesis_review_flags.append(
+            "The structured chapter response was invalid after repair attempts. This guide uses the source-cited "
+            "learning units; learning objectives and practice items were omitted and this section needs review."
+        )
+        logger.warning(
+            "[bd-distill] using verified-source chapter fallback run=%s chapter=%s issue=%s",
+            state["run_id"],
+            ref["chapter_id"],
+            str(error)[:500],
+        )
     allowed_ids = set(ref["unit_ids"])
     citation_review_flags: list[str] = []
     synthesis, citation_flags = await _ensure_chapter_citations(
@@ -226,6 +257,7 @@ async def synthesize_chapter(
         "unit_ids": ref["unit_ids"],
         "synthesis": synthesis.model_dump(mode = "json"),
         "citation_review_flags": list(dict.fromkeys(citation_review_flags)),
+        "synthesis_review_flags": list(dict.fromkeys(synthesis_review_flags)),
         "visual_review_flags": [],
         "visuals_status": "pending",
     }

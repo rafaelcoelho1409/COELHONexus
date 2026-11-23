@@ -39,9 +39,11 @@ def book_synthesis_context(
         summary = _filter_book_summary(guide.get("summary", {}), allowed_ids)
         if not isinstance(summary, dict) or not _book_citation_ids(summary):
             continue
+        # Keep opaque storage identifiers out of model context. Chapter and
+        # synthesis IDs resemble learning-unit IDs and can be mistaken for citations.
         prompt_guide = {
             key: guide[key]
-            for key in ("chapter_id", "synthesis_id", "title", "section_path", "first_page", "last_page")
+            for key in ("title", "section_path", "first_page", "last_page")
             if key in guide
         }
         prompt_guide["summary"] = summary
@@ -106,7 +108,70 @@ def chapter_required_text_ids(synthesis: domains.bd.distill.schemas.ChapterSynth
     ids = set(synthesis.overview_learning_unit_ids)
     for lesson in [*synthesis.lessons, *synthesis.open_questions]:
         ids.update(lesson.learning_unit_ids)
+    for objective in synthesis.learning_objectives:
+        ids.update(objective.learning_unit_ids)
+    for item in synthesis.practice_items:
+        ids.update(item.learning_unit_ids)
     return ids
+
+
+def fallback_chapter_synthesis(
+    units: list[dict[str, Any]],
+) -> domains.bd.distill.schemas.ChapterSynthesis:
+    """Build a minimal guide from persisted source-cited learning units if structured generation fails."""
+    lessons = []
+    overview_parts = []
+    overview_attributions = []
+    for unit in units:
+        unit_id = unit.get("learning_unit_id")
+        title = unit.get("title")
+        claim = unit.get("claim")
+        explanation = unit.get("explanation")
+        if not all(isinstance(value, str) and value.strip() for value in (unit_id, title)):
+            continue
+        if not isinstance(explanation, str) or not explanation.strip():
+            explanation = claim if isinstance(claim, str) else ""
+        if not explanation.strip():
+            continue
+        claim_text = claim.strip() if isinstance(claim, str) and claim.strip() else explanation.strip()
+        lesson_text = _bounded_text(f"{claim_text} {explanation.strip()}", 3000)
+        attribution = unit.get("attribution")
+        if attribution not in ("book", "agent_inference"):
+            attribution = "book"
+        lessons.append(domains.bd.distill.schemas.ChapterLesson(
+            title = _bounded_text(title.strip(), 180),
+            explanation = lesson_text,
+            attribution = attribution,
+            learning_unit_ids = [unit_id],
+        ))
+        overview_parts.append(f"{title.strip()}: {claim_text}")
+        overview_attributions.append(attribution)
+
+    if not lessons:
+        raise ValueError("verified learning units cannot produce a chapter fallback")
+
+    return domains.bd.distill.schemas.ChapterSynthesis(
+        overview = _bounded_text("Verified lessons in this section: " + "; ".join(overview_parts), 4000),
+        overview_attribution = "agent_inference" if "agent_inference" in overview_attributions else "book",
+        overview_learning_unit_ids = [lesson.learning_unit_ids[0] for lesson in lessons],
+        lessons = lessons,
+        open_questions = [],
+        learning_objectives = [],
+        practice_items = [],
+        source_figures = [],
+        diagrams = [],
+        equations = [],
+        charts = [],
+        timelines = [],
+        maps = [],
+    )
+
+
+def _bounded_text(value: str, limit: int) -> str:
+    normalized = " ".join(value.split())
+    if len(normalized) <= limit:
+        return normalized
+    return normalized[:limit - 1].rsplit(" ", 1)[0].rstrip(" ,;:") + "…"
 
 
 def chapter_citation_issues(
@@ -125,6 +190,18 @@ def chapter_citation_issues(
         [
             (f"open_questions[{index}].learning_unit_ids", question.learning_unit_ids)
             for index, question in enumerate(synthesis.open_questions)
+        ]
+    )
+    fields.extend(
+        [
+            (f"learning_objectives[{index}].learning_unit_ids", objective.learning_unit_ids)
+            for index, objective in enumerate(synthesis.learning_objectives)
+        ]
+    )
+    fields.extend(
+        [
+            (f"practice_items[{index}].learning_unit_ids", item.learning_unit_ids)
+            for index, item in enumerate(synthesis.practice_items)
         ]
     )
     return [
@@ -169,6 +246,43 @@ def repair_chapter_citations(
 
     lessons = retain_supported(synthesis.lessons, "lessons")
     open_questions = retain_supported(synthesis.open_questions, "open_questions")
+    learning_objectives = []
+    for objective in synthesis.learning_objectives:
+        valid_ids = list(dict.fromkeys(
+            unit_id for unit_id in objective.learning_unit_ids if unit_id in available_ids
+        ))
+        if not valid_ids:
+            review_flags.append(
+                f"Omitted objective without a resolvable source citation: {objective.objective_id}."
+            )
+            continue
+        if len(valid_ids) != len(objective.learning_unit_ids):
+            review_flags.append(
+                f"Removed unresolved citations from objective {objective.objective_id}."
+            )
+        learning_objectives.append(objective.model_copy(update = {"learning_unit_ids": valid_ids}))
+    allowed_objective_ids = {item.objective_id for item in learning_objectives}
+    practice_items = []
+    for item in synthesis.practice_items:
+        valid_ids = list(dict.fromkeys(
+            unit_id for unit_id in item.learning_unit_ids if unit_id in available_ids
+        ))
+        valid_objective_ids = list(dict.fromkeys(
+            objective_id for objective_id in item.objective_ids if objective_id in allowed_objective_ids
+        ))
+        if not valid_ids or not valid_objective_ids:
+            review_flags.append(
+                f"Omitted practice item without resolvable objective and source citations: {item.practice_id}."
+            )
+            continue
+        if len(valid_ids) != len(item.learning_unit_ids) or len(valid_objective_ids) != len(item.objective_ids):
+            review_flags.append(
+                f"Removed unresolved citations from practice item {item.practice_id}."
+            )
+        practice_items.append(item.model_copy(update = {
+            "learning_unit_ids": valid_ids,
+            "objective_ids": valid_objective_ids,
+        }))
     overview_ids = list(dict.fromkeys(
         unit_id for unit_id in synthesis.overview_learning_unit_ids if unit_id in available_ids
     ))
@@ -198,6 +312,8 @@ def repair_chapter_citations(
         "overview_learning_unit_ids": overview_ids,
         "lessons": lessons,
         "open_questions": open_questions,
+        "learning_objectives": learning_objectives,
+        "practice_items": practice_items,
     })
     return repaired, review_flags
 

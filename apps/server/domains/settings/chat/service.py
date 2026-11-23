@@ -282,6 +282,10 @@ def build_chat_model(
     Celery worker whose module-level endpoint was initialized before settings
     credentials were warm."""
     _apply_endpoint()
+    if not ENDPOINT.base_url:
+        raise ValueError(
+            "No LLM endpoint URL is configured. Set the LLM Endpoint in Settings."
+        )
     kwargs: dict = {
         "base_url":          ENDPOINT.base_url,
         "api_key":           ENDPOINT.api_key,

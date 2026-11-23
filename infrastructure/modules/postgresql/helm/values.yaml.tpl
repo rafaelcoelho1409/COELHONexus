@@ -53,7 +53,7 @@ primary:
     accessModes:
       - ReadWriteOnce
 
-  # Real measured: 20m CPU, 172Mi RAM. Below leaves ~2x headroom.
+  # PostgreSQL was OOM-killed repeatedly at 384Mi; reserve 512Mi and allow 1Gi.
   resources:
     requests:
       cpu: "${cpu_request}"
@@ -70,7 +70,7 @@ primary:
     - name: run-postgresql
       mountPath: /var/run/postgresql
 
-  # postgresql.conf overrides — tuned for homelab workload + 384Mi mem limit.
+  # postgresql.conf overrides — tuned for homelab workload + 1Gi mem limit.
   # Inlined as literal YAML (multi-line string). No yamlencode interpolation.
   extendedConfiguration: |
     max_connections = ${max_connections}

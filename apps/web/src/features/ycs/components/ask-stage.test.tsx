@@ -137,7 +137,7 @@ describe("Ask stage — new thread", () => {
     renderStage();
     await screen.findByRole("heading", { name: "Ask about your videos" });
 
-    await user.click(screen.getByLabelText("Deep"));
+    await user.selectOptions(screen.getByLabelText("Retrieval effort"), "deep");
     await user.type(screen.getByRole("textbox", { name: "Ask about your videos" }), "What is Redis?{Enter}");
 
     expect(await screen.findByText(/Redis is an in-memory store/)).toBeInTheDocument();

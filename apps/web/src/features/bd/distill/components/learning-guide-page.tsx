@@ -1,12 +1,28 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import type { ReactNode } from "react";
+import { useState } from "react";
 import { Markdown } from "@/shared/markdown";
 import { readerFont } from "@/shared/markdown/reader-font";
 import { bookPagesHref } from "../../params";
-import type { LearningGuide, ReportSection } from "../entities";
-import { Attribution, CitationList, GuideFact, Lesson } from "./learning-guide-elements";
+import { sourceFigureUrl } from "../api";
+import type {
+  ChapterCoverageReview as ChapterCoverageReviewData,
+  LearningGuide,
+  LearningObjective,
+  ReportSection,
+  ResearchSource,
+  SourceFigure,
+} from "../entities";
+import {
+  Attribution,
+  CitationList,
+  ExternalCitationList,
+  GuideFact,
+  Lesson,
+} from "./learning-guide-elements";
 import type { GuideQuality, StudyPage } from "./learning-guide-reader-domain";
 import {
   guideMetrics,
@@ -18,6 +34,22 @@ import {
 import { ReportChart as ReportChartView } from "./report-chart";
 import { ReportDiagram as ReportDiagramView } from "./report-diagram";
 import { ReportMapView } from "./report-map";
+
+function learningObjectiveTitle(objective: LearningObjective, index: number): string {
+  return (
+    objective.title ??
+    objective.objective ??
+    objective.learning_objective ??
+    objective.statement ??
+    `Objective ${index + 1}`
+  );
+}
+
+function practiceObjectiveTitle(objectiveId: string, objectives: readonly LearningObjective[]): string {
+  const index = objectives.findIndex((objective) => objective.objective_id === objectiveId);
+  const objective = objectives[index];
+  return objective ? learningObjectiveTitle(objective, index) : "This chapter’s learning objectives";
+}
 
 export function StudyPageArticle({
   report,
@@ -169,6 +201,7 @@ function StudyPageContent({
               id={`${anchor}-lesson-${lessonIndex + 1}`}
               lesson={lesson}
               pageHref={pageHref}
+              externalSources={report.research_context.sources}
             />
           ))}
         </div>
@@ -192,7 +225,16 @@ function StudyPageContent({
           <h4 id={`${anchor}-recommendation`} className="font-medium">
             Recommended approach
           </h4>
-          <Lesson lesson={brief.recommendation} id={`${anchor}-recommendation-lesson`} pageHref={pageHref} />
+          <Lesson
+            lesson={brief.recommendation}
+            id={`${anchor}-recommendation-lesson`}
+            pageHref={pageHref}
+            externalSources={report.research_context.sources}
+          />
+          <ExternalCitationList
+            sourceIds={brief.external_source_ids}
+            sources={report.research_context.sources}
+          />
         </section>
         {brief.options.length ? (
           <section>
@@ -201,7 +243,7 @@ function StudyPageContent({
               {brief.options.map((option, optionIndex) => (
                 <article
                   id={`${anchor}-option-${optionIndex + 1}`}
-                  key={`${option.title}-${optionIndex}`}
+                  key={`${option.title}-${option.expected_outcome}`}
                   className="border-t border-border pt-3"
                 >
                   <h5 className="font-medium">{option.title}</h5>
@@ -216,6 +258,10 @@ function StudyPageContent({
                     <p className="mt-1 text-sm text-muted-foreground">Risks: {option.risks.join(" · ")}</p>
                   ) : null}
                   <CitationList sources={option.source_refs} pageHref={pageHref} />
+                  <ExternalCitationList
+                    sourceIds={option.external_source_ids}
+                    sources={report.research_context.sources}
+                  />
                 </article>
               ))}
             </div>
@@ -261,6 +307,10 @@ function StudyPageContent({
                     Success measure: {step.success_measure}
                   </p>
                   <CitationList sources={step.source_refs} pageHref={pageHref} />
+                  <ExternalCitationList
+                    sourceIds={step.external_source_ids}
+                    sources={report.research_context.sources}
+                  />
                 </li>
               ))}
             </ol>
@@ -293,7 +343,7 @@ function StudyPageContent({
           return (
             <article
               id={`${anchor}-finding-${findingIndex + 1}`}
-              key={`${finding.title}-${findingIndex}`}
+              key={`${finding.title}-${finding.summary}`}
               className="border-t border-border pt-3"
             >
               <h4 className="font-medium">{finding.title}</h4>
@@ -301,6 +351,7 @@ function StudyPageContent({
               <p className="mt-2 text-sm text-muted-foreground">
                 Relation to this book: {finding.relevance_to_book}
               </p>
+              <CitationList sources={finding.source_refs} pageHref={pageHref} />
               <ul className="mt-3 space-y-3">
                 {sources.map((source) => (
                   <li key={source.source_id} className="border-l border-border pl-3">
@@ -308,11 +359,12 @@ function StudyPageContent({
                       href={source.url}
                       target="_blank"
                       rel="noreferrer noopener"
-                      className="font-medium text-primary-text underline underline-offset-2"
+                      className="inline-flex min-h-9 items-center font-medium text-primary-text underline underline-offset-2"
                     >
                       {source.title}
                     </a>
                     <p className="mt-1 text-sm text-muted-foreground">{source.snippet}</p>
+                    <ResearchSourceDetails source={source} />
                     <p className="mt-1 text-xs text-muted-foreground">
                       {source.publisher ?? source.provider_id}
                       {source.published_at ? ` · Published ${source.published_at}` : ""}
@@ -336,11 +388,12 @@ function StudyPageContent({
                     href={source.url}
                     target="_blank"
                     rel="noreferrer noopener"
-                    className="font-medium text-primary-text underline underline-offset-2"
+                    className="inline-flex min-h-9 items-center font-medium text-primary-text underline underline-offset-2"
                   >
                     {source.title}
                   </a>
                   <p className="mt-1 text-sm text-muted-foreground">{source.snippet}</p>
+                  <ResearchSourceDetails source={source} />
                 </li>
               ))}
             </ul>
@@ -353,7 +406,7 @@ function StudyPageContent({
   if (page.kind === "chapter") {
     const chapter = report.chapters[page.chapterIndex ?? -1];
     if (!chapter) return null;
-    return <StudyChapter chapter={chapter} pageHref={pageHref} anchor={anchor} />;
+    return <StudyChapter report={report} chapter={chapter} pageHref={pageHref} anchor={anchor} />;
   }
 
   if (page.kind === "glossary") {
@@ -396,6 +449,7 @@ function StudyPageContent({
               id={`${anchor}-lesson-${lessonIndex + 1}`}
               lesson={lesson}
               pageHref={pageHref}
+              externalSources={report.research_context.sources}
             />
           ))}
         </div>
@@ -406,11 +460,197 @@ function StudyPageContent({
   return <VisualLibrary report={report} anchor={anchor} pageHref={pageHref} />;
 }
 
+function ResearchSourceDetails({ source }: { source: ResearchSource }) {
+  const fullText = source.full_text ?? source.content;
+  if (!fullText && source.passages.length === 0) return null;
+  return (
+    <details className="mt-2 rounded-sm border border-border">
+      <summary className="flex min-h-9 cursor-pointer items-center px-3 py-1.5 text-sm font-medium">
+        Read retrieved text and passages
+      </summary>
+      <div className="space-y-3 border-t border-border px-3 py-3">
+        {source.passages.map((passage) => {
+          const text = passage.quote ?? passage.text;
+          if (!text) return null;
+          return (
+            <blockquote
+              key={`${passage.page_number ?? "passage"}-${text}`}
+              className="border-l border-border pl-3 text-sm text-muted-foreground"
+            >
+              <Markdown text={text} />
+              {passage.page_number ? <p className="mt-1 text-xs">Source page {passage.page_number}</p> : null}
+            </blockquote>
+          );
+        })}
+        {fullText ? (
+          <div className="max-h-[36rem] overflow-y-auto border-t border-border pt-3 text-sm">
+            <Markdown text={fullText} />
+          </div>
+        ) : null}
+      </div>
+    </details>
+  );
+}
+
+function ChapterCoverageReview({
+  review,
+  objectives,
+  pageHref,
+  anchor,
+}: {
+  review: ChapterCoverageReviewData;
+  objectives: readonly LearningObjective[];
+  pageHref: (page: number) => string;
+  anchor: string;
+}) {
+  const reviewNeeded =
+    review.review_required === true ||
+    review.passed === false ||
+    review.complete === false ||
+    ["failed", "incomplete", "needs_review", "partial", "uncovered"].includes(
+      review.status?.toLocaleLowerCase() ?? "",
+    ) ||
+    review.uncovered_objective_ids.length > 0 ||
+    review.uncovered_learning_unit_ids.length > 0;
+  const reviewPassed =
+    review.passed === true ||
+    review.complete === true ||
+    ["complete", "covered", "passed", "success", "verified"].includes(
+      review.status?.toLocaleLowerCase() ?? "",
+    );
+  const coveredUnits = review.covered_unit_count ?? review.covered_learning_unit_ids.length;
+  const totalUnits = review.total_unit_count ?? coveredUnits + review.uncovered_learning_unit_ids.length;
+  const coverageRate = review.coverage_rate ?? (totalUnits > 0 ? coveredUnits / totalUnits : null);
+  const uncoveredObjectives = review.uncovered_objective_ids
+    .map((objectiveId) => objectives.find((objective) => objective.objective_id === objectiveId))
+    .filter((objective) => objective !== undefined)
+    .map((objective) => learningObjectiveTitle(objective, objectives.indexOf(objective)));
+  return (
+    <section id={`${anchor}-coverage`} aria-label="Chapter coverage review">
+      <h4 className="font-medium">Chapter coverage review</h4>
+      <p
+        className={`mt-1 text-sm ${reviewNeeded ? "text-warning-text" : reviewPassed ? "text-success-text" : "text-muted-foreground"}`}
+      >
+        {reviewNeeded
+          ? "Review needed"
+          : reviewPassed
+            ? "Coverage review passed"
+            : "Coverage status unavailable"}
+        {review.status ? ` · ${review.status.replaceAll("_", " ")}` : ""}
+      </p>
+      {review.summary ? <p className="mt-2 text-sm">{review.summary}</p> : null}
+      <dl className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
+        {coverageRate !== null ? (
+          <GuideFact label="Objective coverage" value={`${Math.round(coverageRate * 100)}%`} />
+        ) : null}
+        {totalUnits > 0 || review.covered_unit_count !== undefined ? (
+          <GuideFact
+            label="Learning units"
+            value={`${coveredUnits.toLocaleString()}${totalUnits > 0 ? ` / ${totalUnits.toLocaleString()}` : ""}`}
+          />
+        ) : null}
+        {review.covered_objective_ids.length ? (
+          <GuideFact
+            label="Objectives covered"
+            value={review.covered_objective_ids.length.toLocaleString()}
+          />
+        ) : null}
+      </dl>
+      {review.uncovered_objective_ids.length ? (
+        <p className="mt-3 break-words text-sm text-warning-text">
+          {uncoveredObjectives.length
+            ? `Objectives to revisit: ${uncoveredObjectives.join(" · ")}`
+            : `${review.uncovered_objective_ids.length} objectives need review.`}
+        </p>
+      ) : null}
+      {review.covered_objective_ids.length ? (
+        <p className="mt-2 break-words text-sm text-muted-foreground">
+          {review.covered_objective_ids.length.toLocaleString()} objectives covered.
+        </p>
+      ) : null}
+      {review.uncovered_learning_unit_ids.length ? (
+        <p className="mt-2 break-words text-sm text-warning-text">
+          {review.uncovered_learning_unit_ids.length.toLocaleString()} learning units need coverage review.
+        </p>
+      ) : null}
+      {review.review_notes.length ? (
+        <ul className="mt-3 list-disc space-y-1 pl-5 text-sm text-muted-foreground">
+          {review.review_notes.map((note) => (
+            <li key={note}>{note}</li>
+          ))}
+        </ul>
+      ) : null}
+      <CitationList sources={review.source_refs} pageHref={pageHref} />
+    </section>
+  );
+}
+
+function SourceFigureView({
+  figure,
+  report,
+  pageHref,
+}: {
+  figure: SourceFigure;
+  report: LearningGuide;
+  pageHref: (page: number) => string;
+}) {
+  const [imageFailed, setImageFailed] = useState(false);
+  const name = figure.name ?? figure.filename ?? figure.file_name ?? figure.figure_name ?? figure.figure_id;
+  const sourceRef = figure.source_refs[0];
+  const sha256 = figure.sha256 ?? figure.source_sha256 ?? figure.image_sha256;
+  const pageNumber = figure.page_number ?? sourceRef?.page_number;
+  const altText = figure.alt_text ?? figure.caption ?? `Source figure from page ${pageNumber ?? "unknown"}`;
+  const imageUrl =
+    name && sha256 && /^[a-f\d]{64}$/i.test(sha256)
+      ? sourceFigureUrl(report.book_id, name, figure.extraction_run_id ?? report.extraction_run_id, sha256)
+      : null;
+
+  return (
+    <figure className="min-w-0 border-t border-border pt-3">
+      {imageUrl && !imageFailed ? (
+        <Image
+          src={imageUrl}
+          alt={altText}
+          width={640}
+          height={480}
+          unoptimized
+          sizes="(max-width: 768px) 100vw, 50vw"
+          onError={() => setImageFailed(true)}
+          className="mx-auto h-auto max-h-[32rem] max-w-full object-contain"
+        />
+      ) : (
+        <p className="rounded-sm border border-border p-3 text-sm text-muted-foreground">
+          {imageFailed
+            ? "The source figure could not be loaded. Its report text and page reference remain available."
+            : "The source figure image is unavailable because its integrity reference is incomplete."}
+        </p>
+      )}
+      <figcaption className="mt-2 text-sm">
+        <span>{figure.caption ?? `Figure from page ${pageNumber ?? "not specified"}`}</span>
+        {pageNumber ? (
+          <span>
+            {" · "}
+            <Link
+              href={pageHref(pageNumber)}
+              className="inline-flex min-h-9 items-center text-primary-text underline underline-offset-2"
+            >
+              Book page {pageNumber}
+            </Link>
+          </span>
+        ) : null}
+      </figcaption>
+      {figure.source_refs.length ? <CitationList sources={figure.source_refs} pageHref={pageHref} /> : null}
+    </figure>
+  );
+}
+
 function StudyChapter({
+  report,
   chapter,
   pageHref,
   anchor,
 }: {
+  report: LearningGuide;
   chapter: ReportSection;
   pageHref: (page: number) => string;
   anchor: string;
@@ -435,6 +675,28 @@ function StudyChapter({
         </div>
         <CitationList sources={chapter.overview_source_refs} pageHref={pageHref} />
       </section>
+      {chapter.learning_objectives.length ? (
+        <section id={`${anchor}-objectives`}>
+          <h4 className="font-medium">Learning objectives</h4>
+          <ol className="mt-3 list-decimal space-y-3 pl-5">
+            {chapter.learning_objectives.map((objective, objectiveIndex) => {
+              const title = learningObjectiveTitle(objective, objectiveIndex);
+              const description = objective.description;
+              return (
+                <li key={objective.objective_id ?? `${title}-${objectiveIndex}`}>
+                  <h5 className="font-medium">{title}</h5>
+                  {description && description !== title ? (
+                    <div className="mt-1 text-sm text-muted-foreground">
+                      <Markdown text={description} />
+                    </div>
+                  ) : null}
+                  <CitationList sources={objective.source_refs} pageHref={pageHref} />
+                </li>
+              );
+            })}
+          </ol>
+        </section>
+      ) : null}
       {chapter.lessons.length ? (
         <section id={`${anchor}-lessons`}>
           <h4 className="font-medium">Key lessons</h4>
@@ -445,9 +707,92 @@ function StudyChapter({
                 id={`${anchor}-lesson-${lessonIndex + 1}`}
                 lesson={lesson}
                 pageHref={pageHref}
+                externalSources={report.research_context.sources}
               />
             ))}
           </div>
+        </section>
+      ) : null}
+      {chapter.practice_items.length ? (
+        <section id={`${anchor}-practice`}>
+          <h4 className="font-medium">Practice and feedback</h4>
+          <ol className="mt-3 space-y-4">
+            {chapter.practice_items.map((item, itemIndex) => (
+              <li
+                key={
+                  item.practice_id ??
+                  `${item.title ?? item.question ?? item.prompt ?? "practice"}-${itemIndex}`
+                }
+                className="border-t border-border pt-3"
+              >
+                <h5 className="font-medium">{item.title ?? `Practice ${itemIndex + 1}`}</h5>
+                <div className="mt-2 text-sm">
+                  <Markdown
+                    text={
+                      item.question ?? item.prompt ?? item.task ?? item.title ?? "Reflect on this chapter."
+                    }
+                  />
+                </div>
+                {item.objective_id ? (
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Objective: {practiceObjectiveTitle(item.objective_id, chapter.learning_objectives)}
+                  </p>
+                ) : null}
+                {item.assessment_criteria.length ? (
+                  <div className="mt-2">
+                    <p className="text-xs font-medium text-muted-foreground">Check your response for</p>
+                    <ul className="mt-1 list-disc space-y-1 pl-5 text-sm text-muted-foreground">
+                      {item.assessment_criteria.map((criterion) => (
+                        <li key={criterion}>{criterion}</li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+                {(item.expected_answer ??
+                item.expected_response ??
+                item.model_answer ??
+                item.correct_answer ??
+                item.answer) ? (
+                  <details className="mt-3 rounded-sm border border-border">
+                    <summary className="flex min-h-9 cursor-pointer items-center px-3 py-1.5 text-sm font-medium">
+                      Reveal model answer and feedback
+                    </summary>
+                    <div className="border-t border-border px-3 py-3">
+                      <h6 className="text-xs font-medium text-muted-foreground">Model answer</h6>
+                      <div className="mt-1 text-sm">
+                        <Markdown
+                          text={
+                            item.expected_answer ??
+                            item.expected_response ??
+                            item.model_answer ??
+                            item.correct_answer ??
+                            item.answer ??
+                            ""
+                          }
+                        />
+                      </div>
+                      {(item.feedback ?? item.explanation) ? (
+                        <div className="mt-3">
+                          <h6 className="text-xs font-medium text-muted-foreground">Feedback</h6>
+                          <div className="mt-1 text-sm">
+                            <Markdown text={item.feedback ?? item.explanation ?? ""} />
+                          </div>
+                        </div>
+                      ) : null}
+                    </div>
+                  </details>
+                ) : (item.feedback ?? item.explanation) ? (
+                  <div className="mt-3 border-l border-border pl-3">
+                    <p className="text-xs font-medium text-muted-foreground">Feedback</p>
+                    <div className="mt-1 text-sm">
+                      <Markdown text={item.feedback ?? item.explanation ?? ""} />
+                    </div>
+                  </div>
+                ) : null}
+                <CitationList sources={item.source_refs} pageHref={pageHref} />
+              </li>
+            ))}
+          </ol>
         </section>
       ) : null}
       {chapter.open_questions.length ? (
@@ -459,6 +804,35 @@ function StudyChapter({
                 key={`${lesson.title}-${lesson.source_refs.map((source) => source.chunk_id).join("-")}`}
                 id={`${anchor}-question-${lessonIndex + 1}`}
                 lesson={lesson}
+                pageHref={pageHref}
+                externalSources={report.research_context.sources}
+              />
+            ))}
+          </div>
+        </section>
+      ) : null}
+      {chapter.coverage_review ? (
+        <ChapterCoverageReview
+          review={chapter.coverage_review}
+          objectives={chapter.learning_objectives}
+          pageHref={pageHref}
+          anchor={anchor}
+        />
+      ) : null}
+      {chapter.source_figures.length ? (
+        <section id={`${anchor}-source-figures`}>
+          <h4 className="font-medium">Figures from the book</h4>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Original page figures are shown as source material and linked to their book pages.
+          </p>
+          <div className="mt-3 grid grid-cols-1 gap-4 md:grid-cols-2">
+            {chapter.source_figures.map((figure, figureIndex) => (
+              <SourceFigureView
+                key={
+                  figure.figure_id ?? figure.name ?? figure.filename ?? `${figure.page_number}-${figureIndex}`
+                }
+                figure={figure}
+                report={report}
                 pageHref={pageHref}
               />
             ))}
@@ -589,8 +963,8 @@ function TimelineView({
       <h4 className="font-medium">{timeline.title}</h4>
       <p className="mt-1 text-sm text-muted-foreground">{timeline.accessible_description}</p>
       <ol className="mt-3 space-y-4 border-l border-border pl-4">
-        {timeline.events.map((event, index) => (
-          <li key={`${event.date_or_order}-${event.label}-${index}`} className="relative">
+        {timeline.events.map((event) => (
+          <li key={`${event.date_or_order}-${event.label}`} className="relative">
             <h5 className="font-medium">
               <span className="tabular-nums">{event.date_or_order}</span> · {event.label}
             </h5>

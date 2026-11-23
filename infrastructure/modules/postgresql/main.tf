@@ -7,7 +7,7 @@
 #   2. Bitnami postgresql Helm release (chart 18.6.2, app v18)
 #      - StatefulSet, single primary, ClusterIP-only
 #      - Includes postgres_exporter + ServiceMonitor for Mimir
-#      - Tuned postgresql.conf for ~384Mi memory limit
+#      - Tuned postgresql.conf for 1Gi memory limit
 #   3. Secret with MinIO backup credentials
 #   4. (Optional) Daily backup CronJob: pg_dump → gzip → MinIO `backups` bucket
 #

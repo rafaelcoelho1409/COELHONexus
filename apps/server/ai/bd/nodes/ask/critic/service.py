@@ -11,6 +11,19 @@ async def verify_answer(
     runtime: Runtime[graphs.ask.adaptive.entities.AskContext],
 ) -> dict:
     domains.settings.llm_counter.service.set_node(node = "critic")
+    documents = state.get("documents") or []
+    document_ids = {str(item.get("id")) for item in documents if item.get("id")}
+    evidence_ids = [str(item) for item in state.get("evidence_ids", [])]
+    if any(item not in document_ids for item in evidence_ids) or (
+        state.get("retrieval_sufficient") and not evidence_ids
+    ):
+        return {
+            "grounded": False,
+            "confidence_score": 0.0,
+            "verification_status": "invalid_evidence_references",
+            "generation": "I could not verify an answer from the cited book or search evidence. Please try a narrower question.",
+            "citations": [],
+        }
     try:
         result = await agents.ask.service.invoke(
             runtime.context.critic,
@@ -18,8 +31,10 @@ async def verify_answer(
             {
                 "question": state.get("question", ""),
                 "answer": state.get("generation", ""),
-                "evidence": state.get("documents", []),
+                "evidence_ids": evidence_ids,
+                "evidence": documents,
             },
+            skill_role = "ask_critic",
         )
     except Exception:
         return {

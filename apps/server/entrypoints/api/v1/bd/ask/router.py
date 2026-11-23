@@ -8,7 +8,7 @@ import time
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, Path, Query, Request
+from fastapi import APIRouter, HTTPException, Path, Query
 from fastapi.responses import StreamingResponse
 
 import domains
@@ -88,14 +88,18 @@ def _thinking_update(thinking: dict, node: str, update: dict) -> None:
     graph["status"] = "running"
     if node not in graph["visited_nodes"]:
         graph["visited_nodes"].append(node)
-    if update.get("mode"):
-        graph["route"] = "deep" if update["mode"] == "deep" else "standard"
+    if update.get("intent") == "conversation":
+        graph["route"] = "conversation"
+    elif update.get("mode") in {"fast", "standard", "deep"}:
+        graph["route"] = update["mode"]
     if update.get("retrieval_sources") is not None:
         graph["retrieval_sources"] = list(update.get("retrieval_sources") or [])
     node_stage = {
         "plan_research": ("retrieve", "Planning book research"),
         "run_subagent": ("retrieve", "Searching book passages and evidence graph"),
+        "search_external": ("retrieve", "Searching the configured external source"),
         "rewrite_query": ("retrieve", "Refining the book search"),
+        "direct_answer": ("generate", "Replying to the conversation"),
         "grade_documents": ("grade", "Checking evidence relevance"),
         "generate": ("generate", "Writing from book evidence"),
         "synthesize": ("generate", "Synthesizing chapter findings"),
@@ -148,9 +152,10 @@ def _event(
     if graph is not None:
         event["graph"] = graph
     for key in (
-        "mode", "generation", "confidence_score", "citations", "sub_questions",
+        "mode", "intent", "generation", "confidence_score", "citations", "sub_questions",
         "research_plan", "sub_results", "latest_sub_question", "latest_sub_answer",
         "latest_sub_answer_preview", "retrieval_sources", "verification_status",
+        "external_search_status", "external_search_provider",
     ):
         if key in update:
             event[key] = update[key]
@@ -163,7 +168,7 @@ def _event(
 
 
 @router.post("/search/stream")
-async def ask_stream(payload: schemas.AskRequest, request: Request) -> StreamingResponse:
+async def ask_stream(payload: schemas.AskRequest) -> StreamingResponse:
     await domains.bd.ask.conversation.service.ensure_table()
     prior_book = await domains.bd.ask.conversation.service.thread_book_id(payload.thread_id)
     if prior_book is not None and prior_book != payload.book_id:
@@ -175,9 +180,16 @@ async def ask_stream(payload: schemas.AskRequest, request: Request) -> Streaming
             detail = "This book has no completed Ingestion retrieval index to ask about",
         )
     indexed_run_id = index["agentic_run_id"]
-    model = getattr(request.app.state, "llm", None)
-    if model is None:
-        raise HTTPException(status_code = 503, detail = "The configured chat model is unavailable")
+    # app.state.llm is built once during server startup. Settings can change
+    # after that, so build a per-turn model using the current chat endpoint.
+    try:
+        model = domains.settings.chat.service.build_chat_model(timeout_s = 600.0)
+    except Exception as error:
+        logger.exception("[bd:ask] configured chat model is unavailable")
+        raise HTTPException(
+            status_code = 503,
+            detail = "The configured chat endpoint is unavailable",
+        ) from error
     history = await domains.bd.ask.conversation.service.history(payload.thread_id)
     import ai
 
@@ -189,6 +201,7 @@ async def ask_stream(payload: schemas.AskRequest, request: Request) -> Streaming
     context = ai.bd.graphs.ask.adaptive.entities.AskContext(
         book_id = payload.book_id,
         run_id = indexed_run_id,
+        model = model,
         planner = planner,
         grader = grader,
         answerer = answerer,
@@ -204,6 +217,7 @@ async def ask_stream(payload: schemas.AskRequest, request: Request) -> Streaming
     initial_state = {
         "question": payload.question,
         "thread_id": payload.thread_id,
+        "turn_id": str(turn_id),
         "conversation_history": history,
         "force_mode": payload.force_mode or "",
         "supplied_sub_questions": payload.sub_questions,

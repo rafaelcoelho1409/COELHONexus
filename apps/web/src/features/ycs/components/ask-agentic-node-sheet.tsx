@@ -1,10 +1,10 @@
 "use client";
 
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/shared/ui/tabs";
 import type { AskTurn } from "../ask";
 import type { AskAgenticNode, AskAgenticNodeStatus } from "./ask-agentic-types";
 import { SideSheet } from "./side-sheet";
 import { StatusBadge } from "./status-badge";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/shared/ui/tabs";
 
 const STATUS: Record<
   AskAgenticNodeStatus,
@@ -22,6 +22,14 @@ const NODE_LABELS: Readonly<Record<string, string>> = {
   contextualize: "Prepare and route question",
   classify_query: "Prepare and route question",
   direct_answer: "Direct answer",
+  retrieve: "Retrieve transcript evidence",
+  grade_documents: "Grade transcript evidence",
+  rewrite_query: "Refine the retrieval query",
+  generate: "Generate a grounded answer",
+  check_hallucination: "Verify transcript support",
+  fallback_answer: "Answer with limited evidence",
+  corroborate: "Corroborate an uncertain answer",
+  format_citations: "Format video citations",
   run_standard: "Standard video RAG",
   plan_research: "Plan research",
   run_subagents: "Research sub-questions",
@@ -36,8 +44,11 @@ const RETRIEVAL_SOURCE_LABELS: Readonly<Record<string, string>> = {
   elasticsearch: "Elasticsearch full-text search",
 };
 
-function visitedLabels(turn: AskTurn | null): string[] {
-  return (turn?.graph.visited_nodes ?? []).map((nodeId) => NODE_LABELS[nodeId] ?? nodeId);
+function visitedNodes(turn: AskTurn | null): { id: string; label: string }[] {
+  return (turn?.graph.visited_nodes ?? []).map((id) => ({
+    id,
+    label: NODE_LABELS[id] ?? id,
+  }));
 }
 
 function latestActivity(node: AskAgenticNode, turn: AskTurn | null): string {
@@ -80,7 +91,7 @@ export function AskAgenticNodeSheet({
 }) {
   const state = STATUS[node.status];
   const route = turn?.graph.route || turn?.mode || "Not chosen";
-  const visited = visitedLabels(turn);
+  const visited = visitedNodes(turn);
   const retrievalSources = (turn?.graph.retrieval_sources ?? []).map(
     (source) => RETRIEVAL_SOURCE_LABELS[source] ?? source,
   );
@@ -134,8 +145,8 @@ export function AskAgenticNodeSheet({
             <h3 className="text-sm font-medium">Nodes visited</h3>
             {visited.length > 0 ? (
               <ol className="mt-2 mb-0 flex list-none flex-col gap-1.5 p-0">
-                {visited.map((label, index) => (
-                  <li key={`${label}-${index}`} className="text-sm text-muted-foreground">
+                {visited.map(({ id, label }, index) => (
+                  <li key={id} className="text-sm text-muted-foreground">
                     {index + 1}. {label}
                   </li>
                 ))}
@@ -144,7 +155,7 @@ export function AskAgenticNodeSheet({
               <p className="mt-2 mb-0 text-sm text-muted-foreground">No nodes have run for this turn yet.</p>
             )}
           </section>
-          {retrievalSources.length > 0 ? (
+          {retrievalSources.length > 0 && ["retrieve", "run_subagents"].includes(node.id) ? (
             <section aria-label="Retrieval sources" className="rounded-sm border border-border bg-card p-3">
               <h3 className="text-sm font-medium">Retrieval sources</h3>
               <ul className="mt-2 mb-0 flex list-none flex-col gap-1.5 p-0">
@@ -163,8 +174,8 @@ export function AskAgenticNodeSheet({
             >
               <h3 className="text-sm font-medium">Research sub-questions</h3>
               <ol className="mt-2 mb-0 flex list-none flex-col gap-2 p-0">
-                {turn?.deep?.cards.map((card, index) => (
-                  <li key={`${card.question}-${index}`} className="border-l-2 border-border pl-2.5">
+                {turn?.deep?.cards.map((card) => (
+                  <li key={card.question} className="border-l-2 border-border pl-2.5">
                     <p className="m-0 text-sm">{card.question}</p>
                     <StatusBadge
                       className="mt-1"

@@ -567,10 +567,23 @@ async def get_page_quality(book_id: str, page_no: int) -> dict:
     return quality
 
 
-async def get_figure(book_id: str, name: str) -> Response:
-    png = await domains.bd.ingestion.source.storage.service.read_figure(infra.minio.service.get_storage(), book_id, name)
+async def get_figure(
+    book_id: str,
+    name: str,
+    extraction_id: str | None = None,
+    expected_sha256: str | None = None,
+) -> Response:
+    png = await domains.bd.ingestion.source.storage.service.read_figure(
+        infra.minio.service.get_storage(), book_id, name, extraction_id,
+    )
     if png is None:
         raise HTTPException(status_code = 404, detail = f"figure {name!r} of book {book_id!r} not found")
+    if expected_sha256 is not None and (
+        len(expected_sha256) != 64
+        or hashlib.sha256(png).hexdigest() != expected_sha256
+        or not png.startswith(b"\x89PNG\r\n\x1a\n")
+    ):
+        raise HTTPException(status_code = 409, detail = "source figure failed report integrity validation")
     return Response(
         content = png,
         media_type = domains.bd.ingestion.source.extract.params.FIGURE_CONTENT_TYPE,

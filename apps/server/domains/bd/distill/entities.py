@@ -13,6 +13,7 @@ class SourcePage(TypedDict):
     disposition: str
     review_required: bool
     content_role: NotRequired[str]
+    figures: NotRequired[list[str]]
 
 
 class UnitRef(TypedDict):

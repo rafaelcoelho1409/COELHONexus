@@ -9,6 +9,7 @@ from typing import Any
 class AskContext:
     book_id: str
     run_id: str
+    model: Any
     planner: Any
     grader: Any
     answerer: Any

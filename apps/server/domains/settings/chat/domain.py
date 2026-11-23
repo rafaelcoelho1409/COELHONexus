@@ -5,7 +5,9 @@ import re
 from urllib.parse import urlsplit
 
 import httpx
-from openai import APIConnectionError
+from openai import APIConnectionError, APIError
+
+from . import errors
 
 
 def normalize_base_url(url: str) -> str:
@@ -63,6 +65,8 @@ def pool_recovered(cooling: int, pool: int, max_frac: float) -> bool:
 
 
 def classify_error(exc: Exception) -> str:
+    if not is_provider_error(exc):
+        return "unknown"
     name = type(exc).__name__.lower()
     msg = str(exc).lower()
     if "ratelimit" in name or "429" in msg or "rate limit" in msg:
@@ -78,9 +82,19 @@ def classify_error(exc: Exception) -> str:
     return "unknown"
 
 
+def is_provider_error(exc: Exception) -> bool:
+    """Recognize chat-provider errors without matching unrelated DB or task timeouts."""
+    return isinstance(
+        exc,
+        (errors.ChatError, errors.ChatTimeoutError, APIError, httpx.TransportError),
+    )
+
+
 def is_transient_provider_error(exc: Exception) -> bool:
     """Whether another request can recover from a provider or transport failure."""
-    if isinstance(exc, (TimeoutError, APIConnectionError, httpx.TransportError)):
+    if not is_provider_error(exc):
+        return False
+    if isinstance(exc, (errors.ChatTimeoutError, APIConnectionError, httpx.TransportError)):
         return True
     status_code = getattr(exc, "status_code", None)
     if status_code in (408, 429) or (isinstance(status_code, int) and 500 <= status_code <= 599):

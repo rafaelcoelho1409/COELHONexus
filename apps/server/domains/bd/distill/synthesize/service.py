@@ -78,6 +78,7 @@ async def _write_chapter_input(
     batch: int,
     unit_ids: list[str],
     unit_sources: list[dict[str, str]],
+    source_figures: list[dict[str, Any]],
 ) -> dict[str, Any]:
     structure_id = domains.bd.distill.domain.stable_id(
         title, str(first_page), str(last_page),
@@ -95,11 +96,15 @@ async def _write_chapter_input(
         "title": title if batch == 0 else f"{title} — Part {batch + 1}",
         "unit_ids": list(unit_ids),
         "unit_sources": unit_sources,
+        "source_figures": source_figures,
     }
     if await storage.exists(input_key):
         existing = json.loads(await storage.read_text(input_key))
-        legacy_record = {key: value for key, value in record.items() if key != "unit_sources"}
-        if existing != record and existing != legacy_record:
+        legacy_record = {
+            key: value for key, value in record.items() if key not in {"unit_sources", "source_figures"}
+        }
+        legacy_record_with_units = {key: value for key, value in record.items() if key != "source_figures"}
+        if existing not in (record, legacy_record, legacy_record_with_units):
             raise ValueError("an immutable chapter-input key has conflicting learning units")
     else:
         await storage.write(input_key, domains.bd.distill.domain.json_body(record), content_type = domains.bd.distill.params.JSON_TYPE)
@@ -196,6 +201,13 @@ async def prepare_chapters(
         title = group["title"]
         section_path = tuple(group["section_path"])
         section_refs = group["refs"]
+        source_figures = [
+            {"figure_name": figure_name, "page_number": page["page_number"]}
+            for page in state.get("source_pages", [])
+            if group["first_page"] <= page.get("page_number", 0) <= group["last_page"]
+            for figure_name in page.get("figures", [])
+            if isinstance(figure_name, str) and figure_name
+        ][:12]
         selected: list[str] = []
         selected_refs_by_unit: dict[str, dict[str, Any]] = {}
         batch_index = 0
@@ -215,6 +227,7 @@ async def prepare_chapters(
                             }
                             for unit_id in selected
                         ],
+                        source_figures,
                     ))
                     selected = []
                     selected_refs_by_unit = {}
@@ -231,6 +244,7 @@ async def prepare_chapters(
                     }
                     for unit_id in selected
                 ],
+                source_figures,
             ))
     if not chapter_refs:
         raise ValueError("no source-grounded learning units were extracted from the completed book")

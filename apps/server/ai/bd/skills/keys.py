@@ -12,4 +12,8 @@ AGENT_SKILL_FOLDERS = {
     "distill_decision_brief_writer": "distill/decision-brief-writer",
     "distill_research_analyst": "distill/research-analyst",
     "distill_report_reviewer": "distill/report-reviewer",
+    "ask_planner": "ask/planner",
+    "ask_grader": "ask/grader",
+    "ask_answerer": "ask/answerer",
+    "ask_critic": "ask/critic",
 }

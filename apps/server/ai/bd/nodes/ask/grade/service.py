@@ -26,6 +26,7 @@ async def grade_evidence(
                     for item in documents
                 ],
             },
+            skill_role = "ask_grader",
         )
         relevant_ids = set(assessment.relevant_evidence_ids)
         relevant = [item for item in documents if item.get("id") in relevant_ids]

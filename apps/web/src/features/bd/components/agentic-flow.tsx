@@ -9,7 +9,20 @@
 import "@xyflow/react/dist/style.css";
 import "./agentic-flow.css";
 
-import { Controls, type Edge, Handle, MarkerType, type Node, type NodeProps, Position, ReactFlow } from "@xyflow/react";
+import {
+  Controls,
+  BaseEdge,
+  type Edge,
+  type EdgeProps,
+  type FitViewOptions,
+  Handle,
+  MarkerType,
+  type Node,
+  type NodeProps,
+  Position,
+  ReactFlow,
+} from "@xyflow/react";
+import { Info } from "lucide-react";
 
 import { ReactFlowNodeInternals } from "@/shared/lib/react-flow-node-internals";
 
@@ -26,12 +39,19 @@ const NODE_WIDTH = 216;
 const NODE_HEIGHT = 136;
 const NODE_GAP = 30;
 const PADDING = 16;
-export type AgenticFlowConnection = { source: string; target: string };
+export type AgenticFlowConnection = {
+  source: string;
+  target: string;
+  sourceHandle?: string;
+  targetHandle?: string;
+  feedback?: boolean;
+};
 export type AgenticFlowPosition = { x: number; y: number };
 type AgenticFlowData = {
   nodeId: string;
   label: string;
   status: AgenticNodeStatus;
+  statusLabel: string;
   kpi: string | null;
   liveLine: string | null;
   progress: AgenticNodeView["progress"];
@@ -54,7 +74,30 @@ function AgenticNodeCard({ data }: NodeProps<AgenticFlowNode>) {
 
   return (
     <>
-      <Handle type="target" position={Position.Top} isConnectable={false} />
+      <Handle id="target-top" type="target" position={Position.Top} isConnectable={false} />
+      <Handle
+        id="target-top-left"
+        type="target"
+        position={Position.Top}
+        style={{ left: "35%" }}
+        isConnectable={false}
+      />
+      <Handle
+        id="target-top-right"
+        type="target"
+        position={Position.Top}
+        style={{ left: "65%" }}
+        isConnectable={false}
+      />
+      <Handle
+        id="target-bottom-left"
+        type="target"
+        position={Position.Bottom}
+        style={{ left: "35%" }}
+        isConnectable={false}
+      />
+      <Handle id="target-left" type="target" position={Position.Left} isConnectable={false} />
+      <Handle id="target-right" type="target" position={Position.Right} isConnectable={false} />
       <div
         data-node-id={data.nodeId}
         className={`flex h-full w-full flex-col overflow-hidden rounded-md border bg-card ${borderTone}`}
@@ -65,13 +108,14 @@ function AgenticNodeCard({ data }: NodeProps<AgenticFlowNode>) {
             <button
               type="button"
               onClick={data.onOpen}
-              aria-label={`Open ${data.label} node details — ${AGENTIC_STATUS_LABEL[data.status]}`}
+              aria-label={`Open ${data.label} node details — ${data.statusLabel}`}
               aria-haspopup="dialog"
               className="nodrag nopan pointer-events-auto flex min-w-0 flex-1 items-center gap-1.5 rounded-sm px-1 text-left hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring"
             >
               <AgenticStatusGlyph status={data.status} />
               <span className="min-w-0 truncate text-sm">{data.label}</span>
-              <span className="sr-only">— {AGENTIC_STATUS_LABEL[data.status]}</span>
+              <span className="sr-only">— {data.statusLabel}</span>
+              <Info aria-hidden className="ml-auto size-3.5 shrink-0 text-muted-foreground" />
             </button>
             <AgenticReplayButton
               label={data.label}
@@ -88,7 +132,7 @@ function AgenticNodeCard({ data }: NodeProps<AgenticFlowNode>) {
           aria-label={
             data.onPlay
               ? `Open ${data.label} node progress details`
-              : `Open ${data.label} node details — ${AGENTIC_STATUS_LABEL[data.status]}`
+              : `Open ${data.label} node details — ${data.statusLabel}`
           }
           aria-haspopup="dialog"
           className={`nodrag nopan pointer-events-auto flex min-h-0 min-w-0 flex-1 flex-col justify-start overflow-hidden text-left hover:bg-muted focus-visible:z-10 focus-visible:outline-2 focus-visible:outline-ring ${
@@ -100,7 +144,8 @@ function AgenticNodeCard({ data }: NodeProps<AgenticFlowNode>) {
               <span className="flex items-center gap-1.5">
                 <AgenticStatusGlyph status={data.status} />
                 <span className="min-w-0 truncate text-sm">{data.label}</span>
-                <span className="sr-only">— {AGENTIC_STATUS_LABEL[data.status]}</span>
+                <span className="sr-only">— {data.statusLabel}</span>
+                <Info aria-hidden className="ml-auto size-3.5 shrink-0 text-muted-foreground" />
               </span>
             ) : null}
             <span className="truncate font-mono text-xs text-muted-foreground">{data.nodeId}</span>
@@ -116,13 +161,40 @@ function AgenticNodeCard({ data }: NodeProps<AgenticFlowNode>) {
           </span>
         </button>
       </div>
-      <Handle type="source" position={Position.Bottom} isConnectable={false} />
+      <Handle id="source-bottom" type="source" position={Position.Bottom} isConnectable={false} />
+      <Handle
+        id="source-bottom-left"
+        type="source"
+        position={Position.Bottom}
+        style={{ left: "35%" }}
+        isConnectable={false}
+      />
+      <Handle
+        id="source-bottom-right"
+        type="source"
+        position={Position.Bottom}
+        style={{ left: "65%" }}
+        isConnectable={false}
+      />
+      <Handle id="source-left" type="source" position={Position.Left} isConnectable={false} />
+      <Handle id="source-right" type="source" position={Position.Right} isConnectable={false} />
     </>
   );
 }
 
 // Stable identity: React Flow re-registers its types whenever this object changes.
 const NODE_TYPES = { agentic: AgenticNodeCard };
+
+/** Return Ask retry edges around the left margin and back into the earlier node from below. */
+function AgenticFeedbackEdge({ sourceX, sourceY, targetX, targetY, markerEnd, style }: EdgeProps) {
+  const outsideX = Math.min(sourceX, targetX) - NODE_GAP;
+  const bypassY = targetY + NODE_GAP / 2;
+  const path = `M ${sourceX},${sourceY} H ${outsideX} V ${bypassY} H ${targetX} V ${targetY}`;
+
+  return <BaseEdge path={path} markerEnd={markerEnd} style={style} />;
+}
+
+const EDGE_TYPES = { feedback: AgenticFeedbackEdge };
 
 const ARROW = { type: MarkerType.ArrowClosed, width: 14, height: 14 } as const;
 
@@ -138,6 +210,7 @@ export function AgenticFlow({
   positions,
   className,
   fitView = false,
+  fitViewOptions,
 }: {
   views: readonly AgenticNodeView[];
   onOpenNode: (nodeId: string) => void;
@@ -152,18 +225,19 @@ export function AgenticFlow({
   positions?: Readonly<Record<string, AgenticFlowPosition>>;
   className?: string;
   fitView?: boolean;
+  fitViewOptions?: FitViewOptions;
 }) {
   const nodes: AgenticFlowNode[] = views.map((view, index) => ({
     id: view.id,
     type: "agentic",
-    position:
-      positions?.[view.id] ?? { x: PADDING, y: PADDING + index * (NODE_HEIGHT + NODE_GAP) },
+    position: positions?.[view.id] ?? { x: PADDING, y: PADDING + index * (NODE_HEIGHT + NODE_GAP) },
     width: NODE_WIDTH,
     height: NODE_HEIGHT,
     data: {
       nodeId: view.id,
       label: view.label,
       status: view.status,
+      statusLabel: view.statusLabel ?? AGENTIC_STATUS_LABEL[view.status],
       kpi: view.kpi,
       liveLine: view.liveLine,
       progress: view.progress,
@@ -174,25 +248,34 @@ export function AgenticFlow({
       replayPending,
     },
   }));
-  const flowConnections = connections ?? views.slice(0, -1).flatMap((view, index) => {
-    const next = views[index + 1];
-    return next ? [{ source: view.id, target: next.id }] : [];
-  });
+  const flowConnections: readonly AgenticFlowConnection[] =
+    connections ??
+    views.slice(0, -1).flatMap((view, index) => {
+      const next = views[index + 1];
+      return next ? [{ source: view.id, target: next.id }] : [];
+    });
   const statusById = new Map(views.map((view) => [view.id, view.status]));
-  const edges: Edge[] = flowConnections.flatMap(({ source, target }) => {
-    if (!statusById.has(source) || !statusById.has(target)) return [];
-    const active = statusById.get(source) === "done" && statusById.get(target) === "running";
-    return [
-      {
-        id: `${source}->${target}`,
-        source,
-        target,
-        markerEnd: ARROW,
-        focusable: false,
-        className: active ? "agentic-edge-active" : "",
-      },
-    ];
-  });
+  const edges: Edge[] = flowConnections.flatMap(
+    ({ source, target, sourceHandle, targetHandle, feedback }) => {
+      if (!statusById.has(source) || !statusById.has(target)) return [];
+      const active = statusById.get(source) === "done" && statusById.get(target) === "running";
+      return [
+        {
+          id: `${source}->${target}`,
+          source,
+          target,
+          sourceHandle,
+          targetHandle,
+          type: feedback ? "feedback" : connections ? "smoothstep" : "default",
+          markerEnd: ARROW,
+          focusable: false,
+          className: [feedback ? "agentic-edge-feedback" : "", active ? "agentic-edge-active" : ""]
+            .filter(Boolean)
+            .join(" "),
+        },
+      ];
+    },
+  );
 
   return (
     <figure
@@ -203,8 +286,10 @@ export function AgenticFlow({
         nodes={nodes}
         edges={edges}
         nodeTypes={NODE_TYPES}
+        edgeTypes={EDGE_TYPES}
         defaultViewport={{ x: 0, y: 0, zoom: 0.82 }}
         fitView={fitView}
+        fitViewOptions={fitViewOptions}
         minZoom={0.18}
         maxZoom={2.25}
         nodesDraggable={false}

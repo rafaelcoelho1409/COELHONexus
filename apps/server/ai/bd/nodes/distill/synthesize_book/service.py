@@ -1,15 +1,120 @@
 """Synthesize the whole-book guide from completed chapter guides."""
 from __future__ import annotations
+import domains
+from .... import graphs, prompts
 
 import json
 import logging
 from typing import Any
 
-import domains
-
-from .... import graphs, prompts, skills
 
 logger = logging.getLogger(__name__)
+
+
+def _fallback_book_synthesis(
+    batch: list[dict[str, Any]],
+    allowed_citation_ids: list[str],
+) -> domains.bd.distill.schemas.BookSynthesis:
+    """Build a source-grounded whole-book summary from completed chapter guides."""
+    allowed_ids = set(allowed_citation_ids)
+    thesis_parts: list[str] = []
+    thesis_ids: list[str] = []
+    takeaways: list[domains.bd.distill.schemas.ChapterLesson] = []
+    seen_takeaways: set[tuple[str, str]] = set()
+
+    for guide in batch:
+        summary = guide.get("summary")
+        if not isinstance(summary, dict):
+            continue
+
+        overview = summary.get("overview") or summary.get("central_thesis")
+        overview_ids = [
+            unit_id for unit_id in (
+                summary.get("overview_learning_unit_ids")
+                or summary.get("central_thesis_learning_unit_ids", [])
+            )
+            if isinstance(unit_id, str) and unit_id in allowed_ids
+        ]
+        if isinstance(overview, str) and overview.strip() and overview_ids:
+            title = guide.get("title")
+            label = title.strip() if isinstance(title, str) and title.strip() else "Section"
+            thesis_parts.append(f"{label}: {overview.strip()}")
+            thesis_ids.extend(overview_ids)
+
+        for item in summary.get("lessons") or summary.get("key_takeaways", []):
+            if not isinstance(item, dict):
+                continue
+            title = item.get("title")
+            explanation = item.get("explanation")
+            item_ids = list(dict.fromkeys(
+                unit_id for unit_id in item.get("learning_unit_ids", [])
+                if isinstance(unit_id, str) and unit_id in allowed_ids
+            ))
+            has_text = all(
+                isinstance(value, str) and value.strip()
+                for value in (title, explanation)
+            )
+            if not has_text or not item_ids:
+                continue
+            identity = (title.strip(), explanation.strip())
+            if identity in seen_takeaways:
+                continue
+            seen_takeaways.add(identity)
+            attribution = item.get("attribution")
+            takeaways.append(domains.bd.distill.schemas.ChapterLesson(
+                title = title.strip()[:180],
+                explanation = explanation.strip()[:3000],
+                attribution = attribution if attribution in ("book", "agent_inference") else "book",
+                learning_unit_ids = item_ids[:12],
+            ))
+
+    thesis_ids = list(dict.fromkeys(thesis_ids))
+    if not thesis_ids:
+        for guide in batch:
+            summary = guide.get("summary")
+            if not isinstance(summary, dict):
+                continue
+            for item in summary.get("lessons") or summary.get("key_takeaways", []):
+                if isinstance(item, dict):
+                    thesis_ids.extend(
+                        unit_id for unit_id in item.get("learning_unit_ids", [])
+                        if isinstance(unit_id, str) and unit_id in allowed_ids
+                    )
+        thesis_ids = list(dict.fromkeys(thesis_ids))
+    if not thesis_ids:
+        raise ValueError(
+            "completed chapter guides contain no allowed citations for a fallback synthesis",
+        )
+
+    if not thesis_parts:
+        thesis_parts = [item.explanation for item in takeaways[:4]]
+    thesis = "Whole-book synthesis from completed section guides: " + " ".join(thesis_parts)
+    if len(thesis) > 2500:
+        thesis = thesis[:2499].rsplit(" ", 1)[0].rstrip(" ,;:") + "…"
+
+    return domains.bd.distill.schemas.BookSynthesis(
+        central_thesis = thesis,
+        central_thesis_attribution = "agent_inference",
+        central_thesis_learning_unit_ids = thesis_ids[:24],
+        key_takeaways = takeaways[:16],
+        cross_chapter_connections = [],
+        limitations = [],
+        decision_brief = None,
+    )
+
+
+def _book_synthesis_learning_unit_ids(
+    synthesis: domains.bd.distill.schemas.BookSynthesis,
+) -> set[str]:
+    """Collect every source citation emitted by a whole-book synthesis."""
+    ids = set(synthesis.central_thesis_learning_unit_ids)
+    for item in [*synthesis.key_takeaways, *synthesis.cross_chapter_connections, *synthesis.limitations]:
+        ids.update(item.learning_unit_ids)
+    if synthesis.decision_brief is not None:
+        ids.update(synthesis.decision_brief.recommendation_learning_unit_ids)
+        for item in [*synthesis.decision_brief.options, *synthesis.decision_brief.action_plan]:
+            ids.update(item.learning_unit_ids)
+    return ids
 
 
 async def _synthesize_book_batch_with_llm(
@@ -17,30 +122,48 @@ async def _synthesize_book_batch_with_llm(
     run_id: str,
     batch_id: str,
     prompt: str,
+    allowed_citation_ids: list[str],
+    source_guides: list[dict[str, Any]],
 ) -> domains.bd.distill.schemas.BookSynthesis:
     """Use the whole-book DeepAgent with bounded retries for its structured contract."""
     system_prompt = prompts.distill.book_synthesizer.prompts.SYSTEM_PROMPT
     user_request = prompt.removeprefix(system_prompt).strip()
     attempts = domains.bd.distill.params.BOOK_AGENT_RESPONSE_ATTEMPTS
+    allowed_ids = set(allowed_citation_ids)
     last_error: Exception | None = None
     for attempt in range(attempts):
-        payload: dict[str, Any] = {"book_request": user_request}
-        if attempt:
+        mode = "structured" if attempt % 2 == 0 else "text_fallback"
+        agent = (
+            dependencies.book_synthesizer.structured
+            if mode == "structured"
+            else dependencies.book_synthesizer.text_fallback
+        )
+        payload: dict[str, Any] = {
+            "book_request": user_request,
+            "allowed_learning_unit_ids": allowed_citation_ids,
+        }
+        if mode == "text_fallback":
+            payload["output_contract"] = domains.bd.distill.schemas.BookSynthesisOutput.model_json_schema()
+        result: Any = None
+        issues: list[str] = []
+        if attempt or mode == "text_fallback":
             payload["response_retry"] = (
-                "The previous answer did not validate as BookSynthesisOutput. Return the complete typed schema now, "
-                "with a concise thesis, at most four takeaways, three connections, and two limitations. Cite only "
-                "the smallest directly supporting supplied IDs. Do not include a decision_brief."
+                "The previous answer did not validate as BookSynthesisOutput. Correct every path named in "
+                "validation_issue and return exactly one complete object with all required schema fields. "
+                "For text fallback, follow output_contract exactly and return JSON only. "
+                "Use empty arrays when a collection has no supported items; otherwise keep at most four takeaways, "
+                "three connections, and two limitations. Cite only IDs from allowed_learning_unit_ids. If an item "
+                "has no supporting allowed ID, omit it. Do not include a wrapper, prose, Markdown, or decision_brief."
             )
             if last_error is not None:
                 payload["validation_issue"] = f"{type(last_error).__name__}: {str(last_error)[:900]}"
         try:
             async def invoke_with_payload(payload: dict[str, Any] = payload) -> Any:
-                return await dependencies.book_synthesizer.ainvoke({
+                return await agent.ainvoke({
                     "messages": [{
                         "role": "user",
                         "content": json.dumps(payload, ensure_ascii = False),
                     }],
-                    "files": skills.service.files_for("distill_book_synthesizer"),
                 }, config = {
                     "callbacks": [domains.settings.llm_counter.service.LLMCounterCallback()],
                 })
@@ -55,24 +178,54 @@ async def _synthesize_book_batch_with_llm(
                 )
             output = domains.bd.distill.domain.book_synthesis_output_from_agent_result(result)
             if output is not None:
-                return domains.bd.distill.schemas.BookSynthesis.model_validate(
+                synthesis = domains.bd.distill.schemas.BookSynthesis.model_validate(
                     output.model_dump(mode = "json"),
                 )
-            last_error = ValueError("book DeepAgent returned no valid BookSynthesisOutput")
+                unsupported_ids = _book_synthesis_learning_unit_ids(synthesis) - allowed_ids
+                if not unsupported_ids:
+                    return synthesis
+                invalid_ids = sorted(unsupported_ids)
+                last_error = ValueError(
+                    "learning_unit_ids outside allowed_learning_unit_ids: "
+                    + ", ".join(invalid_ids[:12]),
+                )
+                issues = [str(last_error)]
+            else:
+                issues = domains.bd.distill.domain.book_synthesis_validation_issues(result)
+                last_error = ValueError(
+                    "BookSynthesisOutput validation failed: " + ", ".join(issues),
+                )
         except Exception as error:
             last_error = error
             if domains.settings.chat.domain.is_transient_provider_error(error):
                 raise
+            issues = [str(last_error)[:900]]
+        structured_response = isinstance(result, dict) and result.get("structured_response") is not None
+        messages = result.get("messages") if isinstance(result, dict) else None
         logger.warning(
             "[bd-distill] book DeepAgent returned invalid structured output "
-            "run=%s batch=%s attempt=%s/%s error_type=%s",
+            "run=%s batch=%s mode=%s attempt=%s/%s error_type=%s structured_response=%s "
+            "message_count=%s issues=%s",
             run_id,
             batch_id,
+            mode,
             attempt + 1,
             attempts,
             type(last_error).__name__ if last_error else "InvalidAgentResponse",
+            structured_response,
+            len(messages) if isinstance(messages, list) else 0,
+            issues,
         )
-    raise ValueError("book synthesizer returned no valid BookSynthesis after DeepAgent retries") from last_error
+    detail = str(last_error)[:900] if last_error is not None else "unknown output validation issue"
+    logger.error(
+        "[bd-distill] using source-grounded book synthesis fallback run=%s batch=%s "
+        "after_attempts=%s last_error=%s",
+        run_id,
+        batch_id,
+        attempts,
+        detail,
+    )
+    return _fallback_book_synthesis(source_guides, allowed_citation_ids)
 
 
 async def synthesize_book(
@@ -82,9 +235,21 @@ async def synthesize_book(
     storage = dependencies.storage
     chapter_summaries = []
     chapter_refs = state.get("synthesized_chapters") or state.get("completed_chapters", [])
+    refs_by_chapter: dict[str, dict[str, Any]] = {}
+    for ref in chapter_refs:
+        chapter_id = ref.get("chapter_id") if isinstance(ref, dict) else None
+        if not isinstance(chapter_id, str) or not chapter_id:
+            raise ValueError("book synthesis received an invalid chapter reference")
+        previous = refs_by_chapter.get(chapter_id)
+        if previous is not None and (
+            previous.get("artifact_key") != ref.get("artifact_key")
+            or previous.get("input_key") != ref.get("input_key")
+        ):
+            raise ValueError(f"book synthesis received conflicting references for chapter {chapter_id!r}")
+        refs_by_chapter.setdefault(chapter_id, ref)
     ordered_refs = sorted(
-        chapter_refs,
-        key = lambda ref: (ref.get("first_page", 0), ref["part_index"]),
+        refs_by_chapter.values(),
+        key = lambda ref: (ref.get("first_page", 0), ref.get("part_index", 0), ref["chapter_id"]),
     )
     for ref in ordered_refs:
         artifact = json.loads(await storage.read_text(ref["artifact_key"]))
@@ -166,7 +331,19 @@ async def synthesize_book(
             key = domains.bd.distill.keys.synthesis_key(state["book_id"], state["run_id"], level, batch_index)
             if await storage.exists(key):
                 record = json.loads(await storage.read_text(key))
-                if record.get("inputs") != [item.get("chapter_id", item.get("synthesis_id")) for item in batch]:
+                expected_inputs = [item.get("chapter_id", item.get("synthesis_id")) for item in batch]
+                persisted_inputs = record.get("inputs")
+                if persisted_inputs != expected_inputs:
+                    logger.error(
+                        "[bd-distill] persisted whole-book batch input mismatch run=%s batch=%s "
+                        "expected_count=%s persisted_count=%s expected_first=%s persisted_first=%s",
+                        state["run_id"],
+                        batch_id,
+                        len(expected_inputs),
+                        len(persisted_inputs) if isinstance(persisted_inputs, list) else "invalid",
+                        expected_inputs[:3],
+                        persisted_inputs[:3] if isinstance(persisted_inputs, list) else persisted_inputs,
+                    )
                     raise ValueError("a persisted whole-book synthesis batch has different inputs")
                 synthesis = domains.bd.distill.schemas.BookSynthesis.model_validate(record["synthesis"])
                 self_ids = set(record["unit_ids"])
@@ -202,7 +379,7 @@ async def synthesize_book(
             synthesis_scope = "whole_book" if len(batches) == 1 else "partial_book_batch"
             prompt = (
                 prompts.distill.book_synthesizer.prompts.SYSTEM_PROMPT
-                + "\n\nSynthesize the provided section guides. Every central thesis, takeaway, connection, and limitation must cite supplied learning-unit IDs. Use only IDs in available_learning_unit_ids; the list is intentionally compact and representative.\n"
+                + "\n\nSynthesize the provided section guides. Every central thesis, takeaway, connection, and limitation must cite supplied learning-unit IDs. Use only IDs in available_learning_unit_ids; the list is intentionally compact and representative. Never use section labels, page numbers, or other identifiers as citations.\n"
                 + json.dumps({
                     "scope": synthesis_scope,
                     "available_learning_unit_ids": citation_ids,
@@ -214,6 +391,8 @@ async def synthesize_book(
                 state["run_id"],
                 batch_id,
                 prompt,
+                citation_ids,
+                batch,
             )
             referenced_ids = set(synthesis.central_thesis_learning_unit_ids)
             for item in [*synthesis.key_takeaways, *synthesis.cross_chapter_connections, *synthesis.limitations]:
@@ -222,8 +401,16 @@ async def synthesize_book(
                 referenced_ids.update(synthesis.decision_brief.recommendation_learning_unit_ids)
                 for item in [*synthesis.decision_brief.options, *synthesis.decision_brief.action_plan]:
                     referenced_ids.update(item.learning_unit_ids)
-            if referenced_ids - set(citation_ids):
-                raise ValueError("whole-book synthesis referenced a learning unit outside its supplied guides")
+            unsupported_ids = referenced_ids - set(citation_ids)
+            if unsupported_ids:
+                logger.error(
+                    "[bd-distill] whole-book synthesis citation invariant failed "
+                    "run=%s batch=%s invalid_ids=%s",
+                    state["run_id"],
+                    batch_id,
+                    sorted(unsupported_ids)[:12],
+                )
+                raise ValueError("whole-book synthesis referenced IDs outside its supplied evidence")
             record = {
                 "synthesis_id": f"{level}-{batch_index}",
                 "inputs": [item.get("chapter_id", item.get("synthesis_id")) for item in batch],

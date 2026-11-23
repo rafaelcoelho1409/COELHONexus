@@ -21,7 +21,9 @@ async def generate_answer(
             "research_plan": state.get("research_plan", ""),
             "conversation_history": state.get("conversation_history", [])[-4:],
             "evidence": documents,
+            "external_search_status": state.get("external_search_status", "not_requested"),
             "instruction": "The evidence list is empty" if not documents else "Answer only from these evidence records.",
         },
+        skill_role = "ask_answerer",
     )
     return {"generation": answer.answer, "evidence_ids": answer.evidence_ids}

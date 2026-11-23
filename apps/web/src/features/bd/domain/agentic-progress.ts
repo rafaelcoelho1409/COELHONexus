@@ -127,7 +127,7 @@ export const AGENTIC_NODE_DETAILS: Record<AgenticNodeId, AgenticNodeDetails> = {
     ],
     reads: ["selected repaired pages", "source figure PNGs", "section paths"],
     writes: ["visually enriched Markdown", "figure conversion provenance"],
-    llm: "Visual extractor DeepAgent, one schema-constrained vision call per eligible figure; the Rotator selects a vision model from image input.",
+    llm: "Visual extractor, one schema-constrained vision call per eligible figure using the configured vision model.",
     resources: {
       agents: ["visual_extractor"],
       skills: ["transcribe-source-figure"],
@@ -428,6 +428,7 @@ export type AgenticNodeView = {
   id: string;
   label: string;
   status: AgenticNodeStatus;
+  statusLabel?: string;
   kpi: string | null;
   liveLine: string | null;
   resources: AgenticNodeResources;

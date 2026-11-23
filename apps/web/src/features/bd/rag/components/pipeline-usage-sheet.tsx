@@ -16,6 +16,51 @@ import { fmtInt, usageModelRows } from "../ask";
 import type { AskUsage } from "../entities";
 import { SideSheet } from "./side-sheet";
 
+type AskUsageMode = "node" | "model" | "node_model";
+type AskUsageRow = {
+  key: string;
+  node: string | null;
+  model: string | null;
+  calls: number;
+  tokens_in: number;
+  tokens_out: number;
+  reasoning_tokens: number;
+};
+
+const ASK_USAGE_MODES: readonly { id: AskUsageMode; label: string }[] = [
+  { id: "node", label: "By node" },
+  { id: "model", label: "By model" },
+  { id: "node_model", label: "By node + model" },
+];
+
+function askUsageRows(usage: AskUsage | null, mode: AskUsageMode): AskUsageRow[] {
+  if (!usage) return [];
+  if (mode === "model") {
+    return usageModelRows(usage).map((row) => ({ key: row.model, node: null, ...row }));
+  }
+  const rows: AskUsageRow[] = [];
+  for (const [node, value] of Object.entries(usage.by_node)) {
+    const models = Object.entries(value.by_model);
+    if (mode === "node_model") {
+      for (const [model, counts] of models) {
+        rows.push({ key: `${node}:${model}`, node, model, ...counts });
+      }
+      continue;
+    }
+    const total = models.reduce(
+      (sum, [, counts]) => ({
+        calls: sum.calls + counts.calls,
+        tokens_in: sum.tokens_in + counts.tokens_in,
+        tokens_out: sum.tokens_out + counts.tokens_out,
+        reasoning_tokens: sum.reasoning_tokens + counts.reasoning_tokens,
+      }),
+      { calls: 0, tokens_in: 0, tokens_out: 0, reasoning_tokens: 0 },
+    );
+    rows.push({ key: node, node, model: null, ...total });
+  }
+  return rows.sort((left, right) => right.tokens_in + right.tokens_out - (left.tokens_in + left.tokens_out));
+}
+
 type PipelineUsageSheetBaseProps = {
   live?: boolean;
   onClose: () => void;
@@ -60,7 +105,8 @@ function AskUsageSheet({
     retry: false,
   });
   const usage = query.data ?? null;
-  const rows = usageModelRows(usage);
+  const [mode, setMode] = useState<AskUsageMode>("node");
+  const rows = askUsageRows(usage, mode);
 
   return (
     <SideSheet title={title} closeLabel="Close usage" onClose={onClose} subtitle={subtitle}>
@@ -75,7 +121,8 @@ function AskUsageSheet({
       ) : usage?.total?.calls ? (
         <div className="flex flex-col gap-4">
           <AskUsageTotals total={usage.total} />
-          <UsageModelTable rows={rows} />
+          <ToggleGroup legend="Usage grouped by" options={ASK_USAGE_MODES} value={mode} onChange={setMode} />
+          <AskUsageTable rows={rows} mode={mode} />
         </div>
       ) : (
         <p className="text-sm text-muted-foreground">
@@ -231,7 +278,7 @@ function runUsageRows(nodes: [string, AgenticUsage["by_node"][string]][], mode: 
         tokens_out: counts.tokens_out,
         reasoning_tokens: counts.reasoning_tokens,
       }))
-      .sort((left, right) => right.calls - left.calls || left.node!.localeCompare(right.node!));
+      .sort((left, right) => right.calls - left.calls || (left.node ?? "").localeCompare(right.node ?? ""));
   }
 
   const rows = nodes.flatMap(([nodeId, counts]) =>
@@ -250,8 +297,8 @@ function runUsageRows(nodes: [string, AgenticUsage["by_node"][string]][], mode: 
     return rows.sort(
       (left, right) =>
         right.calls - left.calls ||
-        left.node!.localeCompare(right.node!) ||
-        left.model!.localeCompare(right.model!),
+        (left.node ?? "").localeCompare(right.node ?? "") ||
+        (left.model ?? "").localeCompare(right.model ?? ""),
     );
   }
 
@@ -273,7 +320,7 @@ function runUsageRows(nodes: [string, AgenticUsage["by_node"][string]][], mode: 
     );
   }
   return [...byModel.values()].sort(
-    (left, right) => right.calls - left.calls || left.model!.localeCompare(right.model!),
+    (left, right) => right.calls - left.calls || (left.model ?? "").localeCompare(right.model ?? ""),
   );
 }
 
@@ -394,16 +441,34 @@ function RunUsageTable({ rows, mode }: { rows: RunUsageRow[]; mode: UsageMode })
   );
 }
 
-function UsageModelTable({ rows }: { rows: ReturnType<typeof usageModelRows> }) {
+function AskUsageTable({ rows, mode }: { rows: AskUsageRow[]; mode: AskUsageMode }) {
   return rows.length > 0 ? (
-    <section aria-label="Usage by model" className="overflow-x-auto rounded-sm border border-border">
-      <table className="w-full border-collapse text-sm">
-        <caption className="sr-only">By model</caption>
+    <section
+      // biome-ignore lint/a11y/noNoninteractiveTabindex: keyboard users need to focus and scroll the usage table (WCAG 2.1.1)
+      tabIndex={0}
+      aria-label="Ask usage breakdown"
+      className="overflow-x-auto rounded-sm border border-border"
+    >
+      <table className="w-full min-w-[34rem] border-collapse text-sm">
+        <caption className="border-b border-border px-3 py-2 text-left text-xs font-medium text-muted-foreground">
+          {mode === "node"
+            ? "Usage by node"
+            : mode === "model"
+              ? "Usage by model"
+              : "Usage by node and model"}
+        </caption>
         <thead>
           <tr className="border-b border-border text-left text-xs text-muted-foreground">
-            <th scope="col" className="px-3 py-2 font-medium">
-              Model
-            </th>
+            {mode !== "model" ? (
+              <th scope="col" className="px-3 py-2 font-medium">
+                Node
+              </th>
+            ) : null}
+            {mode !== "node" ? (
+              <th scope="col" className="px-3 py-2 font-medium">
+                Model
+              </th>
+            ) : null}
             <th scope="col" className="px-3 py-2 text-right font-medium">
               Calls
             </th>
@@ -420,10 +485,15 @@ function UsageModelTable({ rows }: { rows: ReturnType<typeof usageModelRows> }) 
         </thead>
         <tbody>
           {rows.map((row) => (
-            <tr key={row.model} className="border-b border-border last:border-b-0">
-              <th scope="row" className="break-all px-3 py-1.5 text-left font-mono text-xs font-normal">
-                {row.model}
-              </th>
+            <tr key={row.key} className="border-b border-border last:border-b-0">
+              {mode !== "model" ? (
+                <th scope="row" className="px-3 py-1.5 text-left font-medium">
+                  {row.node}
+                </th>
+              ) : null}
+              {mode !== "node" ? (
+                <td className="break-all px-3 py-1.5 font-mono text-xs">{row.model}</td>
+              ) : null}
               <td className="tabular px-3 py-1.5 text-right">{fmtInt(row.calls)}</td>
               <td className="tabular px-3 py-1.5 text-right">{fmtInt(row.tokens_in)}</td>
               <td className="tabular px-3 py-1.5 text-right">{fmtInt(row.tokens_out)}</td>

@@ -1,6 +1,6 @@
 "use client";
 
-/** The "Thinking" trace of one turn: the four pipeline steps with what each is doing, and — in Deep mode — the research plan
+/** The "Thinking" trace of one turn: the pipeline steps with what each is doing, and — in Deep mode — the research plan
  * and a card per sub-question. Open while the turn runs, folded to "Thought for 14s" once it is done; the reader can flip it
  * either way, and a choice made stays. */
 
@@ -14,12 +14,22 @@ import { type AskDeep, type AskStageId, type AskStageStatus, type AskTurn, think
 import { ASK_STAGES } from "../params";
 import { type BadgeTone, StatusBadge } from "./status-badge";
 
-const TONE: Record<AskStageStatus, BadgeTone> = { queued: "queued", active: "running", done: "done" };
-const WORD: Record<AskStageStatus, string> = { queued: "waiting", active: "running", done: "done" };
+const TONE: Record<AskStageStatus, BadgeTone> = {
+  queued: "queued",
+  active: "running",
+  done: "done",
+  skipped: "na",
+};
+const WORD: Record<AskStageStatus, string> = {
+  queued: "waiting",
+  active: "running",
+  done: "done",
+  skipped: "not used",
+};
 
 function Steps({ stages }: { stages: AskTurn["stages"] }): JSX.Element {
   return (
-    <ol className="m-0 grid list-none grid-cols-2 gap-x-4 gap-y-2 p-0 sm:grid-cols-4">
+    <ol className="m-0 grid list-none grid-cols-2 gap-x-4 gap-y-2 p-0 sm:grid-cols-5">
       {ASK_STAGES.map((stage) => {
         const view = stages[stage.id as AskStageId];
         return (

@@ -1,10 +1,9 @@
 """Extract source-supported learning units from a bounded source batch."""
 from __future__ import annotations
+from . import service
+from .... import graphs
 
 from langgraph.runtime import Runtime
-
-from .... import graphs
-from . import service
 
 
 async def extract_unit(

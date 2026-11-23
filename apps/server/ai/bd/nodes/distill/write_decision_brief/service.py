@@ -1,13 +1,12 @@
 """Write a separate, source-cited decision brief from the whole-book synthesis."""
 from __future__ import annotations
+import domains
+from .... import graphs, skills
 
 import json
 import logging
 from typing import Any
 
-import domains
-
-from .... import graphs, skills
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +83,25 @@ async def _write_decision_brief(
         for source in ref.get("unit_sources", [])
         if source.get("learning_unit_id") in allowed_id_set
     ]
+    research_key = state.get("research_context_key") or domains.bd.distill.keys.research_context_key(
+        state["book_id"], state["run_id"],
+    )
+    if await dependencies.storage.exists(research_key):
+        research_context = domains.bd.distill.schemas.ResearchContext.model_validate_json(
+            await dependencies.storage.read_text(research_key),
+        )
+    else:
+        research_context = domains.bd.distill.schemas.ResearchContext(status = "disabled")
+    source_by_id = {source.source_id: source for source in research_context.sources}
+    full_text_source_ids = {
+        source.source_id for source in research_context.sources if source.full_text_sha256 is not None
+    }
+    usable_external_ids = {
+        quote.source_id
+        for finding in research_context.findings
+        for quote in finding.evidence_quotes
+        if quote.source_id in full_text_source_ids
+    }
     units = await domains.bd.distill.synthesize.service.read_learning_units(
         dependencies.storage,
         state["book_id"],
@@ -95,6 +113,25 @@ async def _write_decision_brief(
         "book_synthesis": synthesis.model_dump(mode = "json"),
         "allowed_learning_unit_ids": allowed_ids,
         "learning_units": units,
+        "research_context": {
+            "status": research_context.status,
+            "sources": [
+                {
+                    "source_id": source_id,
+                    "title": source_by_id[source_id].title,
+                    "url": source_by_id[source_id].url,
+                    "published_at": source_by_id[source_id].published_at,
+                    "full_text_sha256": source_by_id[source_id].full_text_sha256,
+                }
+                for source_id in sorted(usable_external_ids)
+            ],
+            "findings": [
+                finding.model_dump(mode = "json")
+                for finding in research_context.findings
+                if set(finding.source_ids) <= usable_external_ids
+            ],
+        },
+        "allowed_external_source_ids": sorted(usable_external_ids),
     }
     with domains.settings.llm_counter.service.llm_context(
         ns = "bd", run_id = state["run_id"], node_id = "decision_brief_writer", stage = "distill",
@@ -123,9 +160,16 @@ async def _write_decision_brief(
         cited_ids = set(decision.recommendation_learning_unit_ids)
         for item in [*decision.options, *decision.action_plan]:
             cited_ids.update(item.learning_unit_ids)
-        if not cited_ids or cited_ids - set(allowed_ids):
+        cited_external_ids = set(decision.external_source_ids)
+        for item in [*decision.options, *decision.action_plan]:
+            cited_external_ids.update(item.external_source_ids)
+        if (
+            not cited_ids
+            or cited_ids - set(allowed_ids)
+            or cited_external_ids - usable_external_ids
+        ):
             logger.warning(
-                "[bd-distill] omitted decision brief with unresolved citations run=%s",
+                "[bd-distill] omitted decision brief with unresolved book or external citations run=%s",
                 state["run_id"],
             )
             return None

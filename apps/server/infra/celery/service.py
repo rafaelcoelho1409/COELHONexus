@@ -17,6 +17,7 @@ pull the whole web lifespan into every fork).
 from __future__ import annotations
 import domains, infra
 
+import ast
 import asyncio
 import logging
 import sys
@@ -94,6 +95,40 @@ def get_result(task_id: str) -> AsyncResult:
 def revoke(task_id: str, **kwargs) -> None:
     """Revoke a task; pass `terminate=True, signal="SIGTERM"` to kill a running one."""
     app.control.revoke(task_id, **kwargs)
+
+
+def inspect_task_by_args(task_name: str, task_args: tuple[str, ...]) -> str | None:
+    """Return active, reserved, or absent when worker inspection is complete; None means unknown."""
+    try:
+        inspector = app.control.inspect(timeout = 2.0)
+        workers = inspector.ping()
+        if not workers:
+            return None
+        active = inspector.active()
+        reserved = inspector.reserved()
+    except Exception as error:
+        logger.warning("[celery] task inspection failed (%s: %s)", type(error).__name__, error)
+        return None
+    if active is None or reserved is None:
+        return None
+    worker_names = set(workers)
+    if not worker_names.issubset(active) or not worker_names.issubset(reserved):
+        return None
+
+    for worker_tasks, state in ((active, "active"), (reserved, "reserved")):
+        for tasks in worker_tasks.values():
+            for task in tasks:
+                if task.get("name") != task_name:
+                    continue
+                args = task.get("args")
+                if isinstance(args, str):
+                    try:
+                        args = ast.literal_eval(args)
+                    except (SyntaxError, ValueError):
+                        continue
+                if isinstance(args, (list, tuple)) and tuple(args) == task_args:
+                    return state
+    return "absent"
 
 
 @worker_process_init.connect(weak=False)

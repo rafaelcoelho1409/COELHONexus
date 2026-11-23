@@ -22,7 +22,7 @@ def route_by_mode(state: graphs.ask.adaptive.states.AdaptiveAskState) -> str:
         return "direct_answer"
     if state.get("mode", "standard").lower() == "deep":
         return "plan_research"
-    return "run_standard"
+    return "retrieve"
 
 
 def route_after_direct(state: graphs.ask.adaptive.states.AdaptiveAskState) -> str:
@@ -30,4 +30,4 @@ def route_after_direct(state: graphs.ask.adaptive.states.AdaptiveAskState) -> st
     answer = str(state.get("generation") or "")
     if answer and not answer.startswith("Error generating answer:"):
         return "end"
-    return "run_standard"
+    return "retrieve"

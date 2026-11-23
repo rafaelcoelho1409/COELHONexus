@@ -134,6 +134,10 @@ async def prepare_units(
             "disposition": qa_page.delivery_disposition,
             "review_required": qa_page.status == domains.bd.ingestion.ai.runs.schemas.AgenticPageStatus.REVIEW_REQUIRED,
             "content_role": content_page.role if content_page is not None else "unknown",
+            "figures": [
+                figure for figure in raw_page.get("figures", [])
+                if isinstance(figure, str) and figure
+            ][:12],
         }
         source_pages.append(source_page)
         if qa_page.delivery_disposition == "discarded_blank":

@@ -2,7 +2,7 @@
 from __future__ import annotations
 import domains
 from . import config, params
-from .... import agents, middlewares, prompts
+from .... import agents, middlewares, prompts, skills
 
 from deepagents import (
     FilesystemPermission,
@@ -46,13 +46,19 @@ def answerer(model = None):
         tools = [],
         system_prompt = prompts.ask.answer.prompts.SYSTEM_PROMPT,
         middleware = [
-            middlewares.middleware.ToolAllowlistMiddleware(frozenset()),
+            middlewares.middleware.ToolAllowlistMiddleware(skills.params.ALLOWED_TOOL_NAMES),
             ModelCallLimitMiddleware(
-                run_limit = params.MAX_MODEL_CALLS, 
+                run_limit = params.MAX_MODEL_CALLS,
                 exit_behavior = "end"),
         ],
         response_format = agents.ask.schemas.EvidenceAnswer,
+        skills = [skills.domain.source_for("ask_answerer")],
         permissions = [
+            FilesystemPermission(
+                operations = ["read"],
+                paths = ["/skills/**"],
+                mode = "allow",
+            ),
             FilesystemPermission(
                 operations = ["read"],
                 paths = ["/**"],
@@ -69,6 +75,12 @@ def answerer(model = None):
     )
     tool_node = agent.nodes.get("tools")
     available_tools = getattr(getattr(tool_node, "bound", None), "_tools_by_name", None)
-    if not isinstance(available_tools, dict) or set(available_tools) - {"read_file"}:
-        raise RuntimeError("DeepAgents exposed an unreviewed tool to the BD Ask answerer")
+    error_message = "DeepAgents exposed an unreviewed tool to the BD Ask answerer"
+    if not isinstance(available_tools, dict):
+        raise RuntimeError(error_message)
+    unreviewed_tools = set(available_tools) - (
+        params.DEFAULT_TOOL_NAMES | skills.params.ALLOWED_TOOL_NAMES
+    )
+    if unreviewed_tools:
+        raise RuntimeError(f"{error_message}: {', '.join(sorted(unreviewed_tools))}")
     return agent

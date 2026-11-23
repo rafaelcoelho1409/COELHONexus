@@ -231,8 +231,13 @@ async def get_page_quality(book_id: str, page_no: int) -> dict:
 
 
 @router.get("/{book_id}/figures/{name}")
-async def get_figure(book_id: str, name: str) -> Response:
-    return await service.get_figure(book_id, name)
+async def get_figure(
+    book_id: str,
+    name: str,
+    extraction_id: str | None = None,
+    sha256: str | None = None,
+) -> Response:
+    return await service.get_figure(book_id, name, extraction_id, sha256)
 
 
 @router.get("/{book_id}/events")

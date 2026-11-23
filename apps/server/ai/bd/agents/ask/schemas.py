@@ -8,13 +8,16 @@ from pydantic import BaseModel, Field
 
 class AskPlan(BaseModel):
     mode: Literal["fast", "standard", "deep"]
-    sub_questions: list[str] = Field(max_length = 4)
+    intent: Literal["book", "conversation"] = "book"
+    use_external_search: bool = False
+    external_search_query: str = Field(default = "", max_length = 400)
+    sub_questions: list[str] = Field(default_factory = list, max_length = 4)
     strategy: str = Field(max_length = 500)
 
 
 class EvidenceAnswer(BaseModel):
-    answer: str = Field(max_length = 12000)
-    evidence_ids: list[str] = Field(max_length = 12)
+    answer: str = Field(max_length = 24000)
+    evidence_ids: list[str] = Field(default_factory = list, max_length = 12)
 
 
 class EvidenceGrades(BaseModel):

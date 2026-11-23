@@ -1,7 +1,7 @@
 import {
   client,
-  getBdIngestionBookIdAgenticRunsAgenticRunIdContentSelection,
   deleteBdDistillBookIdRunsRunId,
+  getBdIngestionBookIdAgenticRunsAgenticRunIdContentSelection,
   postBdDistillBookIdRuns,
   postBdDistillBookIdRunsRunIdCancel,
   postBdDistillBookIdRunsRunIdResume,
@@ -33,6 +33,20 @@ export function learningGuidePdfUrl(bookId: string, runId: string): string {
     url: "/api/v1/bd/distill/{book_id}/runs/{run_id}/report.pdf",
     path: { book_id: bookId, run_id: runId },
   });
+}
+
+export function sourceFigureUrl(
+  bookId: string,
+  name: string,
+  extractionRunId: string,
+  sha256: string,
+): string {
+  const base = client.buildUrl({
+    url: "/api/v1/bd/ingestion/{book_id}/figures/{name}",
+    path: { book_id: bookId, name },
+  });
+  const query = new URLSearchParams({ extraction_id: extractionRunId, sha256 });
+  return `${base}?${query.toString()}`;
 }
 
 export async function startDistillRun(bookId: string, ingestionAiRunId: string) {

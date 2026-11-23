@@ -22,4 +22,8 @@ class SearchSession:
     initialized: bool = False
     mcp_client: Any = None
     remote_tool: Any = None
+    remote_read_tool: Any = None
+    remote_tools: list[Any] = field(default_factory = list)
+    source_texts: dict[str, str] = field(default_factory = dict)
+    read_source_ids: set[str] = field(default_factory = set)
     lock: asyncio.Lock = field(default_factory = asyncio.Lock)

@@ -4,6 +4,7 @@ import domains
 from . import domain, entities, params
 
 import asyncio
+import hashlib
 import json
 import time
 from typing import Any
@@ -70,9 +71,18 @@ async def _resolve_remote_search(session: entities.SearchSession) -> Any | None:
         return None
 
     session.mcp_client = client
+    session.remote_tools = tools
     session.remote_tool = next(
         (item for item in search_tools if item.name.endswith("web_search")),
         search_tools[0],
+    )
+    session.remote_read_tool = next(
+        (
+            item for item in tools
+            if item not in search_tools
+            and any(token in item.name.casefold() for token in ("fetch", "open_url", "read_url", "fetch_page"))
+        ),
+        None,
     )
     return session.remote_tool
 
@@ -159,4 +169,75 @@ async def search_mcp_web(query: str, runtime: ToolRuntime[entities.SearchSession
             "provider_id": session.provider_id,
             "query": normalized_query,
             "sources": source_records,
+        }, ensure_ascii = False)
+
+
+@tool
+async def read_search_source(source_id: str, runtime: ToolRuntime[entities.SearchSession]) -> str:
+    """Read the full text of a source returned by search_mcp_web, when the connected MCP provider supports it.
+
+    This accepts a run-scoped source ID, never an arbitrary URL. Return exact passages from this text in findings.
+
+    Args:
+        source_id: Stable ID returned by search_mcp_web in this Distill run.
+    """
+    session = runtime.context
+    normalized_id = source_id.strip()
+    async with session.lock:
+        source = session.sources.get(normalized_id)
+        if source is None:
+            return json.dumps({"status": "unknown_source", "source_id": normalized_id})
+        cached_text = session.source_texts.get(normalized_id)
+        if cached_text is not None:
+            return json.dumps({
+                "status": "complete",
+                "source_id": normalized_id,
+                "full_text_sha256": source.get("full_text_sha256"),
+                "text": cached_text,
+            }, ensure_ascii = False)
+        if len(session.read_source_ids) >= params.MAX_SOURCE_READS:
+            return json.dumps({"status": "read_limit", "source_id": normalized_id})
+        read_tool = session.remote_read_tool
+        if read_tool is None:
+            return json.dumps({"status": "full_source_read_unsupported", "source_id": normalized_id})
+        arguments = domain.source_read_arguments(
+            read_tool,
+            str(source.get("url", "")),
+            session.run_id,
+            params.MAX_SOURCE_TEXT_CHARS,
+        )
+        if arguments is None:
+            return json.dumps({"status": "full_source_read_unsupported", "source_id": normalized_id})
+        session.read_source_ids.add(normalized_id)
+        try:
+            raw = await asyncio.wait_for(
+                read_tool.ainvoke(arguments),
+                timeout = params.SEARCH_TIMEOUT_S,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:  # noqa: BLE001 — source-read failures do not fail the guide.
+            return json.dumps({
+                "status": "unavailable",
+                "source_id": normalized_id,
+                "error_type": type(error).__name__,
+            })
+        text = domain.normalize_source_text(raw, params.MAX_SOURCE_TEXT_CHARS)
+        if len(text) < 120:
+            return json.dumps({"status": "unavailable", "source_id": normalized_id, "error_type": "InsufficientSourceText"})
+        digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        accessed_at = time.time()
+        source.update({
+            "full_text_sha256": digest,
+            "full_text_char_count": len(text),
+            "full_text_accessed_at": accessed_at,
+        })
+        session.source_texts[normalized_id] = text
+        return json.dumps({
+            "status": "complete",
+            "source_id": normalized_id,
+            "title": source.get("title"),
+            "url": source.get("url"),
+            "full_text_sha256": digest,
+            "text": text,
         }, ensure_ascii = False)

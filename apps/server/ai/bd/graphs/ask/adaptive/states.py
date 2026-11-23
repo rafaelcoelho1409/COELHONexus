@@ -7,10 +7,17 @@ from typing import TypedDict
 class AdaptiveAskState(TypedDict, total = False):
     question: str
     thread_id: str
+    turn_id: str
     conversation_history: list[dict]
     force_mode: str
     supplied_sub_questions: list[str]
+    intent: str
     mode: str
+    use_external_search: bool
+    external_search_query: str
+    external_search_status: str
+    external_search_provider: str
+    external_documents: list[dict]
     research_plan: str
     sub_questions: list[str]
     queries: list[str]

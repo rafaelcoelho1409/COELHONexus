@@ -26,7 +26,7 @@ CHAPTER_SYNTHESIS_SETTLE_CAP_S = 130.0
 CHAPTER_AGENT_RESPONSE_ATTEMPTS = 3
 CHAPTER_CITATION_REPAIR_ATTEMPTS = 1
 CHAPTER_VISUAL_REPAIR_ATTEMPTS = 1
-BOOK_AGENT_RESPONSE_ATTEMPTS = 3
+BOOK_AGENT_RESPONSE_ATTEMPTS = 4
 BOOK_SYNTHESIS_MAX_TOKENS = 3800
 BOOK_SYNTHESIS_TIMEOUT_S = 240.0
 RESEARCH_ENABLED = os.environ.get("BD_DISTILL_RESEARCH_ENABLED", "false").casefold() in {"1", "true", "yes"}
@@ -38,19 +38,63 @@ FANOUT_CHAPTER_BATCH_SIZE = 1
 # Retry transient provider failures at the graph node boundary as well as within each model call.
 AGENT_CALL_ATTEMPTS = 3
 AGENT_CALL_RETRY_WAIT_BASE_S = 5.0
+# Chapter coverage review is optional; report a visible fallback rather than
+# holding the report pipeline open through repeated provider retries.
+COVERAGE_REVIEW_HEARTBEAT_S = 15.0
+COVERAGE_REVIEW_CONCURRENCY = 2
 TRANSIENT_NODE_RETRY_ATTEMPTS = 3
 TRANSIENT_NODE_RETRY_INITIAL_INTERVAL_S = 5.0
 TRANSIENT_NODE_RETRY_MAX_INTERVAL_S = 30.0
+PARALLEL_DISPATCH_NODE = "dispatch_parallel_stages"
+REPORT_PIPELINE_NODES = frozenset({
+    "synthesize_book",
+    "research_context",
+    "write_decision_brief",
+})
+PARALLEL_REPORT_REPLAY_NODES = REPORT_PIPELINE_NODES | {"build_chapter_visuals"}
+
+# Top-level LangGraph nodes. The report subgraph expands to the three report stages below.
+LANGGRAPH_NODES = (
+    "prepare_units",
+    "extract_unit",
+    "verify_unit",
+    "prepare_chapters",
+    "synthesize_chapter",
+    "review_chapter_coverage",
+    PARALLEL_DISPATCH_NODE,
+    "build_chapter_visuals",
+    "report_pipeline",
+    "publish_report",
+)
+LANGGRAPH_EDGES = (
+    ("prepare_units", "extract_unit"),
+    ("extract_unit", "verify_unit"),
+    ("verify_unit", "prepare_chapters"),
+    ("prepare_chapters", "synthesize_chapter"),
+    ("synthesize_chapter", "review_chapter_coverage"),
+    ("review_chapter_coverage", PARALLEL_DISPATCH_NODE),
+    (PARALLEL_DISPATCH_NODE, "build_chapter_visuals"),
+    (PARALLEL_DISPATCH_NODE, "report_pipeline"),
+    ("build_chapter_visuals", "publish_report"),
+    ("report_pipeline", "publish_report"),
+)
+
+# Report subgraph nodes and the flattened operational stages used for progress and replay.
+REPORT_PIPELINE_EDGES = (
+    ("synthesize_book", "research_context"),
+    ("research_context", "write_decision_brief"),
+)
 GRAPH_NODES = (
     "prepare_units",
     "extract_unit",
     "verify_unit",
     "prepare_chapters",
     "synthesize_chapter",
+    "review_chapter_coverage",
     "build_chapter_visuals",
     "synthesize_book",
-    "write_decision_brief",
     "research_context",
+    "write_decision_brief",
     "publish_report",
 )
 GRAPH_EDGES = (
@@ -58,13 +102,12 @@ GRAPH_EDGES = (
     ("extract_unit", "verify_unit"),
     ("verify_unit", "prepare_chapters"),
     ("prepare_chapters", "synthesize_chapter"),
-    ("synthesize_chapter", "build_chapter_visuals"),
-    ("synthesize_chapter", "synthesize_book"),
-    ("synthesize_book", "write_decision_brief"),
-    ("synthesize_book", "research_context"),
+    ("synthesize_chapter", "review_chapter_coverage"),
+    ("review_chapter_coverage", "build_chapter_visuals"),
+    ("review_chapter_coverage", "synthesize_book"),
+    *REPORT_PIPELINE_EDGES,
     ("build_chapter_visuals", "publish_report"),
     ("write_decision_brief", "publish_report"),
-    ("research_context", "publish_report"),
 )
 LLM_COUNTER_NODES_BY_GRAPH_NODE = {
     "prepare_units": (),
@@ -72,6 +115,7 @@ LLM_COUNTER_NODES_BY_GRAPH_NODE = {
     "verify_unit": ("evidence_verifier",),
     "prepare_chapters": (),
     "synthesize_chapter": ("chapter_synthesizer",),
+    "review_chapter_coverage": ("report_reviewer",),
     "build_chapter_visuals": ("visual_artifact_builder",),
     "synthesize_book": ("book_synthesizer",),
     "write_decision_brief": ("decision_brief_writer",),

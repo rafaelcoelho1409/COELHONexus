@@ -67,15 +67,34 @@ async def _write_research_context(
             for item in search_session.sources.values()
         ]
         allowed_source_ids = {source.source_id for source in sources}
+        readable_source_ids = {
+            source_id for source_id in search_session.source_texts
+            if source_id in allowed_source_ids
+        }
         findings = []
         if isinstance(analysis, domains.bd.distill.schemas.ResearchAnalysisOutput):
-            findings = [
-                finding for finding in analysis.findings
-                if finding.source_ids and set(finding.source_ids) <= allowed_source_ids
-            ]
+            for finding in analysis.findings:
+                quote_source_ids = {quote.source_id for quote in finding.evidence_quotes}
+                valid_quotes = all(
+                    quote.source_id in finding.source_ids
+                    and quote.source_id in readable_source_ids
+                    and domains.bd.distill.domain.external_quote_is_supported(
+                        quote.quote,
+                        search_session.source_texts[quote.source_id],
+                    )
+                    for quote in finding.evidence_quotes
+                )
+                if (
+                    finding.source_ids
+                    and set(finding.source_ids) <= readable_source_ids
+                    and quote_source_ids == set(finding.source_ids)
+                    and finding.evidence_quotes
+                    and valid_quotes
+                ):
+                    findings.append(finding)
             if len(findings) != len(analysis.findings):
                 logger.warning(
-                    "[bd-distill] omitted external research findings with unknown source IDs run=%s",
+                    "[bd-distill] omitted external findings without verified full-source quotations run=%s",
                     state["run_id"],
                 )
         context = domains.bd.distill.schemas.ResearchContext(

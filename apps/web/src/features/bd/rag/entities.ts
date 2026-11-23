@@ -47,6 +47,8 @@ const citationSchema = z.looseObject({
   section: z.string().catch(""),
   snippet: z.string().catch(""),
   source: z.string().catch(""),
+  published_at: z.string().nullish().catch(null),
+  source_read: z.boolean().nullish().catch(null),
 });
 export type AskCitation = z.infer<typeof citationSchema>;
 
@@ -110,6 +112,8 @@ export const askEventSchema = z.looseObject({
   node: z.string().catch("unknown"),
   turn_id: z.number().nullish().catch(null),
   mode: z.string().nullish().catch(null),
+  intent: z.enum(["book", "conversation"]).nullish().catch(null),
+  external_search_status: z.string().nullish().catch(null),
   graph: askGraphStateSchema.nullish().catch(null),
   retrieval_sources: z.array(z.string()).nullish().catch(null),
   documents: z.unknown().nullish().catch(null),

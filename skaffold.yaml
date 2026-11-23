@@ -29,6 +29,8 @@ build:
             dest: /app
           - src: "**/*.toml"
             dest: /app
+          - src: "**/*.md"
+            dest: /app
     # Next.js front end: a standalone build can't be hot-patched, so no `sync:` — edits rebuild.
     - image: localhost:5001/coelhonexus-web
       context: apps/web

@@ -56,7 +56,7 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, StateGraph
 
 
-def _decide_after_grading(
+def decide_after_grading(
     state: state.YouTubeRAGState, config: RunnableConfig,
 ) -> str:
     """Generate when docs survived grading; rewrite while retries
@@ -73,7 +73,7 @@ def _decide_after_grading(
     return "fallback"
 
 
-def _decide_after_hallucination_check(
+def decide_after_hallucination_check(
     state: state.YouTubeRAGState, config: RunnableConfig,
 ) -> str:
     """Accept on grounded; rewrite while retries remain; once
@@ -159,7 +159,7 @@ def build_youtube_rag_graph(
     workflow.add_edge("retrieve", "grade_documents")
     workflow.add_conditional_edges(
         "grade_documents",
-        _decide_after_grading,
+        decide_after_grading,
         {
             "generate": "generate",
             "rewrite":  "rewrite_query",
@@ -169,7 +169,7 @@ def build_youtube_rag_graph(
     workflow.add_edge("generate", "check_hallucination")
     workflow.add_conditional_edges(
         "check_hallucination",
-        _decide_after_hallucination_check,
+        decide_after_hallucination_check,
         {
             "format_citations": "format_citations",
             "rewrite":          "rewrite_query",

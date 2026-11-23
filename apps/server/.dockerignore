@@ -55,4 +55,5 @@
 !ai/bd/prompts/rag/**/SYSTEM.md
 !ai/bd/skills/ingestion/**/*.md
 !ai/bd/skills/distill/**/*.md
+!ai/bd/skills/ask/**/*.md
 !ai/**/prompts/**/SYSTEM.md

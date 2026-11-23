@@ -13,8 +13,8 @@ import type {
 } from "./entities";
 import { ASK_FAILED_ANSWER_PREFIX, ASK_STAGES, THREAD_LABEL_MAX } from "./params";
 
-export type AskStageId = "retrieve" | "grade" | "generate" | "verify";
-export type AskStageStatus = "queued" | "active" | "done";
+export type AskStageId = "plan" | "retrieve" | "grade" | "generate" | "verify";
+export type AskStageStatus = "queued" | "active" | "done" | "skipped";
 type AskStageView = { status: AskStageStatus; action: string };
 type AskDeepCard = { question: string; status: "queued" | "done"; answer: string };
 export type AskDeep = { banner: string | null; planText: string; cards: AskDeepCard[] };
@@ -41,9 +41,9 @@ function normalizeGraph(
   fallback: AskGraphState,
 ): AskGraphState {
   return {
-    route: value?.route ?? fallback.route,
+    route: value?.route || fallback.route,
     active_node: value?.active_node === undefined ? fallback.active_node : value.active_node,
-    visited_nodes: value?.visited_nodes ?? fallback.visited_nodes,
+    visited_nodes: [...new Set([...fallback.visited_nodes, ...(value?.visited_nodes ?? [])])],
     retrieval_sources: value?.retrieval_sources ?? fallback.retrieval_sources,
     status: value?.status ?? fallback.status,
   };
@@ -75,6 +75,8 @@ export type AskTurn = {
   hasThinking: boolean;
   /** The book this turn searched. A thread never crosses book boundaries. */
   bookId: string | null;
+  /** Live external-search outcome; history may not include it in older persisted graph snapshots. */
+  externalSearchStatus: string | null;
   /** Identity for rendering: a live turn's own counter value, a saved turn's row id. */
   key: string;
 };
@@ -90,6 +92,19 @@ const STAGE_INDEX: Record<AskStageId, number> = (() => {
 const QUEUED: AskStageView = { status: "queued", action: "" };
 const ACTIVE: AskStageView = { status: "active", action: "" };
 const DONE: AskStageView = { status: "done", action: "" };
+const SKIPPED: AskStageView = { status: "skipped", action: "" };
+
+function conversationStages(
+  stages: Record<AskStageId, AskStageView>,
+  externalSearchVisited = false,
+): Record<AskStageId, AskStageView> {
+  return {
+    ...stages,
+    retrieve: externalSearchVisited ? stages.retrieve : SKIPPED,
+    grade: SKIPPED,
+    verify: SKIPPED,
+  };
+}
 
 function freshStages(): Record<AskStageId, AskStageView> {
   const stages = {} as Record<AskStageId, AskStageView>;
@@ -102,6 +117,7 @@ export function newLiveTurn(question: string, bookId: string | null = null): Ask
   return {
     key: `live-${liveTurnCount}`,
     bookId,
+    externalSearchStatus: null,
     question,
     mode: "",
     stages: freshStages(),
@@ -139,8 +155,9 @@ function stageMark(
   const next = {} as Record<AskStageId, AskStageView>;
   for (const [id, view] of Object.entries(stages) as [AskStageId, AskStageView][]) {
     if (state === "active" && STAGE_INDEX[id] < idx) next[id] = DONE;
-    else if (id === stage) next[id] = state === "active" ? ACTIVE : DONE;
-    else next[id] = view;
+    else if (id === stage) {
+      next[id] = state === "active" ? ACTIVE : state === "done" ? DONE : SKIPPED;
+    } else next[id] = view;
   }
   return next;
 }
@@ -161,12 +178,13 @@ function withAction(
 /* Keys match the exact node names emitted by the LangGraph backend. STAGE_MAP routes a node to its
  * stage pill; STAGE_ORDER (via STAGE_INDEX) advances prior pills to done when a later one activates. */
 const STAGE_MAP: Partial<Record<string, AskStageId>> = {
-  contextualize: "retrieve",
-  classify_query: "retrieve",
+  contextualize: "plan",
+  classify_query: "plan",
   direct_answer: "generate",
   run_standard: "generate",
-  plan_research: "retrieve",
+  plan_research: "plan",
   run_subagent: "retrieve",
+  search_external: "retrieve",
   synthesize: "generate",
   critic: "verify",
   retrieve: "retrieve",
@@ -183,8 +201,9 @@ const NODE_ACTION_TEXT: Partial<Record<string, string>> = {
   retrieve: "Searching the book index",
   rewrite_query: "Refining query",
   grade_documents: "Grading documents",
-  plan_research: "Planning sub-questions",
+  plan_research: "Choosing a response path",
   run_subagent: "Researching sub-question",
+  search_external: "Searching the configured external source",
   direct_answer: "Composing answer",
   run_standard: "Running standard pipeline",
   generate: "Writing answer",
@@ -223,35 +242,58 @@ function withSubResult(turn: AskTurn, question: string, answer: string): AskTurn
 export function applyAskEvent(turn: AskTurn, event: AskEvent): AskTurn {
   if (event.node === "_meta") return { ...turn, turnId: event.turn_id ?? turn.turnId };
   if (event.node === "end") {
+    const graph = normalizeGraph(event.graph, { ...turn.graph, active_node: null, status: "done" });
+    const stages =
+      graph.route === "conversation"
+        ? conversationStages(
+            stageMark(turn.stages, "generate", "done"),
+            graph.visited_nodes.includes("search_external"),
+          )
+        : stageMark(turn.stages, "verify", "done");
     return {
       ...turn,
-      graph: normalizeGraph(event.graph, { ...turn.graph, active_node: null, status: "done" }),
+      graph,
       streaming: false,
-      stages: stageMark(turn.stages, "verify", "done"),
+      stages,
       followups: (turn.deep?.cards ?? []).map((card) => card.question),
       durationMs: event.duration_ms ?? turn.durationMs,
       usage: event.usage?.total ?? turn.usage,
+      externalSearchStatus: event.external_search_status ?? turn.externalSearchStatus,
     };
   }
   if (event.node === "error") {
+    const graph = normalizeGraph(event.graph, { ...turn.graph, active_node: null, status: "failed" });
     return {
       ...turn,
-      graph: normalizeGraph(event.graph, { ...turn.graph, active_node: null, status: "failed" }),
+      graph,
+      stages:
+        graph.route === "conversation"
+          ? conversationStages(turn.stages, graph.visited_nodes.includes("search_external"))
+          : turn.stages,
       streaming: false,
       error: event.error ?? "stream error",
+      externalSearchStatus: event.external_search_status ?? turn.externalSearchStatus,
     };
   }
 
-  const graph = normalizeGraph(event.graph, {
+  let graph = normalizeGraph(event.graph, {
     ...turn.graph,
-    route: event.mode === "deep" ? "deep" : event.mode ? "standard" : turn.graph.route,
+    route:
+      event.graph?.route ||
+      (event.intent === "conversation" ? "conversation" : event.mode || turn.graph.route),
     active_node: event.node,
     visited_nodes: turn.graph.visited_nodes.includes(event.node)
       ? turn.graph.visited_nodes
       : [...turn.graph.visited_nodes, event.node],
     status: "running" as const,
   });
+  if (!graph.visited_nodes.includes(event.node)) {
+    graph = { ...graph, visited_nodes: [...graph.visited_nodes, event.node] };
+  }
   let next = { ...turn, graph };
+  if (event.external_search_status != null) {
+    next = { ...next, externalSearchStatus: event.external_search_status };
+  }
   const mapped = STAGE_MAP[event.node];
   if (mapped) {
     next = {
@@ -308,6 +350,15 @@ export function applyAskEvent(turn: AskTurn, event: AskEvent): AskTurn {
   if (event.node === "synthesize" && next.deep) {
     next = { ...next, deep: { ...next.deep, banner: deepSynthBanner(next.deep.cards.length) } };
   }
+  if (next.graph.route === "conversation") {
+    next = {
+      ...next,
+      stages: conversationStages(
+        next.stages,
+        next.graph.visited_nodes.includes("search_external"),
+      ),
+    };
+  }
   return next;
 }
 
@@ -359,11 +410,23 @@ const ARM_LABEL: Record<string, string> = {
   qdrant_hybrid: "vector",
   neo4j_graph: "graph",
   elasticsearch: "full-text",
+  elasticsearch_bm25: "full-text",
+  external_search: "external search",
 };
 
 export function armLabel(source: string | null | undefined): string {
   if (!source) return "";
   return ARM_LABEL[source] ?? source;
+}
+
+/** Route text shared by the turn badge and the execution graph. */
+export function askRouteLabel(route: string | null | undefined, mode = ""): string {
+  const selected = route || mode;
+  if (selected === "conversation") return "Conversation";
+  if (selected === "fast") return "Fast";
+  if (selected === "standard") return "Standard";
+  if (selected === "deep") return "Deep";
+  return "Adaptive · planning";
 }
 
 /** Book citation markers → `⟦CITE-N⟧`. Page markers resolve by page number; source/book markers
@@ -474,7 +537,9 @@ function stagesFromThinking(state: AskThinkingState | null | undefined): Record<
         ? { status: "active", action: entry.action ?? "" }
         : entry?.status === "done"
           ? DONE
-          : QUEUED;
+          : entry?.status === "skipped"
+            ? SKIPPED
+            : QUEUED;
   }
   return stages;
 }
@@ -484,10 +549,24 @@ export function turnFromHistory(row: HistoryRow): AskTurn {
   const ts = row.thinking_state;
   const deep = ts?.deep ?? null;
   const hasDeep = Boolean(deep?.sub_questions.length);
+  const graph = normalizeGraph(ts?.graph, {
+    route: hasDeep ? "deep" : row.mode,
+    active_node: null,
+    visited_nodes: [],
+    retrieval_sources: [],
+    status: row.answer ? "done" : isTurnInProgress(ts, row.answer) ? "running" : "idle",
+  });
+  const historicalStages = stagesFromThinking(ts);
+  if (graph.visited_nodes.includes("plan_research") && historicalStages.plan.status === "queued") {
+    historicalStages.plan = graph.active_node === "plan_research" ? ACTIVE : DONE;
+  }
   return {
     question: row.question,
     mode: row.mode,
-    stages: stagesFromThinking(ts),
+    stages:
+      graph.route === "conversation"
+        ? conversationStages(historicalStages, graph.visited_nodes.includes("search_external"))
+        : historicalStages,
     deep: hasDeep
       ? {
           banner:
@@ -502,13 +581,7 @@ export function turnFromHistory(row: HistoryRow): AskTurn {
           })),
         }
       : null,
-    graph: normalizeGraph(ts?.graph, {
-      route: hasDeep ? "deep" : row.mode ? "standard" : "",
-      active_node: null,
-      visited_nodes: [],
-      retrieval_sources: [],
-      status: row.answer ? "done" : isTurnInProgress(ts, row.answer) ? "running" : "idle",
-    }),
+    graph,
     answer: row.answer,
     citations: ts?.citations ?? [],
     usage: ts?.usage?.total ?? null,
@@ -523,6 +596,7 @@ export function turnFromHistory(row: HistoryRow): AskTurn {
     createdAt: row.created_at,
     hasThinking: Boolean(row.answer) || Boolean(ts),
     bookId: ts?.book_id ?? null,
+    externalSearchStatus: null,
     key: `row-${row.id ?? row.created_at}`,
   };
 }
@@ -538,6 +612,24 @@ export function statusFromEvent(prev: AskStatus, event: AskEvent): AskStatus {
   if (prev.tone === "error" && event.node !== "error") return prev;
   if (event.node === "end") return { text: "Done.", tone: "" };
   if (event.node === "error") return { text: "Stream error", tone: "error" };
+  if (event.external_search_status && event.external_search_status !== "not_requested") {
+    const searchStatus: Record<string, string> = {
+      complete: "External search found sources.",
+      no_results: "External search returned no sources.",
+      unavailable: "The configured external search source is unavailable.",
+      invalid_query: "External search could not prepare a query.",
+    };
+    return {
+      text: searchStatus[event.external_search_status] ?? "External search updated.",
+      tone: "running",
+    };
+  }
+  if (event.node === "search_external") {
+    return { text: "Searching the configured external source.", tone: "running" };
+  }
+  if (event.node === "direct_answer") {
+    return { text: "Preparing a direct conversation reply.", tone: "running" };
+  }
   if (event.confidence_score != null) {
     return { text: `Confidence: ${(event.confidence_score * 100).toFixed(0)}%`, tone: "running" };
   }

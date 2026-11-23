@@ -60,6 +60,20 @@ export const DISTILL_NODES = [
     },
   },
   {
+    id: "review_chapter_coverage",
+    label: "Review chapter coverage",
+    detail:
+      "Check each chapter guide against its source-backed learning objectives and lessons, and record any gaps.",
+    reads: ["Chapter guides", "Verified lessons", "Learning objectives"],
+    writes: ["Chapter coverage reviews", "Uncovered objectives and lessons"],
+    llm: "Report Reviewer checks each chapter guide against its cited source evidence.",
+    resources: {
+      agents: ["report_reviewer"],
+      skills: ["report-reviewer"],
+      tools: ["read_file"],
+    },
+  },
+  {
     id: "build_chapter_visuals",
     label: "Build chapter visuals",
     detail: "Build and validate diagrams, equations, charts, timelines, and maps from saved chapter guides.",
@@ -128,13 +142,13 @@ export const DISTILL_CONNECTIONS = [
   { source: "extract_unit", target: "verify_unit" },
   { source: "verify_unit", target: "prepare_chapters" },
   { source: "prepare_chapters", target: "synthesize_chapter" },
-  { source: "synthesize_chapter", target: "build_chapter_visuals" },
-  { source: "synthesize_chapter", target: "synthesize_book" },
-  { source: "synthesize_book", target: "write_decision_brief" },
+  { source: "synthesize_chapter", target: "review_chapter_coverage" },
+  { source: "review_chapter_coverage", target: "build_chapter_visuals" },
+  { source: "review_chapter_coverage", target: "synthesize_book" },
   { source: "synthesize_book", target: "research_context" },
+  { source: "research_context", target: "write_decision_brief" },
   { source: "build_chapter_visuals", target: "publish_report" },
   { source: "write_decision_brief", target: "publish_report" },
-  { source: "research_context", target: "publish_report" },
 ] as const;
 
 export const DISTILL_POSITIONS = {
@@ -143,11 +157,12 @@ export const DISTILL_POSITIONS = {
   verify_unit: { x: 284, y: 348 },
   prepare_chapters: { x: 284, y: 514 },
   synthesize_chapter: { x: 284, y: 680 },
-  build_chapter_visuals: { x: 16, y: 846 },
-  synthesize_book: { x: 284, y: 846 },
-  write_decision_brief: { x: 150, y: 1012 },
-  research_context: { x: 418, y: 1012 },
-  publish_report: { x: 284, y: 1178 },
+  review_chapter_coverage: { x: 284, y: 846 },
+  build_chapter_visuals: { x: 16, y: 1012 },
+  synthesize_book: { x: 418, y: 1012 },
+  research_context: { x: 418, y: 1178 },
+  write_decision_brief: { x: 418, y: 1344 },
+  publish_report: { x: 284, y: 1510 },
 } as const;
 
 export type DistillNode = (typeof DISTILL_NODES)[number];
@@ -156,6 +171,7 @@ export const DISTILL_USAGE_COUNTERS: Partial<Record<DistillNode["id"], readonly 
   extract_unit: ["learning_extractor"],
   verify_unit: ["evidence_verifier"],
   synthesize_chapter: ["chapter_synthesizer"],
+  review_chapter_coverage: ["report_reviewer"],
   build_chapter_visuals: ["visual_artifact_builder"],
   synthesize_book: ["book_synthesizer"],
   write_decision_brief: ["decision_brief_writer"],
@@ -243,6 +259,8 @@ function nodeProgressLabel(nodeId: string): string {
       return "source units read";
     case "synthesize_chapter":
       return "chapter guides written";
+    case "review_chapter_coverage":
+      return "chapter review attempts complete";
     case "build_chapter_visuals":
       return "chapter visual stages complete";
     case "synthesize_book":

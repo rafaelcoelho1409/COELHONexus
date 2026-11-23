@@ -86,10 +86,10 @@ variable "storage_class" {
 }
 
 # -----------------------------------------------------------------------------
-# Resource sizing — kept from v1's measured tuning
+# Resource sizing — increased after Postgres was OOM-killed at 384Mi
 # -----------------------------------------------------------------------------
-# v1 real usage: 20m CPU, 172Mi RAM under typical homelab workload.
-# Plus metrics exporter at 1m / 15Mi. Below leaves clear headroom.
+# The current shared workload exceeded the prior 384Mi container limit.
+# Request enough memory to reserve a useful baseline; retain burst headroom.
 # -----------------------------------------------------------------------------
 
 variable "cpu_request" {
@@ -101,20 +101,20 @@ variable "cpu_request" {
 variable "memory_request" {
   description = "Memory request for the Postgres container."
   type        = string
-  default     = "200Mi"
+  default     = "512Mi"
 }
 
 variable "memory_limit" {
   description = "Memory limit for the Postgres container."
   type        = string
-  default     = "384Mi"
+  default     = "1Gi"
 }
 
 # -----------------------------------------------------------------------------
-# Postgres tuning (postgresql.conf) — kept from v1
+# Postgres tuning (postgresql.conf)
 # -----------------------------------------------------------------------------
-# These knobs were measured against actual workload. Don't change without
-# load-testing — defaults assume ~384Mi mem limit.
+# Memory settings scale with the 1Gi container limit. The remaining memory is
+# reserved for backend processes, query work_mem, and shared-service activity.
 # -----------------------------------------------------------------------------
 
 variable "max_connections" {
@@ -126,13 +126,13 @@ variable "max_connections" {
 variable "shared_buffers" {
   description = "shared_buffers — typically ~25% of memory_limit."
   type        = string
-  default     = "128MB"
+  default     = "256MB"
 }
 
 variable "effective_cache_size" {
   description = "effective_cache_size — Postgres's hint about OS page cache. ~75% of memory_limit."
   type        = string
-  default     = "384MB"
+  default     = "768MB"
 }
 
 # -----------------------------------------------------------------------------

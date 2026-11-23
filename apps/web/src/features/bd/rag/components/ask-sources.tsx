@@ -13,6 +13,7 @@ import { SNIPPET_CAP } from "../params";
 function sourceTitle(citation: AskCitation): string {
   if (citation.title) return citation.title;
   if (citation.section) return citation.section;
+  if (citation.source === "external_search") return "External source";
   return citation.page ? `Page ${citation.page}` : "Book source";
 }
 
@@ -30,6 +31,18 @@ function SourceCard({
   const external = /^https?:/i.test(url);
   const snippet = citation.snippet.slice(0, SNIPPET_CAP);
   const arm = armLabel(citation.source);
+  const externalSource = citation.source === "external_search";
+  const readLabel = externalSource
+    ? citation.source_read === true
+      ? "Page text read"
+      : citation.source_read === false
+        ? "Search excerpt"
+        : ""
+    : "";
+  const published = citation.published_at ? Date.parse(citation.published_at) : Number.NaN;
+  const publishedLabel = Number.isFinite(published)
+    ? `Published ${new Date(published).toISOString().slice(0, 10)}`
+    : "";
   const title = sourceTitle(citation);
   return (
     <li
@@ -56,9 +69,15 @@ function SourceCard({
             <p className="py-1.5 text-sm leading-snug font-medium">{title}</p>
           )}
           <p className="mt-0.5 flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
-            <BookOpen aria-hidden className="size-3.5" />
+            {externalSource ? (
+              <ExternalLink aria-hidden className="size-3.5" />
+            ) : (
+              <BookOpen aria-hidden className="size-3.5" />
+            )}
             {citation.chapter ? <span className="min-w-0 break-words">{citation.chapter}</span> : null}
             {citation.page ? <span className="tabular">Page {citation.page}</span> : null}
+            {publishedLabel ? <span className="tabular">{publishedLabel}</span> : null}
+            {readLabel ? <span>{readLabel}</span> : null}
             {arm ? <span className="rounded-sm border border-border px-1.5 py-px">{arm}</span> : null}
           </p>
         </div>

@@ -4,6 +4,7 @@ from . import service
 from .... import graphs
 
 from langgraph.runtime import Runtime
+from typing import Literal
 
 
 async def plan_research(
@@ -28,3 +29,8 @@ async def rewrite_queries(
         "rewrite_query",
         lambda: service.rewrite_queries(graph_state, runtime),
     )
+
+
+def route_after_plan(graph_state: graphs.ask.adaptive.states.AdaptiveAskState) -> Literal["conversation", "book"]:
+    """Keep corpus-free conversation out of the retrieval and verification path."""
+    return "conversation" if graph_state.get("intent") == "conversation" else "book"

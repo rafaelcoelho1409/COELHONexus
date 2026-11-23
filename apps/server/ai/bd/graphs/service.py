@@ -83,6 +83,20 @@ async def report_node_item_progress(
     )
 
 
+async def report_node_activity(
+    progress_callback: ProgressReporter | None,
+    node: str,
+    current_task: str,
+) -> None:
+    """Report the active subtask for a long-running graph node."""
+    await report(
+        progress_callback,
+        kind = "activity",
+        node = node,
+        current_task = current_task[:240],
+    )
+
+
 async def run_node(
     progress_callback: ProgressReporter | None,
     node: str,

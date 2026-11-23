@@ -1,6 +1,6 @@
 import Link from "next/link";
 
-import type { ReportLesson, SourceRef } from "../entities";
+import type { ReportLesson, ResearchSource, SourceRef } from "../entities";
 
 export function GuideFact({ label, value, detail }: { label: string; value: string; detail?: string }) {
   return (
@@ -16,10 +16,12 @@ export function Lesson({
   lesson,
   pageHref,
   id,
+  externalSources,
 }: {
   lesson: ReportLesson;
   pageHref: (page: number) => string;
   id?: string;
+  externalSources?: readonly ResearchSource[];
 }) {
   return (
     <section className="border-l border-border pl-3">
@@ -33,6 +35,7 @@ export function Lesson({
         confidence {Math.round(lesson.confidence * 100)}%
       </p>
       <CitationList sources={lesson.source_refs} pageHref={pageHref} />
+      <ExternalCitationList sourceIds={lesson.external_source_ids} sources={externalSources ?? []} />
     </section>
   );
 }
@@ -67,5 +70,39 @@ export function CitationList({
         </Link>
       ))}
     </p>
+  );
+}
+
+export function ExternalCitationList({
+  sourceIds,
+  sources,
+}: {
+  sourceIds: readonly string[];
+  sources: readonly ResearchSource[];
+}) {
+  if (sourceIds.length === 0) return null;
+  const citedSources = sourceIds
+    .map((sourceId) => sources.find((source) => source.source_id === sourceId))
+    .filter((source) => source !== undefined);
+  if (citedSources.length === 0) return null;
+  return (
+    <ul aria-label="External source references" className="mt-2 space-y-1 text-xs">
+      {citedSources.map((source) => (
+        <li key={source.source_id}>
+          <a
+            href={source.url}
+            target="_blank"
+            rel="noreferrer noopener"
+            className="inline-flex min-h-9 items-center text-primary-text underline underline-offset-2"
+          >
+            {source.title}
+          </a>
+          <span className="text-muted-foreground">
+            {source.publisher ? ` · ${source.publisher}` : ""}
+            {source.published_at ? ` · Published ${source.published_at}` : ""}
+          </span>
+        </li>
+      ))}
+    </ul>
   );
 }

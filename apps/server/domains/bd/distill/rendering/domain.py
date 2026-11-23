@@ -1,6 +1,7 @@
 """Deterministic, script-free HTML/SVG rendering for validated Distill reports."""
 from __future__ import annotations
 
+import base64
 import html
 from datetime import datetime, timezone
 from typing import Any
@@ -307,7 +308,10 @@ def _diagram_svg(diagram: schemas.DiagramSpec, identifier: str) -> str:
     return "".join(parts)
 
 
-def render_html(report: schemas.StudyGuideDocument) -> str:
+def render_html(
+    report: schemas.StudyGuideDocument,
+    source_figure_data: dict[str, bytes] | None = None,
+) -> str:
     """Render a static, script-free Learning Guide from the validated report model."""
     escape = html.escape
 
@@ -315,6 +319,39 @@ def render_html(report: schemas.StudyGuideDocument) -> str:
         return " ".join(
             f'<a href="/api/v1/bd/ingestion/{escape(report.book_id)}/agentic/runs/{escape(ref.ingestion_ai_run_id)}/pages/{ref.page_number}">p. {ref.page_number}</a>'
             for ref in source_refs
+        )
+
+    external_sources_by_id = {source.source_id: source for source in report.research_context.sources}
+
+    def external_source_links(source_ids: list[str]) -> str:
+        return " ".join(
+            '<a rel="noreferrer" href="' + escape(external_sources_by_id[source_id].url) + '">'
+            + escape(external_sources_by_id[source_id].title) + "</a>"
+            for source_id in dict.fromkeys(source_ids)
+            if source_id in external_sources_by_id
+        )
+
+    def source_figure_html(item: schemas.ReportSourceFigure) -> str:
+        figure_url = (
+            "/api/v1/bd/ingestion/" + escape(report.book_id) + "/figures/" + escape(item.figure_name)
+            + "?extraction_id=" + escape(report.extraction_run_id) + "&amp;sha256=" + escape(item.image_sha256)
+        )
+        image_data = source_figure_data.get(item.figure_name) if source_figure_data is not None else None
+        image_url = (
+            "data:image/png;base64," + base64.b64encode(image_data).decode("ascii")
+            if image_data is not None else figure_url if source_figure_data is None else None
+        )
+        image = (
+            '<a href="' + figure_url + '"><img src="' + image_url + '" alt="'
+            + escape("Book figure: " + item.caption) + '"></a>'
+            if image_url is not None else ""
+        )
+        return (
+            '<figure class="source-figure">' + image + '<figcaption>' + escape(item.caption)
+            + ' — <a href="/api/v1/bd/ingestion/' + escape(report.book_id)
+            + "/agentic/runs/" + escape(report.ingestion_ai_run_id) + "/pages/"
+            + str(item.page_number) + '">source page ' + str(item.page_number) + "</a> · "
+            + source_links(item.source_refs) + "</figcaption></figure>"
         )
 
     def lesson_html(lesson: schemas.ReportLesson) -> str:
@@ -329,6 +366,7 @@ def render_html(report: schemas.StudyGuideDocument) -> str:
         return (
             "<article><h4>" + escape(lesson.title) + "</h4><p>" + escape(lesson.explanation).replace("\n", "<br>")
             + "</p><p class=\"sources\">" + attribution + " · " + verification + " · " + source_links(lesson.source_refs)
+            + (" · External sources: " + external_source_links(lesson.external_source_ids) if lesson.external_source_ids else "")
             + "</p><details><summary>Evidence excerpts</summary><ul>" + quotes + "</ul></details></article>"
         )
 
@@ -362,6 +400,32 @@ def render_html(report: schemas.StudyGuideDocument) -> str:
     chapters: list[str] = []
     for index, chapter in enumerate(report.chapters, start = 1):
         lessons = "".join(lesson_html(lesson) for lesson in chapter.lessons)
+        objectives = "".join(
+            "<li><strong>" + escape(item.outcome) + "</strong> <span class=\"notice\">(" + escape(item.kind)
+            + ", importance " + str(item.importance) + ")</span> <span class=\"sources\">"
+            + source_links(item.source_refs) + "</span></li>"
+            for item in chapter.learning_objectives
+        )
+        practice_items = "".join(
+            "<article class=\"practice-item\"><h4>" + escape(item.question) + "</h4><p class=\"notice\">"
+            + escape(item.kind) + " · difficulty " + str(item.difficulty) + "</p><p class=\"sources\">"
+            + source_links(item.source_refs) + "</p><details class=\"practice-answer\"><summary>Reveal answer and feedback</summary>"
+            + "<p><strong>Answer:</strong> " + escape(item.answer) + "</p><p><strong>Feedback:</strong> "
+            + escape(item.feedback) + "</p></details></article>"
+            for item in chapter.practice_items
+        )
+        source_figures = "".join(source_figure_html(item) for item in chapter.source_figures)
+        coverage_review = (
+            "<p class=\"notice\">Chapter coverage review: "
+            + escape(chapter.coverage_review_status.replace("_", " "))
+            + ". This automated check does not establish learning parity.</p>"
+            + (
+                "<ul class=\"notice\">" + "".join(
+                    "<li>" + escape(item) + "</li>" for item in chapter.coverage_review_notes
+                ) + "</ul>"
+                if chapter.coverage_review_notes else ""
+            )
+        )
         questions = "".join(
             "<li><strong>" + escape(item.title) + "</strong>: " + escape(item.explanation)
             + (" <em>(agent inference)</em>" if item.attribution == "agent_inference" else "") + "</li>"
@@ -431,8 +495,13 @@ def render_html(report: schemas.StudyGuideDocument) -> str:
             f'<section id="chapter-{index}"><h2>{escape(chapter.title)}</h2>'
             f'<p>{"<strong>Agent inference:</strong> " if chapter.overview_attribution == "agent_inference" else ""}'
             f'{escape(chapter.overview).replace(chr(10), "<br>")}</p>'
-            f'<p class="sources">Sources: {source_links(chapter.overview_source_refs)}</p>{lessons}'
-            f'<h3>Recall questions</h3><ol>{questions}</ol>{diagrams}{equations}{charts}{timelines}{maps}</section>'
+            f'<p class="sources">Sources: {source_links(chapter.overview_source_refs)}</p>'
+            + coverage_review
+            + ("<h3>Learning objectives</h3><ul>" + objectives + "</ul>" if objectives else "")
+            + lessons
+            + ("<h3>Figures from the book</h3>" + source_figures if source_figures else "")
+            + ("<h3>Practice with feedback</h3>" + practice_items if practice_items else "")
+            + f'<h3>Recall questions</h3><ol>{questions}</ol>{diagrams}{equations}{charts}{timelines}{maps}</section>'
         )
     takeaways = "".join(
         "<li>" + lesson_html(lesson) + "</li>"
@@ -487,14 +556,18 @@ def render_html(report: schemas.StudyGuideDocument) -> str:
             + (" <em>(agent inference)</em>" if option.attribution == "agent_inference" else "")
             + "</p><p>Trade-offs: " + escape("; ".join(option.tradeoffs) or "Not specified")
             + "</p><p>Risks: " + escape("; ".join(option.risks) or "Not specified")
-            + "</p><p class=\"sources\">" + source_links(option.source_refs) + "</p></article>"
+            + "</p><p class=\"sources\">" + source_links(option.source_refs)
+            + (" · External sources: " + external_source_links(option.external_source_ids) if option.external_source_ids else "")
+            + "</p></article>"
             for option in decision.options
         )
         actions = "".join(
             "<li><strong>" + escape(step.action) + "</strong> — " + escape(step.rationale)
             + " <span>Success measure: " + escape(step.success_measure) + "</span>"
             + (" <em>(agent inference)</em>" if step.attribution == "agent_inference" else "")
-            + " <span class=\"sources\">" + source_links(step.source_refs) + "</span></li>"
+            + " <span class=\"sources\">" + source_links(step.source_refs)
+            + (" · External sources: " + external_source_links(step.external_source_ids) if step.external_source_ids else "")
+            + "</span></li>"
             for step in decision.action_plan
         )
         decision_brief_html = (
@@ -513,20 +586,20 @@ def render_html(report: schemas.StudyGuideDocument) -> str:
         + escape(source.publisher or source.provider_id)
         + (" · Published: " + escape(source.published_at) if source.published_at else "")
         + " · Accessed: " + datetime.fromtimestamp(source.accessed_at, timezone.utc).date().isoformat()
+        + (" · Full text read: " + datetime.fromtimestamp(source.full_text_accessed_at, timezone.utc).date().isoformat() if source.full_text_accessed_at else "")
         + " · Query: " + escape(source.query) + "</p></article></li>"
         for source in research.sources
     )
-    research_sources_by_id = {source.source_id: source for source in research.sources}
     research_findings = "".join(
         "<article><h3>" + escape(finding.title) + "</h3><p>" + escape(finding.summary)
         + "</p><p><strong>Relation to the book:</strong> " + escape(finding.relevance_to_book)
-        + "</p><p class=\"sources\">External sources: "
-        + "; ".join(
-            "<a href=\"" + escape(research_sources_by_id[source_id].url) + "\">"
-            + escape(research_sources_by_id[source_id].title) + "</a>"
-            for source_id in finding.source_ids
-            if source_id in research_sources_by_id
-        )
+        + " <em>(" + escape(finding.relation_to_book) + ")</em></p>"
+        + ("<details><summary>Verified source passages</summary><ul>" + "".join(
+            "<li><q>" + escape(item.quote) + "</q> — " + external_source_links([item.source_id])
+            + (" · " + escape(item.locator) if item.locator else "") + "</li>"
+            for item in finding.evidence_quotes
+        ) + "</ul></details>" if finding.evidence_quotes else "")
+        + "<p class=\"sources\">External sources: " + external_source_links(finding.source_ids)
         + "</p></article>"
         for finding in research.findings
     )
@@ -562,10 +635,13 @@ def render_html(report: schemas.StudyGuideDocument) -> str:
         "h1,h2,h3,h4{line-height:1.25}section,article{margin:2rem 0}article{border-left:3px solid #8b8b8b;padding-left:1rem}"
         ".sources,.notice{font-size:.9rem;color:#555}a{color:#154f88}li{margin:.6rem 0}"
         "svg{display:block;width:100%;height:auto}table{border-collapse:collapse;width:100%;font-size:.9rem}"
+        ".source-figure{margin:1.5rem 0}"
+        ".source-figure img{display:block;max-width:100%;height:auto;margin:auto}"
         "th,td{border:1px solid #aaa;padding:.35rem;text-align:left;vertical-align:top}"
         "@page{size:A4;margin:18mm}"
         "@media print{body{max-width:none;margin:0;font-size:11pt}a{color:inherit;text-decoration:none}"
         "h1,h2{break-after:avoid}figure,article{break-inside:avoid}section{break-before:auto}"
+        ".practice-answer{display:block}.practice-answer>summary{display:none}.practice-answer:not([open])>*:not(summary){display:block}"
         ".report-actions{display:none}}"
         "</style></head><body>"
         f"<header><h1>{escape(report.title)}</h1><p class=\"notice\">{escape(review)}</p>"

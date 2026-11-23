@@ -18,6 +18,7 @@ from pydantic import (
 from . import versions
 
 SafeSegment = Annotated[str, StringConstraints(pattern = r"^[A-Za-z0-9_-]+$")]
+FigureName = Annotated[str, StringConstraints(pattern = r"^[A-Za-z0-9_-]+\.png$")]
 Sha256Hex = Annotated[str, StringConstraints(pattern = r"^[0-9a-f]{64}$")]
 NonEmptyText = Annotated[str, StringConstraints(strip_whitespace = True, min_length = 1)]
 
@@ -33,10 +34,14 @@ _JSON_ARRAY_FIELDS = frozenset({
     "evidence",
     "lessons",
     "learning_unit_ids",
+    "learning_objectives",
+    "objective_ids",
+    "external_source_ids",
     "nodes",
     "omitted_material",
     "open_questions",
     "overview_learning_unit_ids",
+    "practice_items",
     "rows",
     "transformations",
     "timelines",
@@ -44,6 +49,7 @@ _JSON_ARRAY_FIELDS = frozenset({
     "features",
     "maps",
     "options",
+    "source_figures",
     "research_queries",
     "research_sources",
     "y_fields",
@@ -57,6 +63,8 @@ _JSON_OBJECT_ARRAY_FIELDS = frozenset({
     "equations",
     "evidence",
     "lessons",
+    "learning_objectives",
+    "practice_items",
     "nodes",
     "open_questions",
     "rows",
@@ -65,6 +73,7 @@ _JSON_OBJECT_ARRAY_FIELDS = frozenset({
     "features",
     "maps",
     "options",
+    "source_figures",
     "research_sources",
 })
 _JSON_OBJECT_FIELDS = frozenset({"dataset", "decision_brief", "geojson", "geometry", "properties", "values"})
@@ -182,6 +191,44 @@ class ChapterLesson(BaseModel):
     learning_unit_ids: list[SafeSegment] = Field(min_length = 1, max_length = 12)
 
 
+class LearningObjective(BaseModel):
+    """A measurable chapter outcome linked to the verified source lessons that teach it."""
+
+    model_config = ConfigDict(extra = "forbid")
+
+    objective_id: SafeSegment
+    outcome: NonEmptyText = Field(max_length = 500)
+    kind: Literal["recall", "explain", "distinguish", "apply"]
+    importance: int = Field(ge = 1, le = 3, strict = True)
+    learning_unit_ids: list[SafeSegment] = Field(min_length = 1, max_length = 12)
+
+
+class PracticeItem(BaseModel):
+    """A retrieval or transfer exercise with a supported answer and corrective feedback."""
+
+    model_config = ConfigDict(extra = "forbid")
+
+    practice_id: SafeSegment
+    question: NonEmptyText = Field(max_length = 1000)
+    answer: NonEmptyText = Field(max_length = 1800)
+    feedback: NonEmptyText = Field(max_length = 1200)
+    kind: Literal["recall", "explain", "compare", "apply"]
+    difficulty: int = Field(ge = 1, le = 5, strict = True)
+    objective_ids: list[SafeSegment] = Field(min_length = 1, max_length = 8)
+    learning_unit_ids: list[SafeSegment] = Field(min_length = 1, max_length = 12)
+
+
+class SelectedSourceFigure(BaseModel):
+    """A book figure selected only when its printed caption is traceable to source text."""
+
+    model_config = ConfigDict(extra = "forbid")
+
+    figure_name: FigureName
+    page_number: int = Field(gt = 0, strict = True)
+    caption: NonEmptyText = Field(max_length = 500)
+    learning_unit_ids: list[SafeSegment] = Field(min_length = 1, max_length = 12)
+
+
 class ChapterSynthesis(BaseModel):
     model_config = ConfigDict(extra = "forbid")
 
@@ -190,6 +237,9 @@ class ChapterSynthesis(BaseModel):
     overview_learning_unit_ids: list[SafeSegment] = Field(min_length = 1, max_length = 24)
     lessons: list[ChapterLesson] = Field(max_length = 24)
     open_questions: list[ChapterLesson] = Field(max_length = 8)
+    learning_objectives: list[LearningObjective] = Field(default_factory = list, max_length = 12)
+    practice_items: list[PracticeItem] = Field(default_factory = list, max_length = 16)
+    source_figures: list[SelectedSourceFigure] = Field(default_factory = list, max_length = 3)
     diagrams: list[DiagramSpec] = Field(default_factory = list, max_length = 8)
     equations: list[EquationBlock] = Field(default_factory = list, max_length = 8)
     charts: list[ChartSpec] = Field(default_factory = list, max_length = 8)
@@ -200,7 +250,22 @@ class ChapterSynthesis(BaseModel):
     @classmethod
     def _unwrap_stringified_collections(cls, data):
         """Normalize JSON-stringified nested collections before validating every field."""
+        if isinstance(data, dict):
+            data = {key: value for key, value in data.items() if key != "illustration_brief"}
         return _normalize_stringified_collections(data)
+
+    @model_validator(mode = "after")
+    def _validate_learning_contract(self) -> ChapterSynthesis:
+        objective_ids = [item.objective_id for item in self.learning_objectives]
+        practice_ids = [item.practice_id for item in self.practice_items]
+        if len(objective_ids) != len(set(objective_ids)):
+            raise ValueError("chapter objective IDs must be unique")
+        if len(practice_ids) != len(set(practice_ids)):
+            raise ValueError("chapter practice IDs must be unique")
+        allowed_objective_ids = set(objective_ids)
+        if any(set(item.objective_ids) - allowed_objective_ids for item in self.practice_items):
+            raise ValueError("chapter practice items must reference supplied objective IDs")
+        return self
 
 
 class BookSynthesisOutputLesson(BaseModel):
@@ -222,6 +287,7 @@ class BookDecisionOption(BaseModel):
     tradeoffs: list[NonEmptyText] = Field(default_factory = list, max_length = 5)
     risks: list[NonEmptyText] = Field(default_factory = list, max_length = 5)
     learning_unit_ids: list[SafeSegment] = Field(min_length = 1, max_length = 6)
+    external_source_ids: list[SafeSegment] = Field(default_factory = list, max_length = 6)
 
 
 class BookActionStep(BaseModel):
@@ -234,6 +300,7 @@ class BookActionStep(BaseModel):
     prerequisites: list[NonEmptyText] = Field(default_factory = list, max_length = 5)
     success_measure: NonEmptyText = Field(max_length = 240)
     learning_unit_ids: list[SafeSegment] = Field(min_length = 1, max_length = 6)
+    external_source_ids: list[SafeSegment] = Field(default_factory = list, max_length = 6)
 
 
 class BookDecisionBrief(BaseModel):
@@ -243,6 +310,7 @@ class BookDecisionBrief(BaseModel):
     recommendation: NonEmptyText = Field(max_length = 600)
     recommendation_attribution: Literal["book", "agent_inference"] = "agent_inference"
     recommendation_learning_unit_ids: list[SafeSegment] = Field(min_length = 1, max_length = 6)
+    external_source_ids: list[SafeSegment] = Field(default_factory = list, max_length = 6)
     options: list[BookDecisionOption] = Field(default_factory = list, max_length = 3)
     assumptions: list[NonEmptyText] = Field(default_factory = list, max_length = 8)
     risks: list[NonEmptyText] = Field(default_factory = list, max_length = 8)
@@ -325,6 +393,40 @@ class ReportLesson(BaseModel):
     attribution: Literal["book", "agent_inference"] = "book"
     verification_status: Literal["verified", "unverified"] = "unverified"
     confidence: float = Field(ge = 0, le = 1, default = 0.0)
+    external_source_ids: list[SafeSegment] = Field(default_factory = list, max_length = 6)
+
+
+class ReportLearningObjective(BaseModel):
+    model_config = ConfigDict(extra = "forbid")
+
+    objective_id: SafeSegment
+    outcome: NonEmptyText
+    kind: Literal["recall", "explain", "distinguish", "apply"]
+    importance: int = Field(ge = 1, le = 3, strict = True)
+    source_refs: list[SourceRef] = Field(min_length = 1)
+
+
+class ReportPracticeItem(BaseModel):
+    model_config = ConfigDict(extra = "forbid")
+
+    practice_id: SafeSegment
+    question: NonEmptyText
+    answer: NonEmptyText
+    feedback: NonEmptyText
+    kind: Literal["recall", "explain", "compare", "apply"]
+    difficulty: int = Field(ge = 1, le = 5, strict = True)
+    objective_ids: list[SafeSegment] = Field(min_length = 1, max_length = 8)
+    source_refs: list[SourceRef] = Field(min_length = 1)
+
+
+class ReportSourceFigure(BaseModel):
+    model_config = ConfigDict(extra = "forbid")
+
+    figure_name: FigureName
+    page_number: int = Field(gt = 0, strict = True)
+    caption: NonEmptyText = Field(max_length = 500)
+    image_sha256: Sha256Hex
+    source_refs: list[SourceRef] = Field(min_length = 1)
 
 
 class ReportDecisionOption(BaseModel):
@@ -336,6 +438,7 @@ class ReportDecisionOption(BaseModel):
     risks: list[NonEmptyText] = Field(default_factory = list)
     attribution: Literal["book", "agent_inference"] = "agent_inference"
     source_refs: list[SourceRef] = Field(min_length = 1)
+    external_source_ids: list[SafeSegment] = Field(default_factory = list, max_length = 6)
 
 
 class ReportActionStep(BaseModel):
@@ -348,6 +451,7 @@ class ReportActionStep(BaseModel):
     prerequisites: list[NonEmptyText] = Field(default_factory = list)
     success_measure: NonEmptyText
     source_refs: list[SourceRef] = Field(min_length = 1)
+    external_source_ids: list[SafeSegment] = Field(default_factory = list, max_length = 6)
 
 
 class DecisionBrief(BaseModel):
@@ -373,6 +477,9 @@ class ResearchSource(BaseModel):
     publisher: str | None = Field(default = None, max_length = 160)
     published_at: str | None = Field(default = None, max_length = 80)
     accessed_at: float = Field(gt = 0)
+    full_text_sha256: Sha256Hex | None = None
+    full_text_char_count: int | None = Field(default = None, ge = 1, le = 12000, strict = True)
+    full_text_accessed_at: float | None = Field(default = None, gt = 0)
 
     @field_validator("url")
     @classmethod
@@ -381,6 +488,23 @@ class ResearchSource(BaseModel):
         if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
             raise ValueError("research source URLs must use HTTPS without embedded credentials")
         return value
+
+    @model_validator(mode = "after")
+    def _validate_full_text_provenance(self) -> ResearchSource:
+        provenance = (self.full_text_sha256, self.full_text_char_count, self.full_text_accessed_at)
+        if any(value is not None for value in provenance) and any(value is None for value in provenance):
+            raise ValueError("full-text hash, character count, and access time must be recorded together")
+        if self.full_text_accessed_at is not None and self.full_text_accessed_at < self.accessed_at:
+            raise ValueError("full-text access time cannot precede search access time")
+        return self
+
+
+class ResearchEvidenceQuote(BaseModel):
+    model_config = ConfigDict(extra = "forbid")
+
+    source_id: SafeSegment
+    quote: NonEmptyText = Field(max_length = 1200)
+    locator: str | None = Field(default = None, max_length = 240)
 
 
 class ResearchFinding(BaseModel):
@@ -392,6 +516,8 @@ class ResearchFinding(BaseModel):
     summary: NonEmptyText = Field(max_length = 900)
     relevance_to_book: NonEmptyText = Field(max_length = 600)
     source_ids: list[SafeSegment] = Field(min_length = 1, max_length = 6)
+    relation_to_book: Literal["supports", "updates", "challenges", "contextualizes"] = "contextualizes"
+    evidence_quotes: list[ResearchEvidenceQuote] = Field(default_factory = list, max_length = 8)
 
 
 class ResearchContext(BaseModel):
@@ -452,16 +578,30 @@ class ReportSection(BaseModel):
     model_config = ConfigDict(extra = "forbid")
 
     title: NonEmptyText
+    chapter_id: SafeSegment | None = None
     overview: NonEmptyText
     overview_attribution: Literal["book", "agent_inference"] = "book"
     overview_source_refs: list[SourceRef] = Field(min_length = 1)
     lessons: list[ReportLesson]
     open_questions: list[ReportLesson] = Field(default_factory = list)
+    learning_objectives: list[ReportLearningObjective] = Field(default_factory = list, max_length = 12)
+    practice_items: list[ReportPracticeItem] = Field(default_factory = list, max_length = 16)
+    source_figures: list[ReportSourceFigure] = Field(default_factory = list, max_length = 3)
+    coverage_review_status: Literal["unreviewed", "assistant_reviewed", "review_required", "unavailable"] = "unreviewed"
+    coverage_review_notes: list[NonEmptyText] = Field(default_factory = list, max_length = 8)
     diagrams: list[DiagramSpec] = Field(default_factory = list)
     equations: list[EquationBlock] = Field(default_factory = list)
     charts: list[ChartSpec] = Field(default_factory = list)
     timelines: list[ReportTimeline] = Field(default_factory = list)
     maps: list[GeoMapSpec] = Field(default_factory = list, max_length = 4)
+
+    @model_validator(mode = "before")
+    @classmethod
+    def _discard_legacy_illustration(cls, data):
+        """Ignore illustration metadata from reports created before image generation was removed."""
+        if isinstance(data, dict):
+            return {key: value for key, value in data.items() if key != "illustration"}
+        return data
 
 
 class GlossaryEntry(BaseModel):
@@ -733,12 +873,21 @@ class VisualArtifactOutput(BaseModel):
     charts: list[ChartSpec] = Field(default_factory = list, max_length = 8)
     timelines: list[TimelineSpec] = Field(default_factory = list, max_length = 4)
     maps: list[GeoMapSpec] = Field(default_factory = list, max_length = 4)
+    source_figures: list[SelectedSourceFigure] = Field(default_factory = list, max_length = 3)
+
+    @model_validator(mode = "before")
+    @classmethod
+    def _discard_legacy_illustration_brief(cls, data):
+        """Ignore illustration briefs emitted by older Distill prompts."""
+        if isinstance(data, dict):
+            return {key: value for key, value in data.items() if key != "illustration_brief"}
+        return data
 
 
 class StudyGuideDocument(BaseModel):
     model_config = ConfigDict(extra = "forbid")
 
-    schema_version: Literal["1.0", "1.1", "1.2", "1.3", "1.4", "1.5"] = versions.REPORT_SCHEMA_VERSION
+    schema_version: Literal["1.0", "1.1", "1.2", "1.3", "1.4", "1.5", "1.6", "1.7"] = versions.REPORT_SCHEMA_VERSION
     title: NonEmptyText
     book_id: SafeSegment
     extraction_run_id: SafeSegment
@@ -818,7 +967,7 @@ class StructuralQuality(BaseModel):
 class DistillRunManifest(BaseModel):
     model_config = ConfigDict(extra = "forbid")
 
-    schema_version: Literal["1.0", "1.1", "1.2", "1.3", "1.4", "1.5"] = versions.MANIFEST_SCHEMA_VERSION
+    schema_version: Literal["1.0", "1.1", "1.2", "1.3", "1.4", "1.5", "1.6"] = versions.MANIFEST_SCHEMA_VERSION
     workflow_version: NonEmptyText = versions.WORKFLOW_VERSION
     prompt_version: NonEmptyText = versions.PROMPT_VERSION
     renderer_version: NonEmptyText = versions.RENDERER_VERSION
@@ -842,8 +991,10 @@ class DistillRunManifest(BaseModel):
     processed_page_count: int | None = Field(default = None, ge = 1, strict = True)
     research_enabled: bool = False
     status: Literal["queued", "running", "done", "failed", "cancelled"] = "queued"
+    celery_task_id: NonEmptyText | None = None
     resume_from_node: str | None = None
     replay_from_node: str | None = None
+    replay_target_node: str | None = None
     progress: DistillProgress = Field(default_factory = DistillProgress)
     report_key: NonEmptyText | None = None
     report_sha256: Sha256Hex | None = None
@@ -862,14 +1013,14 @@ class DistillRunManifest(BaseModel):
 
     @model_validator(mode = "after")
     def _validate_terminal_state(self) -> DistillRunManifest:
-        if self.schema_version in {"1.1", "1.2", "1.3", "1.4", "1.5"} and any(value is None for value in (
+        if self.schema_version in {"1.1", "1.2", "1.3", "1.4", "1.5", "1.6"} and any(value is None for value in (
             self.selected_page_count,
             self.content_selection_key,
             self.content_selection_sha256,
             self.content_selection_revision,
         )):
             raise ValueError("Distill runs from schema 1.1 onward must pin their content-selection revision")
-        if self.schema_version in {"1.2", "1.3", "1.4", "1.5"} and any(value is None for value in (
+        if self.schema_version in {"1.2", "1.3", "1.4", "1.5", "1.6"} and any(value is None for value in (
             self.selected_page_count,
             self.content_selection_key,
             self.content_selection_sha256,

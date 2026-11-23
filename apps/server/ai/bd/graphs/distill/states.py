@@ -1,10 +1,9 @@
 """Compact LangGraph state for resumable Book Distiller reports."""
 from __future__ import annotations
+import domains
 
 import operator
 from typing import Annotated, Any, TypedDict
-
-import domains
 
 
 class DistillRunState(TypedDict, total = False):
@@ -27,6 +26,7 @@ class DistillRunState(TypedDict, total = False):
     selected_page_count: int
     run_created_at: float
     resume_from_node: str | None
+    replay_target_node: str | None
     title: str
     source_chapters: list[dict[str, Any]]
     source_pages: list[domains.bd.distill.entities.SourcePage]
@@ -36,7 +36,9 @@ class DistillRunState(TypedDict, total = False):
     unit_ref: domains.bd.distill.entities.UnitRef
     unit_batch: list[domains.bd.distill.entities.UnitRef]
     chapter_refs: list[domains.bd.distill.entities.ChapterRef]
+    report_chapters: list[domains.bd.distill.entities.ChapterRef]
     synthesized_chapters: Annotated[list[domains.bd.distill.entities.ChapterRef], operator.add]
+    reviewed_chapters: Annotated[list[domains.bd.distill.entities.ChapterRef], operator.add]
     completed_chapters: Annotated[list[domains.bd.distill.entities.ChapterRef], operator.add]
     chapter_ref: domains.bd.distill.entities.ChapterRef
     chapter_batch: list[domains.bd.distill.entities.ChapterRef]

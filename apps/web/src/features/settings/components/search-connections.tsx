@@ -27,9 +27,9 @@ export function SearchConnections() {
           Search
         </h2>
         <p className="mt-1 max-w-3xl text-sm text-muted-foreground">
-          Manage saved search connections for COELHO Nexus integrations. These settings are shared across
-          future research features; Distill runs do not call search yet. Some connection checks send a
-          lightweight request that may count toward the service&apos;s usage.
+          Manage the search connection used by COELHO Nexus research features. BD Ask and Distill can use
+          the selected service when a research flow calls for outside information. Some connection checks
+          send a lightweight request that may count toward the service&apos;s usage.
         </p>
       </header>
 

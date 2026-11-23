@@ -516,13 +516,16 @@ async def rag_search_stream(
         "retrieve":            ("retrieve", "Searching transcripts"),
         "rewrite_query":       ("retrieve", "Refining query"),
         "plan_research":       ("retrieve", "Planning sub-questions"),
+        "run_subagents":       ("retrieve", "Researching sub-questions"),
         "run_subagent":        ("retrieve", "Researching sub-question"),
         "grade_documents":     ("grade",    "Grading documents"),
         "direct_answer":       ("generate", "Composing answer"),
         "run_standard":        ("generate", "Running standard pipeline"),
         "generate":            ("generate", "Writing answer"),
+        "fallback_answer":     ("generate", "Writing an answer from available context"),
         "synthesize":          ("generate", "Synthesizing findings"),
         "check_hallucination": ("verify",   "Verifying grounding"),
+        "corroborate":         ("verify",   "Checking external support"),
         "format_citations":    ("verify",   "Formatting citations"),
         "critic":              ("verify",   "Assessing confidence"),
     }
@@ -545,6 +548,17 @@ async def rag_search_stream(
             graph["route"] = "deep" if update.get("mode") == "deep" else "standard"
         elif update.get("mode"):
             graph["route"] = "deep" if update["mode"] == "deep" else "standard"
+        if node_name in {
+            "retrieve",
+            "grade_documents",
+            "rewrite_query",
+            "generate",
+            "check_hallucination",
+            "fallback_answer",
+            "corroborate",
+            "format_citations",
+        }:
+            graph["route"] = "standard"
         sa = _NODE_STAGE_ACTION.get(node_name)
         if sa:
             stage, action = sa

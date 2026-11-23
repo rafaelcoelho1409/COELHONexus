@@ -50,6 +50,11 @@
   stroke-dasharray: 5 4;
 }
 
+.ycs-ask-flow .react-flow__edge.ask-agentic-edge-feedback .react-flow__edge-path {
+  stroke-dasharray: 5 4;
+  opacity: 0.75;
+}
+
 .ycs-ask-flow .react-flow__edge.ask-agentic-edge-terminal .react-flow__edge-path {
   stroke-dasharray: 3 4;
   opacity: 0.7;

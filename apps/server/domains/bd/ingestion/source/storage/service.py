@@ -106,16 +106,29 @@ async def write_figures(
     ))
 
 
-async def read_figure(storage: infra.minio.service.MinIOStorage, book_id: str, name: str) -> bytes | None:
-    manifest = await read_manifest(storage, book_id)
-    extraction_id = (manifest or {}).get("extraction_id")
-    candidate_keys = []
-    if extraction_id:
-        candidate_keys.extend((
+async def read_figure(
+    storage: infra.minio.service.MinIOStorage,
+    book_id: str,
+    name: str,
+    extraction_id: str | None = None,
+) -> bytes | None:
+    if extraction_id is not None:
+        candidate_keys = [
             keys.figure_key(book_id, name, extraction_id),
             keys.previous_figure_key(book_id, name, extraction_id),
-        ))
-    candidate_keys.append(keys.figure_key(book_id, name))
+        ]
+        if extraction_id.startswith("legacy-"):
+            candidate_keys.append(keys.figure_key(book_id, name))
+    else:
+        manifest = await read_manifest(storage, book_id)
+        extraction_id = (manifest or {}).get("extraction_id")
+        candidate_keys = []
+        if extraction_id:
+            candidate_keys.extend((
+                keys.figure_key(book_id, name, extraction_id),
+                keys.previous_figure_key(book_id, name, extraction_id),
+            ))
+        candidate_keys.append(keys.figure_key(book_id, name))
     for key in dict.fromkeys(candidate_keys):
         try:
             return await storage.read_bytes(key)

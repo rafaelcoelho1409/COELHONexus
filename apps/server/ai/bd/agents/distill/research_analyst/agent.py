@@ -1,6 +1,5 @@
 """DeepAgent construction for analysis of bounded Search MCP results."""
 from __future__ import annotations
-
 import domains
 from . import config, params
 from .... import middlewares, prompts, skills, tools
@@ -44,7 +43,10 @@ def research_analyst(model = None):
             general_purpose_subagent = GeneralPurposeSubagentProfile(enabled = False),
         ),
     )
-    agent_tools = [tools.search_mcp.tool.search_mcp_web]
+    agent_tools = [
+        tools.search_mcp.tool.search_mcp_web,
+        tools.search_mcp.tool.read_search_source,
+    ]
     allowed_tools = skills.params.ALLOWED_TOOL_NAMES | {item.name for item in agent_tools}
     agent = create_deep_agent(
         model = model,

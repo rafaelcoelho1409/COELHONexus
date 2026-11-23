@@ -74,6 +74,18 @@ async def lifespan(app: FastAPI):
             f"{type(e).__name__}: {e}. Rotator will use env keys only."
         )
 
+    # The chat service is imported before lifespan startup and performs an
+    # initial best-effort endpoint resolution at import time. Resolve again
+    # after the Settings store is warm so models built below do not cache an
+    # empty or stale base URL for the lifetime of this process.
+    try:
+        domains.settings.chat.service.refresh_endpoint(force=True)
+    except Exception as e:
+        logger.warning(
+            f"[lifespan] chat endpoint refresh failed: "
+            f"{type(e).__name__}: {e}. LLM calls may be unavailable."
+        )
+
     try:
         await infra.postgres.service.init_checkpointer()
     except Exception as e:

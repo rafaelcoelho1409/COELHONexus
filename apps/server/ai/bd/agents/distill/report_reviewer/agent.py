@@ -1,11 +1,10 @@
-"""DeepAgent construction for a non-mutating Learning Guide editorial review."""
+"""DeepAgent construction for structured Learning Guide editorial review."""
 from __future__ import annotations
 import domains
-from . import config, params
+from . import config, entities, params
 from .... import middlewares, prompts, skills
 
 from deepagents import (
-    FilesystemPermission,
     GeneralPurposeSubagentProfile,
     HarnessProfile,
     create_deep_agent,
@@ -14,11 +13,66 @@ from deepagents import (
 from deepagents.backends import StateBackend
 from deepagents.profiles.harness import harness_profiles
 from langchain.agents.middleware import ModelCallLimitMiddleware
+from langchain.agents.structured_output import ToolStrategy
 from langchain_openai import ChatOpenAI
 
 
-def report_reviewer(model = None):
-    """Build the configured DeepAgent for final report review findings."""
+def _build_agent(model: ChatOpenAI, *, name: str, structured_output: bool):
+    response_format = (
+        ToolStrategy(
+            schema = domains.bd.distill.schemas.ReportReviewOutput,
+            handle_errors = True,
+        )
+        if structured_output
+        else None
+    )
+    skill_files = skills.service.files_for("distill_report_reviewer")
+    skill_path = f"{skills.domain.source_for('distill_report_reviewer')}SKILL.md"
+    skill_data = skill_files.get(skill_path)
+    skill_content = skill_data.get("content") if isinstance(skill_data, dict) else None
+    if not isinstance(skill_content, str) or not skill_content.strip():
+        raise FileNotFoundError("the report reviewer skill has no readable SKILL.md")
+    system_prompt = (
+        f"{prompts.distill.report_reviewer.prompts.SYSTEM_PROMPT}"
+        f"\n\nEditorial review skill:\n{skill_content}"
+    )
+    agent = create_deep_agent(
+        model = model,
+        tools = [],
+        system_prompt = system_prompt,
+        middleware = [
+            middlewares.middleware.ToolAllowlistMiddleware(
+                frozenset({domains.bd.distill.schemas.ReportReviewOutput.__name__})
+                if structured_output
+                else frozenset(),
+            ),
+            ModelCallLimitMiddleware(
+                run_limit = params.MAX_MODEL_CALLS,
+                exit_behavior = "end",
+            ),
+        ],
+        response_format = response_format,
+        skills = [],
+        permissions = [],
+        backend = StateBackend(),
+        name = name,
+    )
+    tool_node = agent.nodes.get("tools")
+    available_tools = getattr(getattr(tool_node, "bound", None), "_tools_by_name", None)
+    if not isinstance(available_tools, dict):
+        raise RuntimeError(f"DeepAgents could not verify tools for {name}")
+    unreviewed_tools = set(available_tools) - (
+        params.DEFAULT_TOOL_NAMES | skills.params.ALLOWED_TOOL_NAMES
+    )
+    if unreviewed_tools:
+        raise RuntimeError(
+            f"DeepAgents exposed an unreviewed tool to {name}: {', '.join(sorted(unreviewed_tools))}",
+        )
+    return agent
+
+
+def report_reviewer(model = None) -> entities.ReportReviewer:
+    """Build structured and JSON-text DeepAgents over the same Rotator model."""
     if model is None:
         model = domains.settings.chat.service.build_chat_model(
             timeout_s = config.MODEL.timeout_s,
@@ -43,44 +97,15 @@ def report_reviewer(model = None):
             general_purpose_subagent = GeneralPurposeSubagentProfile(enabled = False),
         ),
     )
-    agent = create_deep_agent(
-        model = model,
-        tools = [],
-        system_prompt = prompts.distill.report_reviewer.prompts.SYSTEM_PROMPT,
-        middleware = [
-            middlewares.middleware.ToolAllowlistMiddleware(frozenset({"read_file"})),
-            ModelCallLimitMiddleware(
-                run_limit = params.MAX_MODEL_CALLS,
-                exit_behavior = "end",
-            ),
-        ],
-        response_format = domains.bd.distill.schemas.ReportReviewOutput,
-        skills = [skills.domain.source_for("distill_report_reviewer")],
-        permissions = [
-            FilesystemPermission(
-                operations = ["read"],
-                paths = ["/skills/**"], 
-                mode = "allow"),
-            FilesystemPermission(
-                operations = ["read"], 
-                paths = ["/**"], 
-                mode = "deny"),
-            FilesystemPermission(
-                operations = ["write"], 
-                paths = ["/**"], 
-                mode = "deny"),
-        ],
-        backend = StateBackend(),
-        name = "bd_report_reviewer",
+    return entities.ReportReviewer(
+        structured = _build_agent(
+            model,
+            name = "bd_report_reviewer",
+            structured_output = True,
+        ),
+        text_fallback = _build_agent(
+            model,
+            name = "bd_report_reviewer_json_fallback",
+            structured_output = False,
+        ),
     )
-    tool_node = agent.nodes.get("tools")
-    available_tools = getattr(getattr(tool_node, "bound", None), "_tools_by_name", None)
-    error_message = "DeepAgents exposed an unreviewed tool to the report reviewer"
-    if not isinstance(available_tools, dict):
-        raise RuntimeError(error_message)
-    unreviewed_tools = set(available_tools) - (
-        params.DEFAULT_TOOL_NAMES | skills.params.ALLOWED_TOOL_NAMES
-    )
-    if unreviewed_tools:
-        raise RuntimeError(f"{error_message}: {', '.join(sorted(unreviewed_tools))}")
-    return agent

@@ -23,11 +23,80 @@ const reportLessonSchema = z.looseObject({
   title: z.string(),
   explanation: z.string(),
   source_refs: z.array(sourceRefSchema),
+  external_source_ids: z.array(z.string()).catch([]),
   attribution: z.enum(["book", "agent_inference"]).catch("book"),
   verification_status: z.enum(["verified", "unverified"]).catch("unverified"),
   confidence: z.number().min(0).max(1).catch(0),
 });
 export type ReportLesson = z.infer<typeof reportLessonSchema>;
+
+const learningObjectiveSchema = z.looseObject({
+  objective_id: z.string().optional(),
+  learning_objective: z.string().optional(),
+  title: z.string().optional(),
+  objective: z.string().optional(),
+  statement: z.string().optional(),
+  description: z.string().optional(),
+  learning_unit_ids: z.array(z.string()).catch([]),
+  source_refs: z.array(sourceRefSchema).catch([]),
+});
+export type LearningObjective = z.infer<typeof learningObjectiveSchema>;
+
+const practiceItemSchema = z.looseObject({
+  practice_id: z.string().optional(),
+  title: z.string().optional(),
+  question: z.string().optional(),
+  prompt: z.string().optional(),
+  task: z.string().optional(),
+  expected_answer: z.string().optional(),
+  model_answer: z.string().optional(),
+  answer: z.string().optional(),
+  correct_answer: z.string().optional(),
+  expected_response: z.string().optional(),
+  feedback: z.string().optional(),
+  explanation: z.string().optional(),
+  objective_id: z.string().optional(),
+  learning_unit_ids: z.array(z.string()).catch([]),
+  assessment_criteria: z.array(z.string()).catch([]),
+  source_refs: z.array(sourceRefSchema).catch([]),
+});
+export type PracticeItem = z.infer<typeof practiceItemSchema>;
+
+const chapterCoverageReviewSchema = z.looseObject({
+  status: z.string().optional(),
+  summary: z.string().optional(),
+  passed: z.boolean().optional(),
+  complete: z.boolean().optional(),
+  review_required: z.boolean().optional(),
+  coverage_rate: z.number().min(0).max(1).optional(),
+  covered_objective_ids: z.array(z.string()).catch([]),
+  uncovered_objective_ids: z.array(z.string()).catch([]),
+  uncovered_learning_unit_ids: z.array(z.string()).catch([]),
+  covered_learning_unit_ids: z.array(z.string()).catch([]),
+  covered_unit_count: z.number().int().nonnegative().optional(),
+  total_unit_count: z.number().int().nonnegative().optional(),
+  review_notes: z.array(z.string()).catch([]),
+  source_refs: z.array(sourceRefSchema).catch([]),
+});
+export type ChapterCoverageReview = z.infer<typeof chapterCoverageReviewSchema>;
+
+const sourceFigureSchema = z.looseObject({
+  figure_id: z.string().optional(),
+  name: z.string().optional(),
+  filename: z.string().optional(),
+  file_name: z.string().optional(),
+  figure_name: z.string().optional(),
+  page_number: z.number().int().positive().optional(),
+  caption: z.string().optional(),
+  alt_text: z.string().optional(),
+  source_sha256: z.string().optional(),
+  sha256: z.string().optional(),
+  image_sha256: z.string().optional(),
+  extraction_run_id: z.string().optional(),
+  learning_unit_ids: z.array(z.string()).catch([]),
+  source_refs: z.array(sourceRefSchema).catch([]),
+});
+export type SourceFigure = z.infer<typeof sourceFigureSchema>;
 
 const diagramNodeSchema = z.looseObject({
   node_id: z.string(),
@@ -211,6 +280,7 @@ function countCoordinates(value: unknown): number {
 const decisionBriefSchema = z.looseObject({
   decision_question: z.string(),
   recommendation: reportLessonSchema,
+  external_source_ids: z.array(z.string()).catch([]),
   options: z
     .array(
       z.looseObject({
@@ -220,6 +290,7 @@ const decisionBriefSchema = z.looseObject({
         risks: z.array(z.string()).catch([]),
         attribution: z.enum(["book", "agent_inference"]).catch("agent_inference"),
         source_refs: z.array(sourceRefSchema).catch([]),
+        external_source_ids: z.array(z.string()).catch([]),
       }),
     )
     .catch([]),
@@ -235,10 +306,35 @@ const decisionBriefSchema = z.looseObject({
         prerequisites: z.array(z.string()).catch([]),
         success_measure: z.string(),
         source_refs: z.array(sourceRefSchema).catch([]),
+        external_source_ids: z.array(z.string()).catch([]),
       }),
     )
     .catch([]),
 });
+
+const researchSourceSchema = z.looseObject({
+  source_id: z.string(),
+  provider_id: z.enum(["coelho_search", "parallel"]),
+  title: z.string(),
+  url: httpsUrlSchema,
+  snippet: z.string(),
+  query: z.string(),
+  publisher: z.string().nullable().catch(null),
+  published_at: z.string().nullable().catch(null),
+  accessed_at: z.number().positive(),
+  full_text: z.string().optional(),
+  content: z.string().optional(),
+  passages: z
+    .array(
+      z.looseObject({
+        text: z.string().optional(),
+        quote: z.string().optional(),
+        page_number: z.number().int().positive().optional(),
+      }),
+    )
+    .catch([]),
+});
+export type ResearchSource = z.infer<typeof researchSourceSchema>;
 
 const researchContextSchema = z.looseObject({
   status: z
@@ -246,21 +342,7 @@ const researchContextSchema = z.looseObject({
     .catch("disabled"),
   provider_id: z.string().nullable().catch(null),
   queries: z.array(z.string()).catch([]),
-  sources: z
-    .array(
-      z.looseObject({
-        source_id: z.string(),
-        provider_id: z.enum(["coelho_search", "parallel"]),
-        title: z.string(),
-        url: httpsUrlSchema,
-        snippet: z.string(),
-        query: z.string(),
-        publisher: z.string().nullable().catch(null),
-        published_at: z.string().nullable().catch(null),
-        accessed_at: z.number().positive(),
-      }),
-    )
-    .catch([]),
+  sources: z.array(researchSourceSchema).catch([]),
   findings: z
     .array(
       z.looseObject({
@@ -268,6 +350,7 @@ const researchContextSchema = z.looseObject({
         summary: z.string(),
         relevance_to_book: z.string(),
         source_ids: z.array(z.string()).catch([]),
+        source_refs: z.array(sourceRefSchema).catch([]),
       }),
     )
     .catch([]),
@@ -275,12 +358,17 @@ const researchContextSchema = z.looseObject({
 });
 
 const reportSectionSchema = z.looseObject({
+  chapter_id: z.string().optional(),
   title: z.string(),
   overview: z.string(),
   overview_attribution: z.enum(["book", "agent_inference"]).catch("book"),
   overview_source_refs: z.array(sourceRefSchema),
   lessons: z.array(reportLessonSchema).catch([]),
   open_questions: z.array(reportLessonSchema).catch([]),
+  learning_objectives: z.array(learningObjectiveSchema).catch([]),
+  practice_items: z.array(practiceItemSchema).catch([]),
+  coverage_review: chapterCoverageReviewSchema.nullable().optional(),
+  source_figures: z.array(sourceFigureSchema).catch([]),
   diagrams: z.array(diagramSchema).catch([]),
   equations: z.array(equationSchema).catch([]),
   charts: z.array(chartSchema).catch([]),

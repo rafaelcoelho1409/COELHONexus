@@ -1,16 +1,19 @@
 """Fan out visual generation after the chapter guides have been saved."""
 from __future__ import annotations
+import domains
+from . import service
+from .... import graphs
 
 from langgraph.runtime import Runtime
-
-from .... import graphs
-from . import service
 
 
 async def build_chapter_visuals(
     graph_state: graphs.distill.states.DistillRunState,
     runtime: Runtime[graphs.distill.entities.DistillDependencies],
 ) -> dict:
+    if graph_state.get("replay_target_node") in domains.bd.distill.params.REPORT_PIPELINE_NODES:
+        return {}
+
     dependencies = runtime.context
 
     async def execute() -> dict:

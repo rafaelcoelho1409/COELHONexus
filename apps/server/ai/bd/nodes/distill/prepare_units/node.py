@@ -1,12 +1,10 @@
 """Prepare Distill source units and route unit extraction work."""
 from __future__ import annotations
+import domains
+from .... import graphs
 
 from langgraph.runtime import Runtime
 from langgraph.types import Send
-
-import domains
-
-from .... import graphs
 
 
 def after_start(state: graphs.distill.states.DistillRunState) -> str:
@@ -19,6 +17,7 @@ def after_start(state: graphs.distill.states.DistillRunState) -> str:
     if state.get("resume_from_node") in {
         "prepare_chapters",
         "synthesize_chapter",
+        "review_chapter_coverage",
         "build_chapter_visuals",
         "synthesize_book",
         "write_decision_brief",

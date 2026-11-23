@@ -180,7 +180,7 @@ async def get_report_html(book_id: SafePathSegment, run_id: SafePathSegment) -> 
         media_type = domains.bd.distill.params.HTML_TYPE,
         headers = {
             "Content-Disposition": "inline; filename=learning-guide.html",
-            "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'",
+            "Content-Security-Policy": "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'",
             "X-Content-Type-Options": "nosniff",
         },
     )

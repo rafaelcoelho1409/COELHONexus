@@ -107,6 +107,15 @@ async def publish_report(
         research_context = domains.bd.distill.schemas.ResearchContext.model_validate_json(
             await storage.read_text(research_key),
         )
+    full_text_source_ids = {
+        source.source_id for source in research_context.sources if source.full_text_sha256 is not None
+    }
+    allowed_external_ids = {
+        quote.source_id
+        for finding in research_context.findings
+        for quote in finding.evidence_quotes
+        if quote.source_id in full_text_source_ids
+    }
     all_unit_ids = set(learning_units)
     book_referenced_ids = set(book_synthesis.central_thesis_learning_unit_ids)
     for item in [*book_synthesis.key_takeaways, *book_synthesis.cross_chapter_connections, *book_synthesis.limitations]:
@@ -120,7 +129,13 @@ async def publish_report(
         raise ValueError("the whole-book synthesis contains unresolved learning-unit citations")
 
     decision_brief = None
+    invalid_decision_external_refs = False
     if decision is not None:
+        decision_external_ids = set(decision.external_source_ids)
+        for item in [*decision.options, *decision.action_plan]:
+            decision_external_ids.update(item.external_source_ids)
+        invalid_decision_external_refs = bool(decision_external_ids - allowed_external_ids)
+    if decision is not None and not invalid_decision_external_refs:
         recommendation_units = [
             learning_units[unit_id] for unit_id in decision.recommendation_learning_unit_ids
         ]
@@ -139,6 +154,7 @@ async def publish_report(
                     else "unverified"
                 ),
                 confidence = min(unit["confidence"] for unit in recommendation_units),
+                external_source_ids = decision.external_source_ids,
             ),
             options = [
                 domains.bd.distill.schemas.ReportDecisionOption(
@@ -148,6 +164,7 @@ async def publish_report(
                     risks = item.risks,
                     attribution = attribution_for(item.attribution, item.learning_unit_ids),
                     source_refs = source_refs(item.learning_unit_ids),
+                    external_source_ids = item.external_source_ids,
                 )
                 for item in decision.options
             ],
@@ -162,6 +179,7 @@ async def publish_report(
                     prerequisites = item.prerequisites,
                     success_measure = item.success_measure,
                     source_refs = source_refs(item.learning_unit_ids),
+                    external_source_ids = item.external_source_ids,
                 )
                 for item in decision.action_plan
             ],
@@ -171,6 +189,8 @@ async def publish_report(
     chapter_charts = []
     visual_review_notes = []
     citation_review_notes = []
+    synthesis_review_notes = []
+    coverage_review_notes = []
     ordered_chapters = []
     for ref in state.get("completed_chapters", []):
         artifact = json.loads(await storage.read_text(ref["artifact_key"]))
@@ -189,6 +209,16 @@ async def publish_report(
         citation_review_notes.extend(
             f"Chapter {artifact['title']}: {flag}"
             for flag in artifact.get("citation_review_flags", [])
+            if isinstance(flag, str) and flag
+        )
+        synthesis_review_notes.extend(
+            f"Chapter {artifact['title']}: {flag}"
+            for flag in artifact.get("synthesis_review_flags", [])
+            if isinstance(flag, str) and flag
+        )
+        coverage_review_notes.extend(
+            f"Chapter {artifact['title']}: {flag}"
+            for flag in artifact.get("coverage_review_notes", [])
             if isinstance(flag, str) and flag
         )
         diagrams = [
@@ -232,8 +262,34 @@ async def publish_report(
             })
             for map_spec in chapter.maps
         ]
+        report_source_figures = []
+        for item in chapter.source_figures:
+            figure_bytes = await domains.bd.ingestion.source.storage.service.read_figure(
+                storage,
+                book_id,
+                item.figure_name,
+                state["extraction_run_id"],
+            )
+            if figure_bytes is None:
+                visual_review_notes.append(
+                    f"Chapter {artifact['title']}: source figure {item.figure_name} was unavailable during publication."
+                )
+                continue
+            if not figure_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
+                visual_review_notes.append(
+                    f"Chapter {artifact['title']}: source figure {item.figure_name} was not a valid PNG."
+                )
+                continue
+            report_source_figures.append(domains.bd.distill.schemas.ReportSourceFigure(
+                figure_name = item.figure_name,
+                page_number = item.page_number,
+                caption = item.caption,
+                image_sha256 = hashlib.sha256(figure_bytes).hexdigest(),
+                source_refs = source_refs(item.learning_unit_ids),
+            ))
         chapters.append(domains.bd.distill.schemas.ReportSection(
             title = artifact["title"],
+            chapter_id = artifact["chapter_id"],
             overview = chapter.overview,
             overview_attribution = attribution_for(
                 chapter.overview_attribution, chapter.overview_learning_unit_ids,
@@ -241,6 +297,35 @@ async def publish_report(
             overview_source_refs = source_refs(chapter.overview_learning_unit_ids),
             lessons = [report_lesson(item.model_dump(mode = "json")) for item in chapter.lessons],
             open_questions = [report_lesson(item.model_dump(mode = "json")) for item in chapter.open_questions],
+            learning_objectives = [
+                domains.bd.distill.schemas.ReportLearningObjective(
+                    objective_id = item.objective_id,
+                    outcome = item.outcome,
+                    kind = item.kind,
+                    importance = item.importance,
+                    source_refs = source_refs(item.learning_unit_ids),
+                )
+                for item in chapter.learning_objectives
+            ],
+            practice_items = [
+                domains.bd.distill.schemas.ReportPracticeItem(
+                    practice_id = item.practice_id,
+                    question = item.question,
+                    answer = item.answer,
+                    feedback = item.feedback,
+                    kind = item.kind,
+                    difficulty = item.difficulty,
+                    objective_ids = item.objective_ids,
+                    source_refs = source_refs(item.learning_unit_ids),
+                )
+                for item in chapter.practice_items
+            ],
+            source_figures = report_source_figures,
+            coverage_review_status = artifact.get("coverage_review_status", "unreviewed"),
+            coverage_review_notes = [
+                item for item in artifact.get("coverage_review_notes", [])
+                if isinstance(item, str) and item
+            ][:8],
             diagrams = diagrams,
             equations = equations,
             charts = chapter.charts,
@@ -276,7 +361,11 @@ async def publish_report(
         "This is an automated draft. No representative human-reviewed evaluation set has been run for this book.",
         *visual_review_notes,
         *citation_review_notes,
+        *synthesis_review_notes,
+        *coverage_review_notes,
     ]
+    if invalid_decision_external_refs:
+        review_notes.append("The optional decision brief was omitted because it referenced unread or unknown external sources.")
     review_notes.append(
         f"Distill processed {state['selected_page_count']} of {state['expected_page_count']} physical pages "
         f"using content-selection revision {state['content_selection_revision']}. Excluded pages remain available in Ingestion."
@@ -388,6 +477,14 @@ async def publish_report(
                     {"title": item.title, "explanation": item.explanation[:350]}
                     for item in chapter.lessons[:6]
                 ],
+                "learning_objectives": [
+                    {"objective_id": item.objective_id, "outcome": item.outcome, "importance": item.importance}
+                    for item in chapter.learning_objectives
+                ],
+                "practice_items": [
+                    {"practice_id": item.practice_id, "question": item.question[:240], "kind": item.kind}
+                    for item in chapter.practice_items
+                ],
                 "open_questions": [item.title for item in chapter.open_questions[:4]],
                 "visual_counts": {
                     "diagrams": len(chapter.diagrams),
@@ -395,6 +492,7 @@ async def publish_report(
                     "charts": len(chapter.charts),
                     "timelines": len(chapter.timelines),
                     "maps": len(chapter.maps),
+                    "source_figures": len(chapter.source_figures),
                 },
             }
             for chapter in report.chapters[:40]

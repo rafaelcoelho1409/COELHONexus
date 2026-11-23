@@ -20,7 +20,6 @@ from . import keys, params, progress, schemas, versions
 
 logger = logging.getLogger(__name__)
 
-
 class DistillWorkerVersionMismatch(RuntimeError):
     """Raised when Celery receives a run created for a newer Distill workflow."""
 
@@ -63,6 +62,7 @@ def _normalize_progress(manifest: dict[str, Any]) -> dict[str, Any]:
     """Add current graph stages when reading or resuming manifests from an older workflow."""
     progress_state = manifest.setdefault("progress", {})
     node_status = progress_state.setdefault("node_status", {})
+    node_status.pop("generate_chapter_illustration", None)
     old_status = dict(node_status)
     for node in params.GRAPH_NODES:
         node_status.setdefault(node, "pending")
@@ -109,6 +109,16 @@ def _clear_active_node_progress(progress_state: dict[str, Any]) -> None:
             node_progress["active_count"] = 0
 
 
+def _mark_cancelled(manifest: dict[str, Any]) -> None:
+    manifest["status"] = "cancelled"
+    manifest["finished_at"] = max(time.time(), manifest["created_at"])
+    manifest["error"] = None
+    manifest["progress"]["current_node"] = None
+    manifest["progress"]["current_task"] = None
+    manifest["progress"]["active_tasks"] = {}
+    _clear_active_node_progress(manifest["progress"])
+
+
 async def _persisted_artifact_ids(
     storage: infra.minio.service.MinIOStorage,
     prefix: str,
@@ -139,20 +149,32 @@ async def _persisted_artifact_ids(
     }
 
 
-async def _reset_chapter_visuals(storage: infra.minio.service.MinIOStorage, prefix: str) -> None:
-    """Clear only visual fields so replaying that stage retains the synthesized chapter guides."""
+async def _reset_chapter_artifacts(
+    storage: infra.minio.service.MinIOStorage,
+    prefix: str,
+    *,
+    clear_coverage_review: bool = False,
+) -> None:
+    """Reset visual outputs and, when replaying coverage, its saved review checkpoint."""
     for key in await storage.list(prefix + "chapters/"):
         artifact = json.loads(await storage.read_text(key))
         synthesis = artifact.get("synthesis")
         if not isinstance(synthesis, dict):
             raise TypeError("a persisted chapter guide has no synthesis object")
-        for field in ("diagrams", "equations", "charts", "timelines", "maps"):
+        for field in ("diagrams", "equations", "charts", "timelines", "maps", "source_figures"):
             synthesis[field] = []
         artifact.update({
             "synthesis": synthesis,
             "visual_review_flags": [],
             "visuals_status": "pending",
         })
+        if clear_coverage_review:
+            for field in (
+                "coverage_review_status",
+                "coverage_review_notes",
+                "coverage_review_input_sha256",
+            ):
+                artifact.pop(field, None)
         await storage.write(
             key,
             domains.bd.distill.domain.json_body(artifact),
@@ -160,14 +182,25 @@ async def _reset_chapter_visuals(storage: infra.minio.service.MinIOStorage, pref
         )
 
 
-async def _checkpoint_before_replay_node(graph: Any, graph_config: dict[str, Any], node_id: str) -> dict[str, Any]:
+async def _reset_chapter_visuals(storage: infra.minio.service.MinIOStorage, prefix: str) -> None:
+    """Clear only visual fields so replaying that stage retains chapter guides and review results."""
+    await _reset_chapter_artifacts(storage, prefix)
+
+
+async def _checkpoint_before_replay_node(
+    graph: Any,
+    graph_config: dict[str, Any],
+    node_id: str,
+) -> tuple[dict[str, Any], str]:
     """Replay new split stages from the closest old stage when older checkpoints lack their node ID."""
     try:
-        return await infra.postgres.service.checkpoint_before_node(graph, graph_config, node_id)
+        return await infra.postgres.service.checkpoint_before_node(graph, graph_config, node_id), node_id
     except ValueError as error:
         fallback_nodes = {
             "verify_unit": "extract_unit",
+            "review_chapter_coverage": "synthesize_chapter",
             "build_chapter_visuals": "synthesize_chapter",
+            params.PARALLEL_DISPATCH_NODE: "review_chapter_coverage",
             "write_decision_brief": "synthesize_book",
             "research_context": "synthesize_book",
         }
@@ -175,7 +208,7 @@ async def _checkpoint_before_replay_node(graph: Any, graph_config: dict[str, Any
         if fallback is None:
             raise
         try:
-            return await infra.postgres.service.checkpoint_before_node(graph, graph_config, fallback)
+            return await infra.postgres.service.checkpoint_before_node(graph, graph_config, fallback), fallback
         except ValueError:
             raise error
 
@@ -406,6 +439,8 @@ async def queue_resume(book_id: str, run_id: str) -> dict[str, Any]:
             raise ValueError("another Distill run is already active for this book")
         await progress.service.clear_cancel(book_id, run_id)
         _normalize_progress(manifest)
+        if manifest.get("resume_from_node") == "generate_chapter_illustration":
+            manifest["resume_from_node"] = "build_chapter_visuals"
         if manifest.get("resume_from_node") not in params.GRAPH_NODES:
             failed_nodes = [
                 node
@@ -444,7 +479,7 @@ async def queue_resume(book_id: str, run_id: str) -> dict[str, Any]:
 
 
 async def queue_node_replay(book_id: str, run_id: str, node_id: str) -> dict[str, Any]:
-    """Queue a replay from ``node_id``, deleting only that node's saved outputs and later outputs."""
+    """Queue a node replay, expanding parallel report stages to their shared graph checkpoint."""
     if node_id not in params.GRAPH_NODES:
         raise ValueError(f"unknown Distill node {node_id!r}")
     storage = infra.minio.service.get_storage()
@@ -479,12 +514,32 @@ async def queue_node_replay(book_id: str, run_id: str, node_id: str) -> dict[str
                 f"Resume the run from its saved checkpoint or replay {predecessor}."
             )
 
+        checkpoint_node_id = (
+            params.PARALLEL_DISPATCH_NODE
+            if node_id in params.PARALLEL_REPORT_REPLAY_NODES
+            else node_id
+        )
+        replay_output_nodes = set(params.REPLAY_DESCENDANTS[node_id])
+        replay_execution_nodes = set(params.REPLAY_DESCENDANTS[node_id])
+
         checkpointer = infra.postgres.service.get_checkpointer()
         graph = ai.bd.graphs.distill.graphs.distill_graph(checkpointer = checkpointer)
         graph_config = {"configurable": {
             "thread_id": f"bd-distill:{book_id}:{manifest['extraction_run_id']}:{run_id}",
         }}
-        await _checkpoint_before_replay_node(graph, graph_config, node_id)
+        _, resolved_checkpoint_node_id = await _checkpoint_before_replay_node(
+            graph,
+            graph_config,
+            checkpoint_node_id,
+        )
+        if node_id in params.PARALLEL_REPORT_REPLAY_NODES:
+            replay_execution_nodes = set(params.REPLAY_DESCENDANTS[node_id])
+            if resolved_checkpoint_node_id == "review_chapter_coverage":
+                replay_execution_nodes.add("review_chapter_coverage")
+            elif resolved_checkpoint_node_id == "synthesize_chapter":
+                replay_execution_nodes.update({"synthesize_chapter", "review_chapter_coverage"})
+        elif resolved_checkpoint_node_id in params.REPLAY_DESCENDANTS:
+            replay_execution_nodes = set(params.REPLAY_DESCENDANTS[resolved_checkpoint_node_id])
         await progress.service.clear_cancel(book_id, run_id)
 
         prefix = keys.run_prefix(book_id, run_id)
@@ -503,19 +558,15 @@ async def queue_node_replay(book_id: str, run_id: str, node_id: str) -> dict[str
             await storage.delete_prefix(prefix + "chapters/")
         elif node_id == "build_chapter_visuals":
             await _reset_chapter_visuals(storage, prefix)
-        if node_id in {
-            "prepare_units",
-            "extract_unit",
-            "verify_unit",
-            "prepare_chapters",
-            "synthesize_chapter",
-            "synthesize_book",
-        }:
+        elif node_id == "review_chapter_coverage":
+            await _reset_chapter_artifacts(storage, prefix, clear_coverage_review = True)
+        if "synthesize_book" in replay_output_nodes:
             await storage.delete_prefix(prefix + "synthesis/")
-        elif node_id == "write_decision_brief":
-            await storage.delete_prefix(prefix + "synthesis/decision-brief.json")
-        elif node_id == "research_context":
-            await storage.delete_prefix(prefix + "synthesis/research-context.json")
+        else:
+            if "research_context" in replay_output_nodes:
+                await storage.delete_prefix(prefix + "synthesis/research-context.json")
+            if "write_decision_brief" in replay_output_nodes:
+                await storage.delete_prefix(prefix + "synthesis/decision-brief.json")
         await storage.delete_prefix(prefix + "report.json")
         await storage.delete_prefix(prefix + "report.html")
         await storage.delete_prefix(prefix + "report.pdf")
@@ -523,18 +574,18 @@ async def queue_node_replay(book_id: str, run_id: str, node_id: str) -> dict[str
         retained_llm_nodes = {
             usage_node
             for graph_node in params.GRAPH_NODES
-            if graph_node not in params.REPLAY_DESCENDANTS[node_id]
+            if graph_node not in replay_output_nodes
             for usage_node in params.LLM_COUNTER_NODES_BY_GRAPH_NODE[graph_node]
         }
         await domains.settings.llm_counter.service.retain_nodes("bd", run_id, retained_llm_nodes)
 
-        downstream = set(params.REPLAY_DESCENDANTS[node_id])
+        downstream = replay_execution_nodes
         for downstream_node in downstream:
             progress_state["node_status"][downstream_node] = "pending"
         progress_state["current_node"] = None
         progress_state["current_task"] = None
         progress_state["active_tasks"] = {}
-        for downstream_node in downstream | {node_id}:
+        for downstream_node in downstream | {resolved_checkpoint_node_id}:
             progress_state.setdefault("node_progress", {}).pop(downstream_node, None)
         artifact_ids = await _persisted_artifact_ids(storage, prefix)
         progress_state["completed_extractions"] = len(artifact_ids["extractions"])
@@ -549,7 +600,8 @@ async def queue_node_replay(book_id: str, run_id: str, node_id: str) -> dict[str
             prompt_version = versions.PROMPT_VERSION,
             renderer_version = versions.RENDERER_VERSION,
             resume_from_node = None,
-            replay_from_node = node_id,
+            replay_from_node = resolved_checkpoint_node_id,
+            replay_target_node = node_id,
             finished_at = None,
             error = None,
             report_key = None,
@@ -571,7 +623,7 @@ async def queue_node_replay(book_id: str, run_id: str, node_id: str) -> dict[str
             "run_queued",
             status = "queued",
             progress = manifest["progress"],
-            replay_from_node = node_id,
+            replay_from_node = checkpoint_node_id,
         )
         return manifest
 
@@ -592,13 +644,7 @@ async def request_cancel(book_id: str, run_id: str) -> dict[str, Any]:
         if manifest is None:
             raise FileNotFoundError(f"Distill run {run_id} was not found")
         if manifest["status"] == "queued":
-            manifest["status"] = "cancelled"
-            manifest["finished_at"] = max(time.time(), manifest["created_at"])
-            manifest["error"] = None
-            manifest["progress"]["current_node"] = None
-            manifest["progress"]["current_task"] = None
-            manifest["progress"]["active_tasks"] = {}
-            _clear_active_node_progress(manifest["progress"])
+            _mark_cancelled(manifest)
             manifest = await _write_manifest(storage, manifest)
             await progress.service.emit(
                 book_id,
@@ -609,7 +655,43 @@ async def request_cancel(book_id: str, run_id: str) -> dict[str, Any]:
             )
         elif manifest["status"] == "running":
             await progress.service.request_cancel(book_id, run_id)
-            await progress.service.emit(book_id, run_id, "run_cancel_requested", status = manifest["status"])
+            task_id = manifest.get("celery_task_id")
+            if isinstance(task_id, str) and task_id:
+                try:
+                    await asyncio.to_thread(infra.celery.service.revoke, task_id)
+                except Exception as error:
+                    logger.warning(
+                        "[bd-distill] unable to revoke Celery task %s (%s: %s)",
+                        task_id,
+                        type(error).__name__,
+                        error,
+                    )
+            task_state = await asyncio.to_thread(
+                infra.celery.service.inspect_task_by_args,
+                params.TASK_NAME,
+                (book_id, run_id),
+            )
+            current = await read_run(book_id, run_id, storage = storage)
+            if current is None:
+                raise FileNotFoundError(f"Distill run {run_id} was not found")
+            manifest = current
+            if manifest["status"] == "running" and task_state == "absent":
+                logger.warning(
+                    "[bd-distill] finalizing cancellation for orphaned run book=%s run=%s",
+                    book_id,
+                    run_id,
+                )
+                _mark_cancelled(manifest)
+                manifest = await _write_manifest(storage, manifest)
+                await progress.service.emit(
+                    book_id,
+                    run_id,
+                    "run_cancelled",
+                    status = "cancelled",
+                    progress = manifest["progress"],
+                )
+            elif manifest["status"] == "running":
+                await progress.service.emit(book_id, run_id, "run_cancel_requested", status = manifest["status"])
         return {"book_id": book_id, "run_id": run_id, "status": manifest["status"]}
 
 
@@ -750,7 +832,11 @@ async def _restore_chapter_resume_state(
     }
 
 
-async def mark_run_started(book_id: str, run_id: str) -> dict[str, Any]:
+async def mark_run_started(
+    book_id: str,
+    run_id: str,
+    celery_task_id: str | None = None,
+) -> dict[str, Any]:
     """Promote a queued run as soon as a worker accepts it, before checkpointer setup."""
     storage = infra.minio.service.get_storage()
     async with (
@@ -768,11 +854,17 @@ async def mark_run_started(book_id: str, run_id: str) -> dict[str, Any]:
             return manifest
         if manifest["status"] not in {"queued", "running"}:
             raise ValueError("only queued or running Distill runs can start")
-        if manifest["status"] == "queued":
+        was_queued = manifest["status"] == "queued"
+        task_id_changed = celery_task_id is not None and manifest.get("celery_task_id") != celery_task_id
+        if task_id_changed:
+            manifest["celery_task_id"] = celery_task_id
+        if was_queued:
             manifest["status"] = "running"
             manifest["error"] = None
             manifest["finished_at"] = None
+        if task_id_changed or was_queued:
             manifest = await _write_manifest(storage, manifest)
+        if was_queued:
             await progress.service.emit(book_id, run_id, "run_started", status = "running", progress = manifest["progress"])
         return manifest
 
@@ -794,8 +886,35 @@ async def read_pdf(book_id: str, run_id: str) -> bytes:
             raise ValueError("the stored Learning Guide PDF failed its integrity check")
         return pdf
 
-    report_html = await read_html(book_id, run_id)
-    pdf = await domains.bd.distill.rendering.service.render_pdf(report_html)
+    report_data, _ = await read_report(book_id, run_id)
+    report = schemas.StudyGuideDocument.model_validate(report_data)
+    source_figure_data = {}
+    total_figure_bytes = 0
+    for chapter in report.chapters:
+        for figure in chapter.source_figures:
+            if total_figure_bytes >= domains.bd.distill.rendering.params.MAX_INLINE_SOURCE_FIGURE_TOTAL_BYTES:
+                continue
+            try:
+                image = await domains.bd.ingestion.source.storage.service.read_figure(
+                    storage,
+                    book_id,
+                    figure.figure_name,
+                    report.extraction_run_id,
+                )
+            except Exception:  # noqa: BLE001 — PDF remains readable if an optional source figure disappeared.
+                continue
+            if (
+                image is not None
+                and image.startswith(b"\x89PNG\r\n\x1a\n")
+                and len(image) <= domains.bd.distill.rendering.params.MAX_INLINE_SOURCE_FIGURE_BYTES
+                and total_figure_bytes + len(image)
+                <= domains.bd.distill.rendering.params.MAX_INLINE_SOURCE_FIGURE_TOTAL_BYTES
+                and hashlib.sha256(image).hexdigest() == figure.image_sha256
+            ):
+                source_figure_data[figure.figure_name] = image
+                total_figure_bytes += len(image)
+    pdf_html = domains.bd.distill.rendering.domain.render_html(report, source_figure_data)
+    pdf = await domains.bd.distill.rendering.service.render_pdf(pdf_html)
     digest = hashlib.sha256(pdf).hexdigest()
     async with (
         infra.redis.service.client() as redis,
@@ -868,7 +987,7 @@ async def run_distill(
     qa_content = await storage.read_text(manifest["ingestion_ai_manifest_key"])
     if hashlib.sha256(qa_content.encode("utf-8")).hexdigest() != manifest["ingestion_ai_manifest_sha256"]:
         raise ValueError("the ingestion QA manifest changed after this Distill run was created")
-    if manifest.get("schema_version") in {"1.1", "1.2", "1.3", "1.4", "1.5"}:
+    if manifest.get("schema_version") in {"1.1", "1.2", "1.3", "1.4", "1.5", "1.6"}:
         selection_content = await storage.read_text(manifest["content_selection_key"])
         if hashlib.sha256(selection_content.encode("utf-8")).hexdigest() != manifest["content_selection_sha256"]:
             raise ValueError("the content-selection revision changed after this Distill run was created")
@@ -884,7 +1003,7 @@ async def run_distill(
             )
         ):
             raise ValueError("the pinned content-selection revision does not match this Distill run")
-    if manifest.get("schema_version") in {"1.2", "1.3", "1.4", "1.5"}:
+    if manifest.get("schema_version") in {"1.2", "1.3", "1.4", "1.5", "1.6"}:
         processed_content = await storage.read_text(manifest["processed_book_key"])
         if hashlib.sha256(processed_content.encode("utf-8")).hexdigest() != manifest["processed_book_sha256"]:
             raise ValueError("the pinned processed-book manifest failed its integrity check")
@@ -962,6 +1081,7 @@ async def run_distill(
         ("extract_unit", progress_state["total_units"]),
         ("verify_unit", progress_state["total_units"]),
         ("synthesize_chapter", progress_state["total_chapters"]),
+        ("review_chapter_coverage", progress_state["total_chapters"]),
         ("build_chapter_visuals", progress_state["total_chapters"]),
     ):
         update_node_progress(node, total)
@@ -1078,6 +1198,7 @@ async def run_distill(
             elif kind == "chapter_plan":
                 current["total_chapters"] = int(event.get("total_chapters", 0))
                 update_node_progress("synthesize_chapter", current["total_chapters"])
+                update_node_progress("review_chapter_coverage", current["total_chapters"])
                 update_node_progress("build_chapter_visuals", current["total_chapters"])
             elif kind == "chapter_guide" and status == "done":
                 chapter_id = event.get("chapter_id")
@@ -1148,18 +1269,31 @@ async def run_distill(
             "extracted_units": [],
             "completed_units": [],
             "synthesized_chapters": [],
+            "reviewed_chapters": [],
             "completed_chapters": [],
             "decision_brief_key": None,
         }
         graph_config = {
-            "configurable": {"thread_id": f"bd-distill:{book_id}:{manifest['extraction_run_id']}:{run_id}"},
+            "configurable": {
+                "thread_id": f"bd-distill:{book_id}:{manifest['extraction_run_id']}:{run_id}",
+                **(
+                    {"distill_replay_target": manifest["replay_target_node"]}
+                    if manifest.get("replay_target_node")
+                    else {}
+                ),
+            },
             "max_concurrency": params.GRAPH_CONCURRENCY,
         }
         replay_from_node = manifest.get("replay_from_node")
         completed_checkpoint_state = None
         if checkpointer is not None:
-            if replay_from_node in params.GRAPH_NODES:
-                replay_config = await _checkpoint_before_replay_node(graph, graph_config, replay_from_node)
+            if replay_from_node in params.GRAPH_NODES or replay_from_node == params.PARALLEL_DISPATCH_NODE:
+                replay_config, resolved_checkpoint_node_id = await _checkpoint_before_replay_node(
+                    graph,
+                    graph_config,
+                    replay_from_node,
+                )
+                replay_target_node = manifest.get("replay_target_node") or replay_from_node
                 reset_patch: dict[str, Any] = {
                     "report_key": None,
                     "report_sha256": None,
@@ -1170,54 +1304,67 @@ async def run_distill(
                     "review_required": True,
                     "structural_quality": None,
                 }
-                replay_descendants = set(params.REPLAY_DESCENDANTS[replay_from_node])
+                replay_descendants = set(params.REPLAY_DESCENDANTS.get(replay_target_node, ()))
                 if "synthesize_book" in replay_descendants:
                     reset_patch["book_synthesis_key"] = None
                 if "write_decision_brief" in replay_descendants:
                     reset_patch["decision_brief_key"] = None
                 if "research_context" in replay_descendants:
                     reset_patch["research_context_key"] = None
-                if replay_from_node == "prepare_units":
+                if resolved_checkpoint_node_id == "prepare_units":
                     reset_patch.update(
                         unit_refs = [],
                         extracted_units = Overwrite([]),
                         completed_units = Overwrite([]),
                         chapter_refs = [],
                         synthesized_chapters = Overwrite([]),
+                        reviewed_chapters = Overwrite([]),
                         completed_chapters = Overwrite([]),
                     )
-                elif replay_from_node == "extract_unit":
+                elif resolved_checkpoint_node_id == "extract_unit":
                     reset_patch.update(
                         extracted_units = Overwrite([]),
                         completed_units = Overwrite([]),
                         chapter_refs = [],
                         synthesized_chapters = Overwrite([]),
+                        reviewed_chapters = Overwrite([]),
                         completed_chapters = Overwrite([]),
                     )
-                elif replay_from_node == "verify_unit":
+                elif resolved_checkpoint_node_id == "verify_unit":
                     reset_patch.update(
                         completed_units = Overwrite([]),
                         chapter_refs = [],
                         synthesized_chapters = Overwrite([]),
+                        reviewed_chapters = Overwrite([]),
                         completed_chapters = Overwrite([]),
                     )
-                elif replay_from_node == "prepare_chapters":
+                elif resolved_checkpoint_node_id == "prepare_chapters":
                     reset_patch.update(
                         chapter_refs = [],
                         synthesized_chapters = Overwrite([]),
+                        reviewed_chapters = Overwrite([]),
                         completed_chapters = Overwrite([]),
                     )
-                elif replay_from_node == "synthesize_chapter":
+                elif resolved_checkpoint_node_id == "synthesize_chapter":
                     reset_patch.update(
                         synthesized_chapters = Overwrite([]),
-                        completed_chapters = Overwrite([]),
+                        reviewed_chapters = Overwrite([]),
                     )
-                elif replay_from_node == "build_chapter_visuals":
+                    if replay_target_node not in params.REPORT_PIPELINE_NODES:
+                        reset_patch["completed_chapters"] = Overwrite([])
+                elif resolved_checkpoint_node_id == "review_chapter_coverage":
+                    reset_patch["reviewed_chapters"] = Overwrite([])
+                    if replay_target_node not in params.REPORT_PIPELINE_NODES:
+                        reset_patch["completed_chapters"] = Overwrite([])
+                elif replay_target_node == "build_chapter_visuals":
                     reset_patch["completed_chapters"] = Overwrite([])
                 replay_config = await graph.aupdate_state(replay_config, reset_patch)
                 graph_config = {
                     **graph_config,
-                    "configurable": replay_config["configurable"],
+                    "configurable": {
+                        **graph_config["configurable"],
+                        **replay_config["configurable"],
+                    },
                 }
                 graph_input = None
                 logger.info(
@@ -1263,6 +1410,7 @@ async def run_distill(
         chapter_stage_nodes = {
             "prepare_chapters",
             "synthesize_chapter",
+            "review_chapter_coverage",
             "build_chapter_visuals",
             "synthesize_book",
             "write_decision_brief",
@@ -1318,6 +1466,7 @@ async def run_distill(
         manifest.update(
             status = "done",
             replay_from_node = None,
+            replay_target_node = None,
             finished_at = max(time.time(), manifest["created_at"]),
             error = None,
             report_key = result["report_key"],
@@ -1336,13 +1485,7 @@ async def run_distill(
     except (asyncio.CancelledError, NodeCancelledError):
         if not cancellation_observed:
             raise
-        manifest["status"] = "cancelled"
-        manifest["finished_at"] = max(time.time(), manifest["created_at"])
-        manifest["error"] = None
-        manifest["progress"]["current_node"] = None
-        manifest["progress"]["current_task"] = None
-        manifest["progress"]["active_tasks"] = {}
-        _clear_active_node_progress(manifest["progress"])
+        _mark_cancelled(manifest)
         manifest = await _write_manifest(storage, manifest)
         await progress.service.emit(book_id, run_id, "run_cancelled", status = "cancelled", progress = manifest["progress"])
         return manifest
