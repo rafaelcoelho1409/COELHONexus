@@ -13,7 +13,6 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastmcp import FastMCP
 from fastmcp.utilities.lifespan import combine_lifespans
 from starlette.routing import Route
 
@@ -21,8 +20,7 @@ from starlette.routing import Route
 logger = logging.getLogger(__name__)
 
 
-mcp = FastMCP("COELHO Nexus")
-entrypoints.mcp.tools.system.service.register(mcp)
+mcp = entrypoints.mcp.server.mcp
 
 mcp_app = mcp.http_app(
     path="/mcp",
@@ -31,6 +29,10 @@ mcp_app = mcp.http_app(
         entrypoints.api.params.ALLOWED_HOSTS,
     ),
     allowed_hosts=entrypoints.api.params.ALLOWED_HOSTS or None,
+)
+entrypoints.api.middleware.mcp.protect_local_demo_http_app(
+    mcp_app,
+    enabled = entrypoints.mcp.server.mcp_profile == "local_demo",
 )
 
 

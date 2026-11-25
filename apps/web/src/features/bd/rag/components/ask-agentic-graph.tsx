@@ -1,7 +1,7 @@
 "use client";
 
-import dynamic from "next/dynamic";
 import { Gauge } from "lucide-react";
+import dynamic from "next/dynamic";
 import { useState } from "react";
 import type { AgenticFlowConnection, AgenticFlowPosition } from "../../components/agentic-flow";
 import { AgenticNodeDetailsList, AgenticNodeList, AgenticStatusGlyph } from "../../components/agentic-parts";
@@ -112,8 +112,16 @@ const NODE_DETAILS: Record<AskNodeId, AskNodeDetails> = {
   run_subagent: {
     reads: ["Book retrieval index manifest", "Planned search queries"],
     writes: ["Ranked evidence", "Evidence source labels"],
-    llm: "No model call; bounded searches run concurrently.",
-    resources: { agents: [], skills: [], tools: [] },
+    llm: "The baseline runs bounded searches directly. When specialist retrieval is enabled, one constrained DeepAgent works per indexed service.",
+    resources: {
+      agents: [
+        "ElasticSearch retrieval DeepAgent",
+        "Qdrant retrieval DeepAgent",
+        "Neo4j retrieval DeepAgent",
+      ],
+      skills: [],
+      tools: ["bd_search_elasticsearch", "bd_search_qdrant", "bd_search_neo4j"],
+    },
   },
   search_external: {
     reads: ["Planned outside-information query", "Ready Search MCP connection from Settings"],
@@ -450,7 +458,9 @@ function AskNodeSheet({
           </div>
         </section>
         <section>
-          <h3 className="text-sm font-medium">Agent resources</h3>
+          <h3 className="text-sm font-medium">
+            {step.id === "run_subagent" ? "Optional specialist resources" : "Agent resources"}
+          </h3>
           <AgenticNodeDetailsList resources={details.resources} />
           <div className="mt-3">
             <h4 className="text-xs font-medium text-muted-foreground">Model work</h4>
@@ -459,20 +469,30 @@ function AskNodeSheet({
         </section>
         {step.id === "run_subagent" ? (
           <section>
-            <h3 className="text-sm font-medium">Book retrieval sources</h3>
+            <h3 className="text-sm font-medium">Book retrieval specialists</h3>
             <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-              These are parallel retrieval operations inside this LangGraph node.
+              Each indexed service has a dedicated agent and one MCP tool. The deployment controls whether
+              this run uses the specialist path or the direct retrieval baseline. These labels show which
+              sources contributed evidence; they do not report backend health.
             </p>
             <ul className="mt-3 flex list-none flex-col gap-3 border-l border-border pl-3">
               {(
                 [
-                  ["elasticsearch", "ElasticSearch · full-text"],
-                  ["qdrant", "Qdrant · vector"],
-                  ["neo4j", "Neo4j · knowledge graph"],
+                  [
+                    "elasticsearch",
+                    "ElasticSearch · full-text",
+                    "ElasticSearch retrieval DeepAgent",
+                    "bd_search_elasticsearch",
+                  ],
+                  ["qdrant", "Qdrant · hybrid vector", "Qdrant retrieval DeepAgent", "bd_search_qdrant"],
+                  ["neo4j", "Neo4j · knowledge graph", "Neo4j retrieval DeepAgent", "bd_search_neo4j"],
                 ] as const
-              ).map(([source, label]) => (
+              ).map(([source, label, specialist, tool]) => (
                 <li key={source} className="flex flex-col gap-1">
                   <span className="text-sm font-medium">{label}</span>
+                  <span className="text-xs text-muted-foreground">
+                    {specialist} · <code className="font-mono">{tool}</code>
+                  </span>
                   <span className="text-xs text-muted-foreground">
                     {externalStatusText(step.status, hasSource(sources, source))}
                   </span>
@@ -487,6 +507,10 @@ function AskNodeSheet({
             <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
               This lane runs only when a ready connection is configured in Settings and the plan requests
               outside information.
+            </p>
+            <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+              The shared retrieval graph also provides <code className="font-mono">bd_search_web</code> for
+              callers that opt into its Search MCP specialist.
             </p>
           </section>
         ) : null}

@@ -17,7 +17,7 @@ async def verify_unit(
 ) -> dict[str, Any]:
     ref = state["unit_ref"]
     storage = dependencies.storage
-    output_key = domains.bd.distill.keys.learning_unit_key(state["book_id"], state["run_id"], ref["unit_id"])
+    output_key = domains.bd.distill.ai.keys.learning_unit_key(state["book_id"], state["run_id"], ref["unit_id"])
     if await storage.exists(output_key):
         artifact = json.loads(await storage.read_text(output_key))
         if (
@@ -43,7 +43,7 @@ async def verify_unit(
         )
         return {"completed_units": [ref]}
 
-    candidate_key = domains.bd.distill.keys.extraction_candidate_key(
+    candidate_key = domains.bd.distill.ai.keys.extraction_candidate_key(
         state["book_id"], state["run_id"], ref["unit_id"],
     )
     candidate_artifact = json.loads(await storage.read_text(candidate_key))
@@ -87,14 +87,14 @@ async def verify_unit(
                     }, config = {
                         "callbacks": [domains.settings.llm_counter.service.LLMCounterCallback()],
                     }),
-                    attempts = domains.bd.distill.params.AGENT_CALL_ATTEMPTS,
-                    wait_base_s = domains.bd.distill.params.AGENT_CALL_RETRY_WAIT_BASE_S,
+                    attempts = domains.bd.distill.ai.params.AGENT_CALL_ATTEMPTS,
+                    wait_base_s = domains.bd.distill.ai.params.AGENT_CALL_RETRY_WAIT_BASE_S,
                 )
-            review = domains.bd.distill.domain.structured_model_from_agent_result(
+            review = domains.bd.distill.ai.domain.structured_model_from_agent_result(
                 result,
-                domains.bd.distill.schemas.EvidenceReview,
+                domains.bd.distill.ai.schemas.EvidenceReview,
             )
-            if not isinstance(review, domains.bd.distill.schemas.EvidenceReview):
+            if not isinstance(review, domains.bd.distill.ai.schemas.EvidenceReview):
                 raise ValueError("the evidence verifier returned no valid EvidenceReview")
             verdicts = {item.lesson_index: item for item in review.verdicts}
         except Exception as error:  # noqa: BLE001 — non-transient review failures leave lessons for human review.
@@ -128,18 +128,23 @@ async def verify_unit(
     persisted_lessons = []
     for index, candidate in enumerate(candidates):
         verdict = verdicts.get(index)
-        if verdict is not None and not verdict.supported:
-            review_flags.append("An evidence reviewer rejected a proposed lesson as unsupported; it was excluded.")
-            continue
         lesson_id = candidate.get("learning_unit_id")
         if not isinstance(lesson_id, str):
-            lesson_id = domains.bd.distill.domain.stable_id(ref["unit_id"], str(index), candidate["claim"])
+            lesson_id = domains.bd.distill.ai.domain.stable_id(ref["unit_id"], str(index), candidate["claim"])
         persisted_lessons.append({
             "learning_unit_id": lesson_id,
             **{key: value for key, value in candidate.items() if key != "learning_unit_id"},
-            "verification_status": "verified" if verdict is not None else "unverified",
-            "verification_note": verdict.reason if verdict is not None else None,
+            "verification_status": "verified" if verdict is not None and verdict.supported else "unverified",
+            "verification_note": (
+                verdict.reason
+                if verdict is not None
+                else None
+            ),
         })
+        if verdict is not None and not verdict.supported:
+            review_flags.append(
+                "An evidence reviewer could not confirm a source-grounded lesson; it was retained as unverified."
+            )
         if verdict is None:
             review_flags.append("A lesson has a source quote but no independent semantic evidence verdict.")
 
@@ -165,8 +170,8 @@ async def verify_unit(
     })
     await storage.write(
         output_key,
-        domains.bd.distill.domain.json_body(artifact),
-        content_type = domains.bd.distill.params.JSON_TYPE,
+        domains.bd.distill.ai.domain.json_body(artifact),
+        content_type = domains.bd.distill.ai.params.JSON_TYPE,
     )
     ref["learning_unit_ids"] = [item["learning_unit_id"] for item in persisted_lessons]
     await graphs.service.report(

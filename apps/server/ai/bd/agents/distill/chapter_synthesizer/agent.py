@@ -54,7 +54,7 @@ def chapter_synthesizer(model = None):
                 exit_behavior = "end",
             ),
         ],
-        response_format = domains.bd.distill.schemas.ChapterSynthesis,
+        response_format = domains.bd.distill.ai.schemas.ChapterSynthesis,
         skills = [skills.domain.source_for("distill_chapter_synthesizer")],
         permissions = [
             FilesystemPermission(

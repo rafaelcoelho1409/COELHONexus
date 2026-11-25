@@ -1,6 +1,6 @@
-"""LangGraph workflows for BD Agentic RAG."""
+"""BD Agentic RAG graph workflows, organized by indexing and retrieval."""
 from __future__ import annotations
 
-from . import entities, graphs, service, states
+from . import index, retrieval
 
-__all__ = ["entities", "graphs", "service", "states"]
+__all__ = ["index", "retrieval"]

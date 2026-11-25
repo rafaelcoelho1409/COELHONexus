@@ -10,8 +10,8 @@ import "@xyflow/react/dist/style.css";
 import "./agentic-flow.css";
 
 import {
-  Controls,
   BaseEdge,
+  Controls,
   type Edge,
   type EdgeProps,
   type FitViewOptions,
@@ -242,7 +242,7 @@ export function AgenticFlow({
       liveLine: view.liveLine,
       progress: view.progress,
       onOpen: () => onOpenNode(view.id),
-      ...(onPlayNode ? { onPlay: () => onPlayNode(view.id) } : {}),
+      ...(onPlayNode && view.replayable !== false ? { onPlay: () => onPlayNode(view.id) } : {}),
       playDisabled: replayDisabled,
       playPending: replayPending && replayPendingNodeId === view.id,
       replayPending,

@@ -45,9 +45,9 @@ def text_repair(model = None):
         ),
     )
     repair_tools = [
-        tools.patch.tool.check_patches,
-        tools.book.tool.book_term_frequency,
-        tools.book.tool.adjacent_page_edges,
+        tools.patch.tools.check_patches,
+        tools.book.tools.book_term_frequency,
+        tools.book.tools.adjacent_page_edges,
     ]
     agent = create_deep_agent(
         model = model,

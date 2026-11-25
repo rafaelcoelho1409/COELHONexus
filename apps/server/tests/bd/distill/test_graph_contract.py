@@ -10,8 +10,8 @@ class DistillGraphContractTests(unittest.TestCase):
         graph = ai.bd.graphs.distill.graphs.distill_graph()
 
         self.assertEqual(
-            tuple(node for node in domains.bd.distill.params.LANGGRAPH_NODES if node in graph.get_graph().nodes),
-            domains.bd.distill.params.LANGGRAPH_NODES,
+            tuple(node for node in domains.bd.distill.ai.params.LANGGRAPH_NODES if node in graph.get_graph().nodes),
+            domains.bd.distill.ai.params.LANGGRAPH_NODES,
         )
         self.assertIn("extract_unit", graph.get_graph().nodes)
         self.assertIn("dispatch_parallel_stages", graph.get_graph().nodes)

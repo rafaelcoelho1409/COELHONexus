@@ -22,11 +22,11 @@ def dispatch_parallel_stages(
     refs = state.get("reviewed_chapters", [])
     if not refs:
         raise ValueError("chapter coverage review produced no guide artifacts")
-    size = domains.bd.distill.params.FANOUT_CHAPTER_BATCH_SIZE
-    identity = domains.bd.distill.domain.graph_identity(state)
+    size = domains.bd.distill.ai.params.FANOUT_CHAPTER_BATCH_SIZE
+    identity = domains.bd.distill.ai.domain.graph_identity(state)
     configurable = config.get("configurable") or {}
     replay_target_node = configurable.get("distill_replay_target")
-    if replay_target_node not in domains.bd.distill.params.GRAPH_NODES:
+    if replay_target_node not in domains.bd.distill.ai.params.GRAPH_NODES:
         replay_target_node = None
     report_payload = {
         **identity,
@@ -96,7 +96,7 @@ async def synthesize_chapter(
     return await graphs.service.run_node(
         dependencies.progress_callback,
         "synthesize_chapter",
-        lambda: domains.bd.distill.synthesize.service.synthesize_chapter_batch(
+        lambda: domains.bd.distill.ai.synthesize.service.synthesize_chapter_batch(
             dependencies.storage,
             graph_state,
             synthesize_one,

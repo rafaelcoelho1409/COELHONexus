@@ -7,7 +7,7 @@ import domains
 
 class ReportContractTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.source_ref = domains.bd.distill.schemas.SourceRef(
+        self.source_ref = domains.bd.distill.ai.schemas.SourceRef(
             source_type = "book",
             book_id = "book",
             extraction_run_id = "extract",
@@ -20,9 +20,9 @@ class ReportContractTests(unittest.TestCase):
             quote = "A source-backed statement.",
         )
 
-    def report(self, schema_version: str = "1.4") -> domains.bd.distill.schemas.StudyGuideDocument:
+    def report(self, schema_version: str = "1.4") -> domains.bd.distill.ai.schemas.StudyGuideDocument:
         reference = self.source_ref
-        recommendation = domains.bd.distill.schemas.ReportLesson(
+        recommendation = domains.bd.distill.ai.schemas.ReportLesson(
             title = "Recommended approach",
             explanation = "Apply the source-backed method.",
             source_refs = [reference],
@@ -30,7 +30,7 @@ class ReportContractTests(unittest.TestCase):
             verification_status = "verified",
             confidence = 0.9,
         )
-        return domains.bd.distill.schemas.StudyGuideDocument(
+        return domains.bd.distill.ai.schemas.StudyGuideDocument(
             schema_version = schema_version,
             title = "Test Learning Guide",
             book_id = "book",
@@ -43,23 +43,23 @@ class ReportContractTests(unittest.TestCase):
             key_takeaways = [],
             cross_chapter_connections = [],
             chapters = [
-                domains.bd.distill.schemas.ReportSection(
+                domains.bd.distill.ai.schemas.ReportSection(
                     title = "Chapter 1",
                     overview = "A concise overview.",
                     overview_source_refs = [reference],
                     lessons = [],
                     timelines = [
-                        domains.bd.distill.schemas.ReportTimeline(
+                        domains.bd.distill.ai.schemas.ReportTimeline(
                             title = "Process sequence",
                             accessible_description = "Two source-supported steps in order.",
                             events = [
-                                domains.bd.distill.schemas.ReportTimelineEvent(
+                                domains.bd.distill.ai.schemas.ReportTimelineEvent(
                                     label = "First step",
                                     description = "Establish the baseline.",
                                     date_or_order = "1",
                                     source_refs = [reference],
                                 ),
-                                domains.bd.distill.schemas.ReportTimelineEvent(
+                                domains.bd.distill.ai.schemas.ReportTimelineEvent(
                                     label = "Second step",
                                     description = "Review the result.",
                                     date_or_order = "2",
@@ -70,7 +70,7 @@ class ReportContractTests(unittest.TestCase):
                     ],
                 ),
             ],
-            decision_brief = domains.bd.distill.schemas.DecisionBrief(
+            decision_brief = domains.bd.distill.ai.schemas.DecisionBrief(
                 decision_question = "Which approach should be applied?",
                 recommendation = recommendation,
                 options = [],
@@ -96,7 +96,7 @@ class ReportContractTests(unittest.TestCase):
         self.assertEqual(report.schema_version, "1.2")
 
     def test_renderer_includes_decision_brief_and_timeline(self) -> None:
-        html = domains.bd.distill.rendering.domain.render_html(self.report())
+        html = domains.bd.distill.source.rendering.domain.render_html(self.report())
 
         self.assertIn("Decision brief", html)
         self.assertIn("Process sequence", html)
@@ -105,12 +105,12 @@ class ReportContractTests(unittest.TestCase):
 
     def test_report_keeps_external_search_sources_in_a_separate_appendix(self) -> None:
         report = self.report().model_copy(update = {
-            "research_context": domains.bd.distill.schemas.ResearchContext(
+            "research_context": domains.bd.distill.ai.schemas.ResearchContext(
                 status = "complete",
                 provider_id = "coelho_search",
                 queries = ["current evidence"],
                 sources = [
-                    domains.bd.distill.schemas.ResearchSource(
+                    domains.bd.distill.ai.schemas.ResearchSource(
                         source_id = "source-1",
                         provider_id = "coelho_search",
                         title = "Current research",
@@ -123,7 +123,7 @@ class ReportContractTests(unittest.TestCase):
             ),
         })
 
-        html = domains.bd.distill.rendering.domain.render_html(report)
+        html = domains.bd.distill.source.rendering.domain.render_html(report)
 
         self.assertIn("Current context and further reading", html)
         self.assertIn("External references are for current context", html)

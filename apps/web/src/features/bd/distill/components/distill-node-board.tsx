@@ -11,6 +11,7 @@ import {
   AgenticNodeDetailsList,
   AgenticNodeList,
   AgenticPills,
+  AgenticReplayButton,
   AgenticStatusBadge,
 } from "../../components/agentic-parts";
 import { ToggleGroup } from "../../components/toggle-group";
@@ -19,12 +20,20 @@ import { useModalDialog } from "../../hooks/use-modal-dialog";
 import { fetchPipelineUsage } from "../../rag/api";
 import { PipelineUsageBreakdown, PipelineUsageSheet } from "../../rag/components/pipeline-usage-sheet";
 import { SideSheet } from "../../rag/components/side-sheet";
+import type { DistillLangGraphNode } from "../domain/distill-progress";
 import {
   DISTILL_CONNECTIONS,
+  DISTILL_DISPATCH_USAGE_COUNTERS,
+  DISTILL_LANGGRAPH_NODES,
   DISTILL_NODES,
   DISTILL_POSITIONS,
+  DISTILL_REPORT_PIPELINE_CONNECTIONS,
+  DISTILL_REPORT_PIPELINE_NODE_IDS,
+  DISTILL_REPORT_PIPELINE_POSITIONS,
+  DISTILL_REPORT_PIPELINE_USAGE_COUNTERS,
   DISTILL_USAGE_COUNTERS,
   distillBoardCaption,
+  distillLangGraphNodeViews,
   distillNodeStatus,
   distillNodeViews,
 } from "../domain/distill-progress";
@@ -82,9 +91,19 @@ export function DistillNodeBoard({
   const [mode, setMode] = useState<(typeof MODES)[number]["id"]>("graph");
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [usageOpen, setUsageOpen] = useState(false);
-  const views = distillNodeViews(status, progress);
-  const selectedNode = DISTILL_NODES.find((node) => node.id === selectedNodeId);
+  const views = distillLangGraphNodeViews(status, progress);
+  const progressViews = distillNodeViews(status, progress);
+  const selectedGraphNode = DISTILL_LANGGRAPH_NODES.find((node) => node.id === selectedNodeId);
+  const selectedStage = DISTILL_NODES.find((node) => node.id === selectedNodeId);
+  const selectedView =
+    views.find((view) => view.id === selectedNodeId) ??
+    progressViews.find((view) => view.id === selectedNodeId);
   const caption = distillBoardCaption(status, progress);
+  const playLangGraphNode = onPlayNode
+    ? (nodeId: string) => onPlayNode(nodeId === "report_pipeline" ? "synthesize_book" : nodeId)
+    : undefined;
+  const topLevelReplayPendingNodeId =
+    replayPendingNodeId === "synthesize_book" ? "report_pipeline" : replayPendingNodeId;
 
   return (
     <>
@@ -122,10 +141,10 @@ export function DistillNodeBoard({
               <AgenticFlow
                 views={views}
                 onOpenNode={setSelectedNodeId}
-                onPlayNode={onPlayNode}
+                onPlayNode={playLangGraphNode}
                 replayDisabled={replayDisabled}
                 replayPending={replayPending}
-                replayPendingNodeId={replayPendingNodeId}
+                replayPendingNodeId={topLevelReplayPendingNodeId}
                 ariaLabel="Distill pipeline graph"
                 connections={DISTILL_CONNECTIONS}
                 positions={DISTILL_POSITIONS}
@@ -135,10 +154,10 @@ export function DistillNodeBoard({
                 <AgenticNodeList
                   rows={views}
                   onOpen={setSelectedNodeId}
-                  onPlay={onPlayNode}
+                  onPlay={playLangGraphNode}
                   replayDisabled={replayDisabled}
                   replayPending={replayPending}
-                  replayPendingNodeId={replayPendingNodeId}
+                  replayPendingNodeId={topLevelReplayPendingNodeId}
                   label="Distill pipeline nodes"
                 />
               </div>
@@ -168,15 +187,43 @@ export function DistillNodeBoard({
         </div>
       </section>
 
-      {selectedNode ? (
-        <DistillNodeSheet
-          key={selectedNode.id}
-          bookId={bookId}
-          node={selectedNode}
-          runId={runId}
-          status={distillNodeStatus(selectedNode.id, status, progress)}
+      {selectedGraphNode?.kind === "control" ? (
+        <DistillControlNodeSheet
+          node={selectedGraphNode}
+          status={selectedView?.status ?? "pending"}
           runStatus={status}
-          kpi={views.find((view) => view.id === selectedNode.id)?.kpi ?? null}
+          bookId={bookId}
+          runId={runId}
+          onPlayNode={onPlayNode}
+          replayDisabled={replayDisabled}
+          replayPending={replayPending}
+          replayPendingNodeId={replayPendingNodeId}
+          onClose={() => setSelectedNodeId(null)}
+        />
+      ) : selectedGraphNode?.kind === "subgraph" ? (
+        <DistillReportPipelineSheet
+          bookId={bookId}
+          runId={runId}
+          runStatus={status}
+          progress={progress}
+          status={selectedView?.status ?? "pending"}
+          kpi={selectedView?.kpi ?? null}
+          onClose={() => setSelectedNodeId(null)}
+          onOpenNode={setSelectedNodeId}
+          onPlayNode={onPlayNode}
+          replayDisabled={replayDisabled}
+          replayPending={replayPending}
+          replayPendingNodeId={replayPendingNodeId}
+        />
+      ) : selectedStage ? (
+        <DistillNodeSheet
+          key={selectedStage.id}
+          bookId={bookId}
+          node={selectedStage}
+          runId={runId}
+          status={selectedView?.status ?? distillNodeStatus(selectedStage.id, status, progress)}
+          runStatus={status}
+          kpi={selectedView?.kpi ?? null}
           onClose={() => setSelectedNodeId(null)}
         />
       ) : null}
@@ -201,6 +248,7 @@ export function DistillNodeBoard({
             "decision_brief_writer",
             "research_analyst",
             "report_reviewer",
+            "chapter_coverage_corrector",
           ]}
           live={status === "queued" || status === "running"}
           title="Distill LLM usage"
@@ -358,15 +406,17 @@ function DistillNodeSheet({
       ? "This stage runs when you start Distill."
       : runStatus === "cancelled" && status === "pending"
         ? "The run stopped before this stage completed."
-        : status === "done"
-          ? "This stage completed successfully."
-          : status === "running"
-            ? "This stage is active. Its committed progress appears in the board as the run updates."
-            : status === "failed"
-              ? "This stage failed before completing. The run error is shown in the Distill progress panel."
-              : runStatus === "queued"
-                ? "This stage has not started; the run is queued for processing."
-                : "This stage has not run yet.";
+        : runStatus === "done" && status === "pending"
+          ? "This stage was not part of the completed run path."
+          : status === "done"
+            ? "This stage completed successfully."
+            : status === "running"
+              ? "This stage is active. Its committed progress appears in the board as the run updates."
+              : status === "failed"
+                ? "This stage failed before completing. The run error is shown in the Distill progress panel."
+                : runStatus === "queued"
+                  ? "This stage has not started; the run is queued for processing."
+                  : "This stage has not run yet.";
 
   return (
     <SideSheet
@@ -433,5 +483,241 @@ function DistillNodeSheet({
         </Tabs>
       </div>
     </SideSheet>
+  );
+}
+
+function DistillControlNodeSheet({
+  node,
+  status,
+  runStatus,
+  bookId,
+  runId,
+  onPlayNode,
+  replayDisabled,
+  replayPending,
+  replayPendingNodeId,
+  onClose,
+}: {
+  node: Extract<DistillLangGraphNode, { kind: "control" }>;
+  status: AgenticNodeStatus;
+  runStatus: DistillRun["status"] | null;
+  bookId: string;
+  runId: string | null;
+  onPlayNode?: (nodeId: string) => void;
+  replayDisabled: boolean;
+  replayPending: boolean;
+  replayPendingNodeId: string | null;
+  onClose: () => void;
+}) {
+  const targets = DISTILL_CONNECTIONS.filter((connection) => connection.source === node.id).map(
+    (connection) => DISTILL_LANGGRAPH_NODES.find((candidate) => candidate.id === connection.target)?.id,
+  );
+
+  return (
+    <SideSheet
+      title={node.label}
+      subtitle={
+        <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
+          <AgenticStatusBadge status={status} />
+          <span className="font-mono">distill · {node.id}</span>
+        </span>
+      }
+      closeLabel="Close node details"
+      onClose={onClose}
+    >
+      <Tabs defaultValue="overview" className="w-full">
+        <TabsList aria-label="Node details">
+          <TabsTrigger value="overview">Overview</TabsTrigger>
+          <TabsTrigger value="llm-calls">LLM Calls</TabsTrigger>
+        </TabsList>
+        <TabsContent value="overview" className="flex flex-col gap-4 pt-4">
+          <p className="text-sm">
+            {runStatus === "done" && status === "pending"
+              ? "This graph control node was not reached by the completed run path."
+              : node.detail}
+          </p>
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-xs text-muted-foreground">
+              No direct LLM call. Usage is shown for the branches this node schedules.
+            </p>
+            {onPlayNode ? (
+              <AgenticReplayButton
+                label={node.label}
+                onPlay={() => onPlayNode(node.id)}
+                pending={replayPending && replayPendingNodeId === node.id}
+                disabled={replayDisabled || replayPending}
+              />
+            ) : null}
+          </div>
+          <section className="rounded-sm border border-border bg-card p-3">
+            <h3 className="text-sm font-medium">Outgoing graph edges</h3>
+            <ul className="mt-2 list-disc pl-5 text-sm text-muted-foreground">
+              {targets.map((target) =>
+                target ? (
+                  <li key={target}>
+                    <code className="font-mono text-xs">{target}</code>
+                  </li>
+                ) : null,
+              )}
+            </ul>
+          </section>
+        </TabsContent>
+        <TabsContent value="llm-calls" className="pt-4">
+          <DistillNodeUsage
+            bookId={bookId}
+            runId={runId}
+            runStatus={runStatus}
+            nodeIds={DISTILL_DISPATCH_USAGE_COUNTERS}
+            description="Calls and token counts from the parallel branches scheduled by this node."
+            emptyMessage="Usage appears here when Distill has a run."
+            noCallsMessage="No LLM calls have been recorded for the dispatched branches."
+          />
+        </TabsContent>
+      </Tabs>
+    </SideSheet>
+  );
+}
+
+function DistillReportPipelineSheet({
+  bookId,
+  runId,
+  runStatus,
+  progress,
+  status,
+  kpi,
+  onClose,
+  onOpenNode,
+  onPlayNode,
+  replayDisabled,
+  replayPending,
+  replayPendingNodeId,
+}: {
+  bookId: string;
+  runId: string | null;
+  runStatus: DistillRun["status"] | null;
+  progress: DistillRun["progress"] | null;
+  status: AgenticNodeStatus;
+  kpi: string | null;
+  onClose: () => void;
+  onOpenNode: (nodeId: string) => void;
+  onPlayNode?: (nodeId: string) => void;
+  replayDisabled: boolean;
+  replayPending: boolean;
+  replayPendingNodeId: string | null;
+}) {
+  const reportNodeIds = new Set<string>(DISTILL_REPORT_PIPELINE_NODE_IDS);
+  const views = distillNodeViews(runStatus, progress)
+    .filter((view) => reportNodeIds.has(view.id))
+    .map((view) => ({ ...view, replayable: true }));
+
+  return (
+    <SideSheet
+      title="Report pipeline"
+      subtitle={
+        <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
+          <AgenticStatusBadge status={status} />
+          <span className="font-mono">distill · report_pipeline</span>
+          {kpi ? <span className="font-medium tabular-nums">{kpi}</span> : null}
+        </span>
+      }
+      closeLabel="Close report pipeline details"
+      onClose={onClose}
+    >
+      <Tabs defaultValue="overview" className="w-full">
+        <TabsList aria-label="Report pipeline details">
+          <TabsTrigger value="overview">Overview</TabsTrigger>
+          <TabsTrigger value="llm-calls">LLM Calls</TabsTrigger>
+        </TabsList>
+        <TabsContent value="overview" className="flex flex-col gap-4 pt-4">
+          <div className="flex items-start justify-between gap-3">
+            <p className="text-sm text-muted-foreground">
+              {runStatus === "done" && status === "pending"
+                ? "This subgraph was not part of the completed run path."
+                : "This view expands the compiled report_pipeline subgraph. Its normal path runs in sequence. A targeted replay may start at a later report stage or skip this subgraph for visual-only work."}
+            </p>
+            {onPlayNode ? (
+              <AgenticReplayButton
+                label="Report pipeline"
+                onPlay={() => onPlayNode("synthesize_book")}
+                pending={replayPending && replayPendingNodeId === "synthesize_book"}
+                disabled={replayDisabled || replayPending}
+              />
+            ) : null}
+          </div>
+          <div className="overflow-hidden rounded-sm border border-border bg-background">
+            <AgenticFlow
+              views={views}
+              onOpenNode={onOpenNode}
+              onPlayNode={onPlayNode}
+              replayDisabled={replayDisabled}
+              replayPending={replayPending}
+              replayPendingNodeId={replayPendingNodeId}
+              ariaLabel="Distill report pipeline LangGraph"
+              connections={DISTILL_REPORT_PIPELINE_CONNECTIONS}
+              positions={DISTILL_REPORT_PIPELINE_POSITIONS}
+              className="h-[min(58vh,680px)] min-h-[360px]"
+              fitView
+            />
+          </div>
+        </TabsContent>
+        <TabsContent value="llm-calls" className="pt-4">
+          <DistillNodeUsage
+            bookId={bookId}
+            runId={runId}
+            runStatus={runStatus}
+            nodeIds={DISTILL_REPORT_PIPELINE_USAGE_COUNTERS}
+            description="Calls and token counts across the stages inside this subgraph."
+            emptyMessage="Usage appears here when Distill has a run."
+            noCallsMessage="No LLM calls have been recorded for this report pipeline."
+          />
+        </TabsContent>
+      </Tabs>
+    </SideSheet>
+  );
+}
+
+function DistillNodeUsage({
+  bookId,
+  runId,
+  runStatus,
+  nodeIds,
+  description,
+  emptyMessage,
+  noCallsMessage,
+}: {
+  bookId: string;
+  runId: string | null;
+  runStatus: DistillRun["status"] | null;
+  nodeIds: readonly string[];
+  description: string;
+  emptyMessage: string;
+  noCallsMessage: string;
+}) {
+  const usageQuery = useQuery({
+    queryKey: ["bd", "pipeline", "usage", bookId, runId] as const,
+    queryFn: () => fetchPipelineUsage(bookId, runId ?? ""),
+    enabled: runId !== null,
+    refetchInterval: runStatus === "queued" || runStatus === "running" ? 3_000 : false,
+    retry: false,
+  });
+
+  return (
+    <section aria-label="Node LLM usage" className="flex flex-col gap-3">
+      <div>
+        <h3 className="text-sm font-medium">LLM usage</h3>
+        <p className="mt-1 text-xs text-muted-foreground">{description}</p>
+      </div>
+      <PipelineUsageBreakdown
+        usage={usageQuery.data}
+        nodeIds={nodeIds}
+        hasRun={runId !== null}
+        loading={usageQuery.isPending}
+        failed={usageQuery.isError}
+        errorMessage={usageQuery.isError ? apiErrorMessage(usageQuery.error) : null}
+        onRetry={() => void usageQuery.refetch()}
+        emptyMessage={emptyMessage}
+        noCallsMessage={noCallsMessage}
+      />
+    </section>
   );
 }

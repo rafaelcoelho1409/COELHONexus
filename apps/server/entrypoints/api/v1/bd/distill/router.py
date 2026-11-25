@@ -1,5 +1,8 @@
 """Start and read source-grounded Learning Guide runs."""
 from __future__ import annotations
+import domains, infra
+import domains.bd.distill.ai.task
+from . import schemas
 
 import asyncio
 import json
@@ -9,12 +12,6 @@ from typing import Annotated
 from fastapi import APIRouter, HTTPException, Path, Response
 from starlette.responses import StreamingResponse
 
-import domains
-import domains.bd.distill.params
-import domains.bd.distill.task
-import infra
-
-from . import schemas
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -29,7 +26,7 @@ async def get_capabilities() -> dict[str, bool]:
 @router.post("/{book_id}/runs", response_model = schemas.RunStart, status_code = 202)
 async def start_run(book_id: SafePathSegment, body: schemas.StartRequest | None = None) -> dict:
     try:
-        manifest = await domains.bd.distill.service.create_distill_run(
+        manifest = await domains.bd.distill.ai.service.create_distill_run(
             book_id,
             expected_ingestion_ai_run_id = body.ingestion_ai_run_id if body is not None else None,
         )
@@ -38,9 +35,9 @@ async def start_run(book_id: SafePathSegment, body: schemas.StartRequest | None 
     except ValueError as error:
         raise HTTPException(status_code = 409, detail = str(error)) from error
     try:
-        task = domains.bd.distill.task.run_distill.apply_async(args = (book_id, manifest["run_id"]))
+        task = domains.bd.distill.ai.task.run_distill.apply_async(args = (book_id, manifest["run_id"]))
     except Exception as error:
-        await domains.bd.distill.service.mark_failed(book_id, manifest["run_id"], error)
+        await domains.bd.distill.ai.service.mark_failed(book_id, manifest["run_id"], error)
         logger.exception("[bd-distill-api] unable to queue run for %s", book_id)
         raise HTTPException(status_code = 503, detail = "Unable to queue the Distill run") from error
     infra.opentelemetry.service.tag_celery_task(task.id)
@@ -55,12 +52,12 @@ async def start_run(book_id: SafePathSegment, body: schemas.StartRequest | None 
 
 @router.get("/{book_id}/runs")
 async def list_runs(book_id: SafePathSegment) -> list[dict]:
-    return await domains.bd.distill.service.list_runs(book_id)
+    return await domains.bd.distill.ai.service.list_runs(book_id)
 
 
 @router.get("/{book_id}/runs/current")
 async def get_current_run(book_id: SafePathSegment) -> dict:
-    manifest = await domains.bd.distill.service.read_current_run(book_id)
+    manifest = await domains.bd.distill.ai.service.read_current_run(book_id)
     if manifest is None:
         raise HTTPException(status_code = 404, detail = f"no Distill run exists for book {book_id!r}")
     return manifest
@@ -68,7 +65,7 @@ async def get_current_run(book_id: SafePathSegment) -> dict:
 
 @router.get("/{book_id}/runs/{run_id}")
 async def get_run(book_id: SafePathSegment, run_id: SafePathSegment) -> dict:
-    manifest = await domains.bd.distill.service.read_run(book_id, run_id)
+    manifest = await domains.bd.distill.ai.service.read_run(book_id, run_id)
     if manifest is None:
         raise HTTPException(status_code = 404, detail = "Distill run not found")
     return manifest
@@ -76,7 +73,7 @@ async def get_run(book_id: SafePathSegment, run_id: SafePathSegment) -> dict:
 
 @router.get("/{book_id}/runs/{run_id}/llm-counters")
 async def get_run_llm_counters(book_id: SafePathSegment, run_id: SafePathSegment) -> dict:
-    manifest = await domains.bd.distill.service.read_run(book_id, run_id)
+    manifest = await domains.bd.distill.ai.service.read_run(book_id, run_id)
     if manifest is None:
         raise HTTPException(status_code = 404, detail = "Distill run not found")
     return await domains.settings.llm_counter.service.read_counters("bd", run_id)
@@ -86,7 +83,7 @@ async def get_run_llm_counters(book_id: SafePathSegment, run_id: SafePathSegment
 async def wipe_run(book_id: SafePathSegment, run_id: SafePathSegment) -> dict:
     """Delete one terminal Distill run and its artifacts while preserving the book and ingestion results."""
     try:
-        return await domains.bd.distill.service.wipe_run(book_id, run_id)
+        return await domains.bd.distill.ai.service.wipe_run(book_id, run_id)
     except FileNotFoundError as error:
         raise HTTPException(status_code = 404, detail = str(error)) from error
     except ValueError as error:
@@ -96,15 +93,15 @@ async def wipe_run(book_id: SafePathSegment, run_id: SafePathSegment) -> dict:
 @router.post("/{book_id}/runs/{run_id}/resume", response_model = schemas.RunStart, status_code = 202)
 async def resume_run(book_id: SafePathSegment, run_id: SafePathSegment) -> dict:
     try:
-        manifest = await domains.bd.distill.service.queue_resume(book_id, run_id)
+        manifest = await domains.bd.distill.ai.service.queue_resume(book_id, run_id)
     except FileNotFoundError as error:
         raise HTTPException(status_code = 404, detail = str(error)) from error
     except ValueError as error:
         raise HTTPException(status_code = 409, detail = str(error)) from error
     try:
-        task = domains.bd.distill.task.run_distill.apply_async(args = (book_id, run_id))
+        task = domains.bd.distill.ai.task.run_distill.apply_async(args = (book_id, run_id))
     except Exception as error:
-        await domains.bd.distill.service.mark_failed(book_id, run_id, error)
+        await domains.bd.distill.ai.service.mark_failed(book_id, run_id, error)
         logger.exception("[bd-distill-api] unable to resume run %s", run_id)
         raise HTTPException(status_code = 503, detail = "Unable to resume the Distill run") from error
     infra.opentelemetry.service.tag_celery_task(task.id)
@@ -125,15 +122,15 @@ async def replay_from_node(
 ) -> dict:
     """Replay a Distill checkpoint from one node, clearing only its downstream artifacts."""
     try:
-        manifest = await domains.bd.distill.service.queue_node_replay(book_id, run_id, node_id)
+        manifest = await domains.bd.distill.ai.service.queue_node_replay(book_id, run_id, node_id)
     except FileNotFoundError as error:
         raise HTTPException(status_code = 404, detail = str(error)) from error
     except ValueError as error:
         raise HTTPException(status_code = 409, detail = str(error)) from error
     try:
-        task = domains.bd.distill.task.run_distill.apply_async(args = (book_id, run_id))
+        task = domains.bd.distill.ai.task.run_distill.apply_async(args = (book_id, run_id))
     except Exception as error:
-        await domains.bd.distill.service.mark_failed(book_id, run_id, error)
+        await domains.bd.distill.ai.service.mark_failed(book_id, run_id, error)
         logger.exception("[bd-distill-api] unable to queue node replay for %s", run_id)
         raise HTTPException(status_code = 503, detail = "Unable to queue the Distill node replay") from error
     infra.opentelemetry.service.tag_celery_task(task.id)
@@ -149,17 +146,17 @@ async def replay_from_node(
 @router.post("/{book_id}/runs/{run_id}/cancel", response_model = schemas.CancelResponse)
 async def cancel_run(book_id: SafePathSegment, run_id: SafePathSegment) -> dict:
     try:
-        return await domains.bd.distill.service.request_cancel(book_id, run_id)
+        return await domains.bd.distill.ai.service.request_cancel(book_id, run_id)
     except FileNotFoundError as error:
         raise HTTPException(status_code = 404, detail = str(error)) from error
     except ValueError as error:
         raise HTTPException(status_code = 409, detail = str(error)) from error
 
 
-@router.get("/{book_id}/runs/{run_id}/report", response_model = domains.bd.distill.schemas.StudyGuideDocument)
+@router.get("/{book_id}/runs/{run_id}/report", response_model = domains.bd.distill.ai.schemas.StudyGuideDocument)
 async def get_report(book_id: SafePathSegment, run_id: SafePathSegment) -> dict:
     try:
-        report, _ = await domains.bd.distill.service.read_report(book_id, run_id)
+        report, _ = await domains.bd.distill.ai.service.read_report(book_id, run_id)
         return report
     except FileNotFoundError as error:
         raise HTTPException(status_code = 404, detail = str(error)) from error
@@ -170,14 +167,14 @@ async def get_report(book_id: SafePathSegment, run_id: SafePathSegment) -> dict:
 @router.get("/{book_id}/runs/{run_id}/report.html")
 async def get_report_html(book_id: SafePathSegment, run_id: SafePathSegment) -> Response:
     try:
-        content = await domains.bd.distill.service.read_html(book_id, run_id)
+        content = await domains.bd.distill.ai.service.read_html(book_id, run_id)
     except FileNotFoundError as error:
         raise HTTPException(status_code = 404, detail = str(error)) from error
     except ValueError as error:
         raise HTTPException(status_code = 409, detail = str(error)) from error
     return Response(
         content = content,
-        media_type = domains.bd.distill.params.HTML_TYPE,
+        media_type = domains.bd.distill.source.rendering.params.HTML_TYPE,
         headers = {
             "Content-Disposition": "inline; filename=learning-guide.html",
             "Content-Security-Policy": "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'",
@@ -189,7 +186,7 @@ async def get_report_html(book_id: SafePathSegment, run_id: SafePathSegment) -> 
 @router.get("/{book_id}/runs/{run_id}/report.pdf")
 async def get_report_pdf(book_id: SafePathSegment, run_id: SafePathSegment) -> Response:
     try:
-        content = await domains.bd.distill.service.read_pdf(book_id, run_id)
+        content = await domains.bd.distill.ai.service.read_pdf(book_id, run_id)
     except FileNotFoundError as error:
         raise HTTPException(status_code = 404, detail = str(error)) from error
     except ValueError as error:
@@ -199,7 +196,7 @@ async def get_report_pdf(book_id: SafePathSegment, run_id: SafePathSegment) -> R
         raise HTTPException(status_code = 503, detail = "The PDF renderer is unavailable") from error
     return Response(
         content = content,
-        media_type = domains.bd.distill.params.PDF_TYPE,
+        media_type = domains.bd.distill.source.rendering.params.PDF_TYPE,
         headers = {
             "Content-Disposition": f'attachment; filename="learning-guide-{book_id}.pdf"',
             "X-Content-Type-Options": "nosniff",
@@ -209,7 +206,7 @@ async def get_report_pdf(book_id: SafePathSegment, run_id: SafePathSegment) -> R
 
 @router.get("/{book_id}/runs/{run_id}/events")
 async def run_events(book_id: SafePathSegment, run_id: SafePathSegment) -> StreamingResponse:
-    manifest = await domains.bd.distill.service.read_run(book_id, run_id)
+    manifest = await domains.bd.distill.ai.service.read_run(book_id, run_id)
     if manifest is None:
         raise HTTPException(status_code = 404, detail = "Distill run not found")
     done = object()
@@ -220,7 +217,7 @@ async def run_events(book_id: SafePathSegment, run_id: SafePathSegment) -> Strea
 
         async def _pump() -> None:
             try:
-                async for event in domains.bd.distill.progress.service.subscribe(book_id, run_id):
+                async for event in domains.bd.distill.ai.progress.service.subscribe(book_id, run_id):
                     await queue.put(event)
                     if event.get("kind") in {"run_done", "run_failed", "run_cancelled"}:
                         break

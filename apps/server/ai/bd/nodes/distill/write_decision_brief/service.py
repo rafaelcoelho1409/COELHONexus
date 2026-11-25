@@ -21,28 +21,34 @@ async def write_decision_brief(
         node = "write_decision_brief",
         current_task = "Writing source-cited recommendations",
     )
-    decision_key = domains.bd.distill.keys.decision_brief_key(state["book_id"], state["run_id"])
+    decision_key = domains.bd.distill.ai.keys.decision_brief_key(state["book_id"], state["run_id"])
     if await dependencies.storage.exists(decision_key):
-        domains.bd.distill.schemas.DecisionBriefOutput.model_validate_json(
+        domains.bd.distill.ai.schemas.DecisionBriefOutput.model_validate_json(
             await dependencies.storage.read_text(decision_key),
         )
         return {"decision_brief_key": decision_key}
 
+    error_type = None
     try:
         decision = await _write_decision_brief(dependencies, state)
     except Exception as error:  # noqa: BLE001 — an optional brief must not block the Learning Guide.
+        error_type = type(error).__name__
         logger.warning(
             "[bd-distill] decision-brief writer unavailable; publishing source-grounded book guide "
-            "run=%s error_type=%s",
+            "run=%s error_type=%s error=%s",
             state["run_id"],
             type(error).__name__,
+            str(error)[:400],
         )
         decision = None
 
     await _save_decision_brief(
         dependencies,
         decision_key,
-        domains.bd.distill.schemas.DecisionBriefOutput(decision_brief = decision),
+        domains.bd.distill.ai.schemas.DecisionBriefOutput(
+            decision_brief = decision,
+            error_type = error_type,
+        ),
     )
     return {"decision_brief_key": decision_key}
 
@@ -50,22 +56,22 @@ async def write_decision_brief(
 async def _save_decision_brief(
     dependencies: graphs.distill.entities.DistillDependencies,
     decision_key: str,
-    output: domains.bd.distill.schemas.DecisionBriefOutput,
+    output: domains.bd.distill.ai.schemas.DecisionBriefOutput,
 ) -> None:
     await dependencies.storage.write(
         decision_key,
-        domains.bd.distill.domain.json_body(output.model_dump(mode = "json")),
-        content_type = domains.bd.distill.params.JSON_TYPE,
+        domains.bd.distill.ai.domain.json_body(output.model_dump(mode = "json")),
+        content_type = domains.bd.distill.ai.params.JSON_TYPE,
     )
 
 
 async def _write_decision_brief(
     dependencies: graphs.distill.entities.DistillDependencies,
     state: dict[str, Any],
-) -> domains.bd.distill.schemas.BookDecisionBrief | None:
+) -> domains.bd.distill.ai.schemas.BookDecisionBrief | None:
     """Write a cited brief without mutating the whole-book synthesis artifact."""
     synthesis_record = json.loads(await dependencies.storage.read_text(state["book_synthesis_key"]))
-    synthesis = domains.bd.distill.schemas.BookSynthesis.model_validate(synthesis_record["synthesis"])
+    synthesis = domains.bd.distill.ai.schemas.BookSynthesis.model_validate(synthesis_record["synthesis"])
     synthesis = synthesis.model_copy(update = {"decision_brief": None})
     allowed_ids = list(dict.fromkeys(
         [*synthesis.central_thesis_learning_unit_ids]
@@ -83,15 +89,15 @@ async def _write_decision_brief(
         for source in ref.get("unit_sources", [])
         if source.get("learning_unit_id") in allowed_id_set
     ]
-    research_key = state.get("research_context_key") or domains.bd.distill.keys.research_context_key(
+    research_key = state.get("research_context_key") or domains.bd.distill.ai.keys.research_context_key(
         state["book_id"], state["run_id"],
     )
     if await dependencies.storage.exists(research_key):
-        research_context = domains.bd.distill.schemas.ResearchContext.model_validate_json(
+        research_context = domains.bd.distill.ai.schemas.ResearchContext.model_validate_json(
             await dependencies.storage.read_text(research_key),
         )
     else:
-        research_context = domains.bd.distill.schemas.ResearchContext(status = "disabled")
+        research_context = domains.bd.distill.ai.schemas.ResearchContext(status = "disabled")
     source_by_id = {source.source_id: source for source in research_context.sources}
     full_text_source_ids = {
         source.source_id for source in research_context.sources if source.full_text_sha256 is not None
@@ -102,7 +108,7 @@ async def _write_decision_brief(
         for quote in finding.evidence_quotes
         if quote.source_id in full_text_source_ids
     }
-    units = await domains.bd.distill.synthesize.service.read_learning_units(
+    units = await domains.bd.distill.ai.synthesize.service.read_learning_units(
         dependencies.storage,
         state["book_id"],
         state["run_id"],
@@ -146,14 +152,14 @@ async def _write_decision_brief(
             }, config = {
                 "callbacks": [domains.settings.llm_counter.service.LLMCounterCallback()],
             }),
-            attempts = domains.bd.distill.params.AGENT_CALL_ATTEMPTS,
-            wait_base_s = domains.bd.distill.params.AGENT_CALL_RETRY_WAIT_BASE_S,
+            attempts = domains.bd.distill.ai.params.AGENT_CALL_ATTEMPTS,
+            wait_base_s = domains.bd.distill.ai.params.AGENT_CALL_RETRY_WAIT_BASE_S,
         )
-    output = domains.bd.distill.domain.structured_model_from_agent_result(
+    output = domains.bd.distill.ai.domain.structured_model_from_agent_result(
         result,
-        domains.bd.distill.schemas.DecisionBriefOutput,
+        domains.bd.distill.ai.schemas.DecisionBriefOutput,
     )
-    if not isinstance(output, domains.bd.distill.schemas.DecisionBriefOutput):
+    if not isinstance(output, domains.bd.distill.ai.schemas.DecisionBriefOutput):
         raise TypeError("decision-brief DeepAgent returned no valid DecisionBriefOutput")
     decision = output.decision_brief
     if decision is not None:

@@ -20,16 +20,35 @@ async def retrieve_evidence(
     except RuntimeError:
         writer = None
 
-    async def _retrieve_one(query: str) -> tuple[str, list[dict] | BaseException]:
+    async def _retrieve_one(query: str) -> tuple[str, dict | BaseException]:
         try:
-            return query, await domains.bd.ask.retriever.service.retrieve(
+            if graphs.rag.retrieval.params.SPECIALIST_AGENTS_ENABLED:
+                result = await graphs.rag.retrieval.service.retrieve(
+                    runtime.context.book_id,
+                    runtime.context.run_id,
+                    query,
+                    model = runtime.context.model,
+                )
+                return query, {
+                    "evidence": result.get("evidence") or [],
+                    "source_status": result.get("source_status") or {},
+                }
+            results = await domains.bd.rag.ai.retrieval.service.retrieve_sources(
                 runtime.context.book_id, runtime.context.run_id, query,
             )
+            evidence = domains.bd.rag.ai.retrieval.service.fuse_evidence([
+                result["evidence"] for result in results.values()
+            ])
+            return query, {
+                "evidence": evidence,
+                "source_status": {source: result["status"] for source, result in results.items()},
+            }
         except Exception as error:  # noqa: BLE001 — sibling searches must remain useful.
             return query, error
 
     tasks = [asyncio.create_task(_retrieve_one(query)) for query in queries]
     ranked_results: dict[str, list[dict]] = {}
+    source_status_by_query: dict[str, dict[str, str]] = {}
     sub_results_by_query: dict[str, dict] = {}
     errors = []
     for task in asyncio.as_completed(tasks):
@@ -46,12 +65,14 @@ async def retrieve_evidence(
                     "sub_results": [sub_result],
                 })
             continue
+        evidence = result.get("evidence") or []
+        source_status_by_query[query] = result.get("source_status") or {}
         sub_result = {
             "sub_question": query,
-            "answer": "\n".join(item["text"][:300] for item in result[:2]),
+            "answer": "\n".join(item["text"][:300] for item in evidence[:2]),
         }
         sub_results_by_query[query] = sub_result
-        ranked_results[query] = result
+        ranked_results[query] = evidence
         if writer is not None and state.get("mode") == "deep":
             writer({
                 "node": "run_subagent",
@@ -59,7 +80,7 @@ async def retrieve_evidence(
                 "latest_sub_answer_preview": sub_result["answer"][:200],
                 "sub_results": [sub_result],
             })
-    documents = domains.bd.ask.retriever.service.fuse_evidence([
+    documents = domains.bd.rag.ai.retrieval.service.fuse_evidence([
         ranked_results[query] for query in queries if query in ranked_results
     ])
     sub_results = [sub_results_by_query[query] for query in queries if query in sub_results_by_query]
@@ -67,6 +88,7 @@ async def retrieve_evidence(
         "documents": documents,
         "document_count": len(documents),
         "retrieval_sources": sorted({item["source"] for item in documents}),
+        "retrieval_source_status": source_status_by_query,
         "sub_results": sub_results if state.get("mode") == "deep" else [],
         "retrieval_error": "; ".join(errors)[:500],
     }

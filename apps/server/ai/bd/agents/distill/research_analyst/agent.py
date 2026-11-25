@@ -44,14 +44,14 @@ def research_analyst(model = None):
         ),
     )
     agent_tools = [
-        tools.search_mcp.tool.search_mcp_web,
-        tools.search_mcp.tool.read_search_source,
+        tools.search.tools.search_mcp_web,
+        tools.search.tools.read_search_source,
     ]
     allowed_tools = skills.params.ALLOWED_TOOL_NAMES | {item.name for item in agent_tools}
     agent = create_deep_agent(
         model = model,
         tools = agent_tools,
-        context_schema = tools.search_mcp.entities.SearchSession,
+        context_schema = tools.search.entities.SearchSession,
         system_prompt = prompts.distill.research_analyst.prompts.SYSTEM_PROMPT,
         middleware = [
             middlewares.middleware.ToolAllowlistMiddleware(frozenset(allowed_tools)),
@@ -60,7 +60,7 @@ def research_analyst(model = None):
                 exit_behavior = "end",
             ),
         ],
-        response_format = domains.bd.distill.schemas.ResearchAnalysisOutput,
+        response_format = domains.bd.distill.ai.schemas.ResearchAnalysisOutput,
         skills = [skills.domain.source_for("distill_research_analyst")],
         permissions = [
             FilesystemPermission(

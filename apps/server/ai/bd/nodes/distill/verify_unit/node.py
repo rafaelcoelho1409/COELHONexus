@@ -13,8 +13,8 @@ def dispatch_units(state: graphs.distill.states.DistillRunState) -> list[Send] |
     refs = state.get("extracted_units", [])
     if not refs:
         return "prepare_chapters"
-    size = domains.bd.distill.params.FANOUT_UNIT_BATCH_SIZE
-    identity = domains.bd.distill.domain.graph_identity(state)
+    size = domains.bd.distill.ai.params.FANOUT_UNIT_BATCH_SIZE
+    identity = domains.bd.distill.ai.domain.graph_identity(state)
     return [
         Send("verify_unit", {**identity, "unit_batch": refs[index:index + size]})
         for index in range(0, len(refs), size)

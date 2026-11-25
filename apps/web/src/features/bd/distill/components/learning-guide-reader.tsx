@@ -208,7 +208,7 @@ export function LearningGuideReader({ report, quality }: { report: LearningGuide
   }
 
   return (
-    <section aria-label="Learning Guide reader" className="min-w-0">
+    <section aria-label="Learning Guide reader" className="flex min-h-0 min-w-0 flex-1 flex-col">
       <BookReadingProgress />
       {reading ? (
         <BookReadingMode
@@ -239,7 +239,7 @@ export function LearningGuideReader({ report, quality }: { report: LearningGuide
           />
         </BookReadingMode>
       ) : (
-        <div className={`flex flex-col gap-4 lg:grid ${columns}`}>
+        <div className={`flex min-h-0 min-w-0 flex-1 flex-col gap-4 lg:grid ${columns}`}>
           {layout.contents ? (
             <aside className={`flex min-w-0 flex-col gap-3 ${STICKY_COLUMN}`}>{navigation}</aside>
           ) : null}

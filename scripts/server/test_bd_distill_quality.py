@@ -26,7 +26,7 @@ def check(label: str, got, want) -> None:
 
 
 def source_ref(quote: str = "A source-backed statement."):
-    return domains.bd.distill.schemas.SourceRef(
+    return domains.bd.distill.ai.schemas.SourceRef(
         source_type = "book",
         book_id = "book1",
         extraction_run_id = "extract1",
@@ -35,13 +35,13 @@ def source_ref(quote: str = "A source-backed statement."):
         source_key = "normalized/page-1.md",
         page_number = 1,
         section_path = ["Chapter 1"],
-        source_sha256 = domains.bd.distill.domain.sha256_text("A source-backed statement. More text."),
+        source_sha256 = domains.bd.distill.ai.domain.sha256_text("A source-backed statement. More text."),
         quote = quote,
     )
 
 
 def build_report():
-    schemas = domains.bd.distill.schemas
+    schemas = domains.bd.distill.ai.schemas
     evidence = schemas.EvidenceQuote(page_number = 1, quote = "A source-backed statement.")
     unit = source_ref()
     lesson = schemas.ReportLesson(
@@ -100,7 +100,7 @@ def build_report():
 
 
 report = build_report()
-rendered = domains.bd.distill.rendering.domain.render_html(report)
+rendered = domains.bd.distill.source.rendering.domain.render_html(report)
 check("whole-book diagrams are part of the validated report contract and rendered output",
       "Whole-book diagrams" in rendered and "A sourced relationship" in rendered and "<svg" in rendered, True)
 check("whole-book equations are rendered from the validated report model",
@@ -115,17 +115,17 @@ source_pages = [
     {
         "page_number": 1,
         "source_key": "normalized/page-1.md",
-        "source_sha256": domains.bd.distill.domain.sha256_text(page_text),
+        "source_sha256": domains.bd.distill.ai.domain.sha256_text(page_text),
         "disposition": "deliver",
     },
     {
         "page_number": 2,
         "source_key": "normalized/page-2.md",
-        "source_sha256": domains.bd.distill.domain.sha256_text(""),
+        "source_sha256": domains.bd.distill.ai.domain.sha256_text(""),
         "disposition": "discarded_blank",
     },
 ]
-quality = domains.bd.distill.evaluation.assess_report_structure(
+quality = domains.bd.distill.ai.evaluation.assess_report_structure(
     report,
     expected_page_count = 2,
     source_pages = source_pages,
@@ -136,7 +136,7 @@ check("all pinned page references and evidence quotes resolve", (
     quality.citation_integrity_passed, quality.quote_support_passed, quality.errors,
 ), (True, True, []))
 
-missing_text_quality = domains.bd.distill.evaluation.assess_report_structure(
+missing_text_quality = domains.bd.distill.ai.evaluation.assess_report_structure(
     report,
     expected_page_count = 2,
     source_pages = source_pages,
@@ -144,7 +144,7 @@ missing_text_quality = domains.bd.distill.evaluation.assess_report_structure(
 )
 check("citation checks fail closed when the source page is unavailable", missing_text_quality.quote_support_passed, False)
 
-review_type = domains.bd.distill.evaluation.HumanLearningReview
+review_type = domains.bd.distill.ai.evaluation.HumanLearningReview
 reviews = [
     review_type(
         book_id = f"book{number}",
@@ -163,17 +163,17 @@ reviews = [
     )
     for number in range(1, 4)
 ]
-aggregate = domains.bd.distill.evaluation.aggregate_human_reviews(reviews)
+aggregate = domains.bd.distill.ai.evaluation.aggregate_human_reviews(reviews)
 check("three positive paired human reviews meet the initial small-beta gate",
       (aggregate["reviewed_book_count"], aggregate["small_beta_gate_passed"]), (3, True))
 check("beta evaluation reports each book separately", sorted(aggregate["per_book"]), ["book1", "book2", "book3"])
 reviews[0] = reviews[0].model_copy(update = {"unsupported_claims": ["lesson-1"]})
-aggregate = domains.bd.distill.evaluation.aggregate_human_reviews(reviews)
+aggregate = domains.bd.distill.ai.evaluation.aggregate_human_reviews(reviews)
 check("a critical unsupported-claim review blocks the small-beta gate",
       (aggregate["unsupported_claim_count"], aggregate["small_beta_gate_passed"]), (1, False))
 reviews[0] = reviews[0].model_copy(update = {"unsupported_claims": []})
 reviews[0] = reviews[0].model_copy(update = {"guide_comprehension_score": 60})
-aggregate = domains.bd.distill.evaluation.aggregate_human_reviews(reviews)
+aggregate = domains.bd.distill.ai.evaluation.aggregate_human_reviews(reviews)
 check("a weak learning result for one book cannot be hidden by the pooled average",
       (aggregate["per_book"]["book1"]["comprehension_delta"], aggregate["small_beta_gate_passed"]), (-20.0, False))
 
@@ -254,7 +254,7 @@ async def fake_pdf_render() -> None:
     playwright_service.start_playwright = start_fake_playwright
     asyncio.to_thread = run_fake_thread
     try:
-        artifact = await domains.bd.distill.rendering.service.render_pdf("<html><body>Guide</body></html>")
+        artifact = await domains.bd.distill.source.rendering.service.render_pdf("<html><body>Guide</body></html>")
         check("PDF renderer accepts a valid artifact", artifact.startswith(b"%PDF-"), True)
         check("PDF rendering disables page JavaScript and browser downloads",
               (browser.context_options["java_script_enabled"], browser.context_options["accept_downloads"]),

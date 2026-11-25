@@ -24,6 +24,7 @@ class AdaptiveAskState(TypedDict, total = False):
     documents: list[dict]
     document_count: int
     retrieval_sources: list[str]
+    retrieval_source_status: dict[str, dict[str, str]]
     retrieval_sufficient: bool
     retrieval_coverage: str
     retrieval_error: str

@@ -7,7 +7,6 @@ from dataclasses import dataclass
 from typing import Any, NotRequired, TypedDict
 
 
-
 PageReader = Callable[[str], str | None | Awaitable[str | None]]
 SourcePageImageReader = Callable[[int], bytes | None | Awaitable[bytes | None]]
 SourceFigureReader = Callable[[str], bytes | None | Awaitable[bytes | None]]

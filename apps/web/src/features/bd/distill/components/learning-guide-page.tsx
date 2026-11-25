@@ -6,6 +6,7 @@ import type { ReactNode } from "react";
 import { useState } from "react";
 import { Markdown } from "@/shared/markdown";
 import { readerFont } from "@/shared/markdown/reader-font";
+import { ReaderPageFrame } from "../../components/reader-page-frame";
 import { bookPagesHref } from "../../params";
 import { sourceFigureUrl } from "../api";
 import type {
@@ -71,35 +72,25 @@ export function StudyPageArticle({
   const reviewRequired = needsReview(page, report);
 
   return (
-    <article
-      aria-label={`Study page ${index + 1}: ${page.title}`}
-      className="min-w-0 rounded-md border border-border bg-card p-4 sm:p-5"
-    >
-      <header className="mb-4 border-b border-border pb-4">
-        <div className="flex min-w-0 flex-wrap items-start justify-between gap-3">
-          <div className="min-w-0 flex-1">
-            <p className="mono-label">
-              Study page {index + 1} of {total}
-            </p>
-            <p className="mt-1 text-xs text-muted-foreground">AI-distilled Learning Guide</p>
-            <h2 className="mt-3 w-full break-words text-xl font-semibold tracking-tight">{page.title}</h2>
-            <p className="mt-1 w-full break-words text-sm text-muted-foreground">
-              Learning Guide › {page.group}
-            </p>
-          </div>
-          {toolbar}
-        </div>
+    <ReaderPageFrame
+      ariaLabel={`Study page ${index + 1}: ${page.title}`}
+      label={`Study page ${index + 1} of ${total}`}
+      title={page.title}
+      subtitle={`Learning Guide · ${page.group}`}
+      toolbar={toolbar}
+      headerContent={
         <ul aria-label="Study section details" className="mt-3 flex flex-wrap gap-2">
           {reviewRequired ? <StudyTag tone="warning">Review needed</StudyTag> : null}
           {facts.map((fact) => (
             <StudyTag key={fact}>{fact}</StudyTag>
           ))}
         </ul>
-      </header>
+      }
+    >
       <div className={`${readerFont.className} reader-prose min-w-0`}>
         <StudyPageContent report={report} quality={quality} page={page} anchor={anchor} />
       </div>
-    </article>
+    </ReaderPageFrame>
   );
 }
 

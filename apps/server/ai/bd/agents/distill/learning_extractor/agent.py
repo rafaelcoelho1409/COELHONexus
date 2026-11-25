@@ -54,7 +54,7 @@ def learning_extractor(model = None):
                 exit_behavior = "end",
             ),
         ],
-        response_format = domains.bd.distill.schemas.LearningExtraction,
+        response_format = domains.bd.distill.ai.schemas.LearningExtraction,
         skills = [skills.domain.source_for("distill_learning_extractor")],
         permissions = [
             FilesystemPermission(

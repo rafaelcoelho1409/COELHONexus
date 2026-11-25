@@ -54,7 +54,7 @@ def evidence_verifier(model = None):
                 exit_behavior = "end",
             ),
         ],
-        response_format = domains.bd.distill.schemas.EvidenceReview,
+        response_format = domains.bd.distill.ai.schemas.EvidenceReview,
         skills = [skills.domain.source_for("distill_evidence_verifier")],
         permissions = [
             FilesystemPermission(

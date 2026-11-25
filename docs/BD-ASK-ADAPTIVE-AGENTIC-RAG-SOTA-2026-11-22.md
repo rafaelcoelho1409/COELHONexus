@@ -118,7 +118,7 @@ The capability split should look like this:
 
 | Capability | Owner in BD Ask | Boundary |
 | --- | --- | --- |
-| Book passage, hybrid-vector, and graph retrieval | LangGraph retrieval node plus `domains.bd.ask.retriever` services | Direct typed calls; active book/run/revision resolved server-side |
+| Book passage, hybrid-vector, and graph retrieval | LangGraph retrieval node plus `domains.bd.ask.ai.retriever` services | Direct typed calls; active book/run/revision resolved server-side |
 | External web/current search | `ai.bd.nodes.ask.external_search` | MCP client from the tested Settings connection; one bounded search and optional source reads |
 | Ask planning, grading, answer, and critic | LangGraph nodes invoking role-scoped DeepAgents | Structured Pydantic outputs and Skills; no backend tools |
 | Future MCP consumers | FastMCP capability registration | Authenticated `bd.ask_book`, `bd.search_book`, and `bd.get_evidence` contracts reusing the same domain services |

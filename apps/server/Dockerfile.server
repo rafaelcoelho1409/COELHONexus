@@ -15,12 +15,24 @@ WORKDIR /app
 # Install runtime system dependencies:
 #   - procps, curl, unzip: general utilities
 #   - deno: yt-dlp PO Token support
-RUN apt-get update && \
+#   - Pandoc, LuaLaTeX, and librsvg: offline-capable Learning Guide PDF rendering
+RUN set -eu; \
+    apt-get update && \
     apt-get install -y --no-install-recommends \
-        procps curl unzip \
-    && \
-    curl -fsSL https://deno.land/install.sh | DENO_INSTALL=/usr/local sh && \
-    rm -rf /var/lib/apt/lists/*
+        procps curl unzip librsvg2-bin \
+        texlive-luatex texlive-latex-extra texlive-fonts-recommended texlive-lang-english fonts-lmodern; \
+    PANDOC_VERSION=3.14; \
+    case "$(dpkg --print-architecture)" in \
+        amd64) PANDOC_ARCH=amd64; PANDOC_SHA256=c5f4720cdefb3f7bdc5d07202ef579feef0d1370773c873804dd8fdaa8c4f1b8 ;; \
+        arm64) PANDOC_ARCH=arm64; PANDOC_SHA256=c692f3d78a415741bbbac4cdbbbe26fa7edca1f43d2301b982fbf4009cc8cf7f ;; \
+        *) echo "Unsupported architecture for the pinned Pandoc binary" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL "https://github.com/jgm/pandoc/releases/download/${PANDOC_VERSION}/pandoc-${PANDOC_VERSION}-linux-${PANDOC_ARCH}.tar.gz" -o /tmp/pandoc.tar.gz; \
+    echo "${PANDOC_SHA256}  /tmp/pandoc.tar.gz" | sha256sum --check --status; \
+    tar -xzf /tmp/pandoc.tar.gz --strip-components=1 -C /usr/local; \
+    rm -f /tmp/pandoc.tar.gz; \
+    curl -fsSL https://deno.land/install.sh | DENO_INSTALL=/usr/local sh; \
+    rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
 
 ENV PATH="/usr/local/bin:$PATH"
 

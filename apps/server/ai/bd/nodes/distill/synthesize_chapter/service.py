@@ -17,12 +17,17 @@ async def _synthesize_chapter_with_llm(
     run_id: str,
     chapter_id: str,
     prompt: str,
-) -> domains.bd.distill.schemas.ChapterSynthesis:
+    *,
+    counter_node_id: str = "chapter_synthesizer",
+    response_attempts: int | None = None,
+    provider_attempts: int | None = None,
+) -> domains.bd.distill.ai.schemas.ChapterSynthesis:
     """Use the chapter DeepAgent and retry only with typed-output repair instructions."""
     controls = dependencies.controls
     system_prompt = prompts.distill.chapter_synthesizer.prompts.SYSTEM_PROMPT
     user_request = prompt.removeprefix(system_prompt).strip()
-    response_attempts = domains.bd.distill.params.CHAPTER_AGENT_RESPONSE_ATTEMPTS
+    response_attempts = response_attempts or domains.bd.distill.ai.params.CHAPTER_AGENT_RESPONSE_ATTEMPTS
+    provider_attempts = provider_attempts or domains.bd.distill.ai.params.AGENT_CALL_ATTEMPTS
     last_error: Exception | None = None
 
     async def run_agent_call(payload: dict[str, Any]) -> Any:
@@ -33,13 +38,13 @@ async def _synthesize_chapter_with_llm(
                     endpoint = domains.settings.chat.service.ENDPOINT
                     if domains.settings.chat.domain.rotator_health_url(endpoint.base_url):
                         settled = await domains.settings.chat.service.wait_for_rotator_settle(
-                            domains.bd.distill.params.CHAPTER_SYNTHESIS_SETTLE_CAP_S,
+                            domains.bd.distill.ai.params.CHAPTER_SYNTHESIS_SETTLE_CAP_S,
                         )
                         logger.info("[bd-distill] chapter synthesis Rotator settle: %s", settled)
                     controls.chapter_pool_settled = True
             try:
                 with domains.settings.llm_counter.service.llm_context(
-                    ns = "bd", run_id = run_id, node_id = "chapter_synthesizer", stage = "distill",
+                    ns = "bd", run_id = run_id, node_id = counter_node_id, stage = "distill",
                 ):
                     return await domains.settings.chat.service.resilient_ainvoke(
                         lambda: dependencies.chapter_synthesizer.ainvoke({
@@ -51,8 +56,8 @@ async def _synthesize_chapter_with_llm(
                         }, config = {
                             "callbacks": [domains.settings.llm_counter.service.LLMCounterCallback()],
                         }),
-                        attempts = domains.bd.distill.params.AGENT_CALL_ATTEMPTS,
-                        wait_base_s = domains.bd.distill.params.AGENT_CALL_RETRY_WAIT_BASE_S,
+                        attempts = provider_attempts,
+                        wait_base_s = domains.bd.distill.ai.params.AGENT_CALL_RETRY_WAIT_BASE_S,
                     )
             except Exception as error:
                 if domains.settings.chat.domain.is_transient_provider_error(error):
@@ -79,10 +84,10 @@ async def _synthesize_chapter_with_llm(
                 payload["validation_issue"] = f"{type(last_error).__name__}: {issue[:500]}"
         try:
             result = await run_agent_call(payload)
-            synthesis = domains.bd.distill.domain.chapter_synthesis_from_agent_result(result)
+            synthesis = domains.bd.distill.ai.domain.chapter_synthesis_from_agent_result(result)
             if synthesis is not None:
                 return synthesis
-            issues = domains.bd.distill.domain.chapter_synthesis_validation_issues(result)
+            issues = domains.bd.distill.ai.domain.chapter_synthesis_validation_issues(result)
             last_error = errors.ChapterSynthesisOutputError(
                 "chapter DeepAgent returned invalid ChapterSynthesis: " + ", ".join(issues),
             )
@@ -112,12 +117,16 @@ async def _ensure_chapter_citations(
     run_id: str,
     chapter_id: str,
     prompt: str,
-    synthesis: domains.bd.distill.schemas.ChapterSynthesis,
+    synthesis: domains.bd.distill.ai.schemas.ChapterSynthesis,
     allowed_ids: set[str],
-) -> tuple[domains.bd.distill.schemas.ChapterSynthesis, list[str]]:
+    *,
+    counter_node_id: str = "chapter_synthesizer",
+    response_attempts: int | None = None,
+    provider_attempts: int | None = None,
+) -> tuple[domains.bd.distill.ai.schemas.ChapterSynthesis, list[str]]:
     """Correct model-invented prose citations, then retain only source-resolvable output."""
-    issues = domains.bd.distill.synthesize.domain.chapter_citation_issues(synthesis, allowed_ids)
-    for _ in range(domains.bd.distill.params.CHAPTER_CITATION_REPAIR_ATTEMPTS):
+    issues = domains.bd.distill.ai.synthesize.domain.chapter_citation_issues(synthesis, allowed_ids)
+    for _ in range(domains.bd.distill.ai.params.CHAPTER_CITATION_REPAIR_ATTEMPTS):
         if not issues:
             break
         repair_prompt = (
@@ -140,6 +149,9 @@ async def _ensure_chapter_citations(
                 run_id,
                 chapter_id,
                 repair_prompt,
+                counter_node_id = counter_node_id,
+                response_attempts = response_attempts,
+                provider_attempts = provider_attempts,
             )
         except Exception as error:  # noqa: BLE001 — sanitize citations when the optional repair call fails.
             logger.warning(
@@ -149,20 +161,74 @@ async def _ensure_chapter_citations(
                 type(error).__name__,
             )
             break
-        issues = domains.bd.distill.synthesize.domain.chapter_citation_issues(synthesis, allowed_ids)
+        issues = domains.bd.distill.ai.synthesize.domain.chapter_citation_issues(synthesis, allowed_ids)
 
     if not issues:
         return synthesis, []
 
-    repaired, review_flags = domains.bd.distill.synthesize.domain.repair_chapter_citations(synthesis, allowed_ids)
+    repaired, review_flags = domains.bd.distill.ai.synthesize.domain.repair_chapter_citations(synthesis, allowed_ids)
     logger.warning(
         "[bd-distill] normalized unresolved chapter citations chapter=%s repair_attempts=%s issues=%s flags=%s",
         chapter_id,
-        domains.bd.distill.params.CHAPTER_CITATION_REPAIR_ATTEMPTS,
+        domains.bd.distill.ai.params.CHAPTER_CITATION_REPAIR_ATTEMPTS,
         issues,
         review_flags,
     )
     return repaired, review_flags
+
+
+async def revise_chapter_for_coverage(
+    dependencies: graphs.distill.entities.DistillDependencies,
+    run_id: str,
+    chapter_id: str,
+    chapter_input: dict[str, Any],
+    synthesis: domains.bd.distill.ai.schemas.ChapterSynthesis,
+    units: list[dict[str, Any]],
+    findings: list[dict[str, str]],
+) -> tuple[domains.bd.distill.ai.schemas.ChapterSynthesis, list[str]]:
+    """Apply one bounded reviewer correction using only the chapter's verified evidence."""
+    prompt = (
+        prompts.distill.chapter_synthesizer.prompts.SYSTEM_PROMPT
+        + "\n\nCorrect this chapter guide using the editorial findings. Preserve accurate lessons and "
+        + "learning detail. Address only findings supported by the supplied verified learning units; "
+        + "do not invent facts, quotations, or learning-unit IDs. If a finding cannot be corrected from "
+        + "the supplied evidence, leave the relevant content unchanged. Return the full ChapterSynthesis.\n"
+        + json.dumps({
+            "section": chapter_input,
+            "verified_learning_units": units,
+            "current_chapter_guide": synthesis.model_dump(mode = "json"),
+            "editorial_findings": findings,
+        }, ensure_ascii = False)
+    )
+    revised = await _synthesize_chapter_with_llm(
+        dependencies,
+        run_id,
+        chapter_id,
+        prompt,
+        counter_node_id = "chapter_coverage_corrector",
+        response_attempts = domains.bd.distill.ai.params.COVERAGE_CORRECTOR_RESPONSE_ATTEMPTS,
+        provider_attempts = domains.bd.distill.ai.params.COVERAGE_CORRECTOR_PROVIDER_ATTEMPTS,
+    )
+    allowed_ids = {unit["learning_unit_id"] for unit in units}
+    revised, citation_flags = await _ensure_chapter_citations(
+        dependencies,
+        run_id,
+        chapter_id,
+        prompt,
+        revised,
+        allowed_ids,
+        counter_node_id = "chapter_coverage_corrector",
+        response_attempts = domains.bd.distill.ai.params.COVERAGE_CORRECTOR_RESPONSE_ATTEMPTS,
+        provider_attempts = domains.bd.distill.ai.params.COVERAGE_CORRECTOR_PROVIDER_ATTEMPTS,
+    )
+    revised = revised.model_copy(update = {
+        "diagrams": [],
+        "equations": [],
+        "charts": [],
+        "timelines": [],
+        "maps": [],
+    })
+    return revised, citation_flags
 
 
 async def synthesize_chapter(
@@ -192,7 +258,7 @@ async def synthesize_chapter(
         current_task = f"Writing guide: {chapter_input['title']}",
     )
     if learning_units_by_id is None:
-        units = await domains.bd.distill.synthesize.service.read_learning_units(
+        units = await domains.bd.distill.ai.synthesize.service.read_learning_units(
             storage,
             state["book_id"],
             state["run_id"],
@@ -220,7 +286,7 @@ async def synthesize_chapter(
             prompt,
         )
     except errors.ChapterSynthesisOutputError as error:
-        synthesis = domains.bd.distill.synthesize.domain.fallback_chapter_synthesis(units)
+        synthesis = domains.bd.distill.ai.synthesize.domain.fallback_chapter_synthesis(units)
         synthesis_review_flags.append(
             "The structured chapter response was invalid after repair attempts. This guide uses the source-cited "
             "learning units; learning objectives and practice items were omitted and this section needs review."
@@ -263,8 +329,8 @@ async def synthesize_chapter(
     }
     await storage.write(
         ref["artifact_key"],
-        domains.bd.distill.domain.json_body(artifact),
-        content_type = domains.bd.distill.params.JSON_TYPE,
+        domains.bd.distill.ai.domain.json_body(artifact),
+        content_type = domains.bd.distill.ai.params.JSON_TYPE,
     )
     await graphs.service.report(
         dependencies.progress_callback,

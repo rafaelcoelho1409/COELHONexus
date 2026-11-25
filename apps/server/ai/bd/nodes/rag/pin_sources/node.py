@@ -9,8 +9,8 @@ from langgraph.runtime import Runtime
 
 
 async def pin_sources(
-    state: graphs.rag.states.ProcessedBookIndexState,
-    runtime: Runtime[graphs.rag.entities.ProcessedBookIndexDependencies],
+    state: graphs.rag.index.states.ProcessedBookIndexState,
+    runtime: Runtime[graphs.rag.index.entities.ProcessedBookIndexDependencies],
 ) -> dict[str, Any]:
     context = runtime.context
 
@@ -29,7 +29,7 @@ async def pin_sources(
             cancel_check = context.cancel_check,
         )
 
-    return await graphs.rag.service.run_index_node(
+    return await graphs.rag.index.service.run_index_node(
         context,
         "pin_sources",
         operation,

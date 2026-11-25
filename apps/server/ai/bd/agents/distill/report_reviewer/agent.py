@@ -20,7 +20,7 @@ from langchain_openai import ChatOpenAI
 def _build_agent(model: ChatOpenAI, *, name: str, structured_output: bool):
     response_format = (
         ToolStrategy(
-            schema = domains.bd.distill.schemas.ReportReviewOutput,
+            schema = domains.bd.distill.ai.schemas.ReportReviewOutput,
             handle_errors = True,
         )
         if structured_output
@@ -42,7 +42,7 @@ def _build_agent(model: ChatOpenAI, *, name: str, structured_output: bool):
         system_prompt = system_prompt,
         middleware = [
             middlewares.middleware.ToolAllowlistMiddleware(
-                frozenset({domains.bd.distill.schemas.ReportReviewOutput.__name__})
+                frozenset({domains.bd.distill.ai.schemas.ReportReviewOutput.__name__})
                 if structured_output
                 else frozenset(),
             ),

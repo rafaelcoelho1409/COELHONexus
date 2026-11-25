@@ -9,11 +9,11 @@ from langgraph.runtime import Runtime
 
 
 async def publish_retrieval_index(
-    state: graphs.rag.states.ProcessedBookIndexState,
-    runtime: Runtime[graphs.rag.entities.ProcessedBookIndexDependencies],
+    state: graphs.rag.index.states.ProcessedBookIndexState,
+    runtime: Runtime[graphs.rag.index.entities.ProcessedBookIndexDependencies],
 ) -> dict[str, Any]:
     context = runtime.context
-    return await graphs.rag.service.run_index_node(
+    return await graphs.rag.index.service.run_index_node(
         context,
         "publish_retrieval_index",
         lambda: domains.bd.rag.ai.publication.service.publish_index(

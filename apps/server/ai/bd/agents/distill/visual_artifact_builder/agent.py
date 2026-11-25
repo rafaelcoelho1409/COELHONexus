@@ -54,7 +54,7 @@ def visual_artifact_builder(model = None):
                 exit_behavior = "end",
             ),
         ],
-        response_format = domains.bd.distill.schemas.VisualArtifactOutput,
+        response_format = domains.bd.distill.ai.schemas.VisualArtifactOutput,
         skills = [skills.domain.source_for("distill_visual_artifact_builder")],
         permissions = [
             FilesystemPermission(

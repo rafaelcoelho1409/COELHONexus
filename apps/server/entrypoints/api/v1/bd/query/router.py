@@ -1,10 +1,10 @@
 """BD Query workbench routes."""
 from __future__ import annotations
+from . import schemas, service
 
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 
-from . import schemas, service
 
 router = APIRouter()
 

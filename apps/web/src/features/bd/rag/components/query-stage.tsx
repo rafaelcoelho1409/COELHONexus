@@ -14,6 +14,7 @@ import { fetchQueryLabels, runRawQuery, saveQueryHistory } from "../api";
 import { useQueryAi } from "../hooks/use-query-ai";
 import { QUERY_BACKENDS, QUERY_SCAFFOLDS, type QueryBackend } from "../params";
 import { type RunState, runStateOf, runStatus } from "../query";
+import { McpToolsCatalog } from "./mcp-tools-catalog";
 import { QueryAiBar } from "./query-ai-bar";
 import { QueryEditor } from "./query-editor";
 import { QueryHistorySheet, queryHistoryKey } from "./query-history-sheet";
@@ -99,6 +100,7 @@ export function QueryStage(): JSX.Element {
   return (
     <div className="flex flex-col gap-4">
       <ContextBar end={<BackendTabs backend={backend} onChange={setBackend} />} />
+      <McpToolsCatalog />
 
       <div
         className={`grid min-w-0 grid-cols-1 items-start gap-4 ${

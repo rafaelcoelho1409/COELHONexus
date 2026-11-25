@@ -12,8 +12,8 @@ def dispatch_chapters(state: graphs.distill.states.DistillRunState) -> list[Send
     refs = state.get("chapter_refs", [])
     if not refs:
         raise ValueError("the completed extraction did not contain readable learning material")
-    size = domains.bd.distill.params.FANOUT_CHAPTER_BATCH_SIZE
-    identity = domains.bd.distill.domain.graph_identity(state)
+    size = domains.bd.distill.ai.params.FANOUT_CHAPTER_BATCH_SIZE
+    identity = domains.bd.distill.ai.domain.graph_identity(state)
     return [
         Send("synthesize_chapter", {**identity, "chapter_batch": refs[index:index + size]})
         for index in range(0, len(refs), size)
@@ -42,7 +42,7 @@ async def prepare_chapters(
                 total_count = total_count,
             )
 
-        result = await domains.bd.distill.synthesize.service.prepare_chapters(
+        result = await domains.bd.distill.ai.synthesize.service.prepare_chapters(
             dependencies.storage,
             graph_state,
             on_unit_progress = report_unit_progress,

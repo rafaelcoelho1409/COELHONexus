@@ -36,6 +36,6 @@ def report_pipeline_entry(state: graphs.distill.states.DistillRunState) -> str:
     target = state.get("replay_target_node")
     if target == "build_chapter_visuals":
         return "skip"
-    if isinstance(target, str) and target in domains.bd.distill.params.REPORT_PIPELINE_NODES:
+    if isinstance(target, str) and target in domains.bd.distill.ai.params.REPORT_PIPELINE_NODES:
         return target
     return "synthesize_book"

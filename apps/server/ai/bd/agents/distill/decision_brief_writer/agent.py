@@ -54,7 +54,7 @@ def decision_brief_writer(model = None):
                 exit_behavior = "end",
             ),
         ],
-        response_format = domains.bd.distill.schemas.DecisionBriefOutput,
+        response_format = domains.bd.distill.ai.schemas.DecisionBriefOutput,
         skills = [skills.domain.source_for("distill_decision_brief_writer")],
         permissions = [
             FilesystemPermission(

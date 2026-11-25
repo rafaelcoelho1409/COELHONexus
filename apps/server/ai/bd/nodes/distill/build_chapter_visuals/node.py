@@ -11,7 +11,7 @@ async def build_chapter_visuals(
     graph_state: graphs.distill.states.DistillRunState,
     runtime: Runtime[graphs.distill.entities.DistillDependencies],
 ) -> dict:
-    if graph_state.get("replay_target_node") in domains.bd.distill.params.REPORT_PIPELINE_NODES:
+    if graph_state.get("replay_target_node") in domains.bd.distill.ai.params.REPORT_PIPELINE_NODES:
         return {}
 
     dependencies = runtime.context

@@ -7,6 +7,7 @@ from typing import Any
 
 from langgraph.config import get_stream_writer
 
+
 ProgressReporter = Callable[[dict[str, Any]], Any]
 
 

@@ -1,14 +1,12 @@
 """HTTP orchestration for the BD Query workbench."""
 from __future__ import annotations
+import domains
+from . import schemas
 
 import time
 
 from fastapi import HTTPException, Request
 from fastapi.responses import StreamingResponse
-
-import domains
-
-from . import schemas
 
 
 def get_namespaces() -> dict:

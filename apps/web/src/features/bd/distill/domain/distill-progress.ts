@@ -14,7 +14,8 @@ export const DISTILL_NODES = [
   {
     id: "extract_unit",
     label: "Extract lessons",
-    detail: "Find source-supported claims, methods, evidence, and examples in each learning unit.",
+    detail:
+      "Find source-supported claims, methods, evidence, and examples; try one bounded repair when a quotation does not resolve to the page.",
     reads: ["Learning units", "Source page references"],
     writes: ["Candidate lessons", "Exact evidence quotes"],
     llm: "Learning Extractor for each new unit.",
@@ -27,7 +28,8 @@ export const DISTILL_NODES = [
   {
     id: "verify_unit",
     label: "Verify evidence",
-    detail: "Check whether each exact source passage supports its proposed lesson.",
+    detail:
+      "Check whether each source passage supports its proposed lesson; retain uncertain lessons as unverified for review.",
     reads: ["Candidate lessons", "Exact evidence quotes"],
     writes: ["Verified lessons", "Evidence review flags"],
     llm: "Evidence Verifier for each unit with supported lesson candidates.",
@@ -40,7 +42,8 @@ export const DISTILL_NODES = [
   {
     id: "prepare_chapters",
     label: "Map chapters",
-    detail: "Group source-backed lessons by chapter and topic while preserving their source locations.",
+    detail:
+      "Map chapter boundaries from processed contents, ignore front-matter headings, and flag empty or uncertain source sections.",
     reads: ["Verified lessons", "Book chapter outline"],
     writes: ["Chapter lesson groups"],
     llm: "No LLM calls. This stage deterministically groups persisted, source-backed lessons.",
@@ -63,13 +66,13 @@ export const DISTILL_NODES = [
     id: "review_chapter_coverage",
     label: "Review chapter coverage",
     detail:
-      "Check each chapter guide against its source-backed learning objectives and lessons, and record any gaps.",
+      "Check each chapter against its source lessons, apply up to two evidence-grounded corrections, and re-review until it converges or needs manual review.",
     reads: ["Chapter guides", "Verified lessons", "Learning objectives"],
-    writes: ["Chapter coverage reviews", "Uncovered objectives and lessons"],
-    llm: "Report Reviewer checks each chapter guide against its cited source evidence.",
+    writes: ["Chapter corrections", "Final coverage review and unresolved gaps"],
+    llm: "Report Reviewer audits each chapter; Chapter Synthesizer makes bounded corrections when needed.",
     resources: {
-      agents: ["report_reviewer"],
-      skills: ["report-reviewer"],
+      agents: ["report_reviewer", "chapter_synthesizer"],
+      skills: ["report-reviewer", "chapter-synthesizer"],
       tools: ["read_file"],
     },
   },
@@ -116,7 +119,7 @@ export const DISTILL_NODES = [
   {
     id: "research_context",
     label: "Add current context",
-    detail: "Optionally gather dated external context, kept separate from claims about the book.",
+    detail: "Gather dated external context when enabled, kept separate from claims about the book.",
     reads: ["Whole-book synthesis", "Configured search connection"],
     writes: ["Separately attributed research appendix"],
     llm: "Research Analyst when research is enabled.",
@@ -137,18 +140,70 @@ export const DISTILL_NODES = [
   },
 ] as const;
 
+export type DistillNode = (typeof DISTILL_NODES)[number];
+
+export const DISTILL_REPORT_PIPELINE_NODE_IDS = [
+  "synthesize_book",
+  "research_context",
+  "write_decision_brief",
+] as const;
+
+/** Top-level nodes registered in the compiled Distill LangGraph. */
+export const DISTILL_LANGGRAPH_NODES = [
+  { id: "prepare_units", kind: "stage" },
+  { id: "extract_unit", kind: "stage" },
+  { id: "verify_unit", kind: "stage" },
+  { id: "prepare_chapters", kind: "stage" },
+  { id: "synthesize_chapter", kind: "stage" },
+  { id: "review_chapter_coverage", kind: "stage" },
+  {
+    id: "dispatch_parallel_stages",
+    kind: "control",
+    label: "Dispatch parallel stages",
+    detail:
+      "After chapter coverage review, choose the chapter-visual and report branches. Both branches can run in parallel.",
+  },
+  { id: "build_chapter_visuals", kind: "stage" },
+  {
+    id: "report_pipeline",
+    kind: "subgraph",
+    label: "Report pipeline",
+    detail:
+      "This compiled subgraph runs book synthesis, current-context research, and the decision brief in sequence. Open it to inspect its internal LangGraph.",
+  },
+  { id: "publish_report", kind: "stage" },
+] as const;
+
+export type DistillLangGraphNode = (typeof DISTILL_LANGGRAPH_NODES)[number];
+
 export const DISTILL_CONNECTIONS = [
   { source: "prepare_units", target: "extract_unit" },
+  {
+    source: "prepare_units",
+    target: "prepare_chapters",
+    sourceHandle: "source-right",
+    targetHandle: "target-right",
+  },
   { source: "extract_unit", target: "verify_unit" },
+  {
+    source: "extract_unit",
+    target: "prepare_chapters",
+    sourceHandle: "source-right",
+    targetHandle: "target-right",
+  },
   { source: "verify_unit", target: "prepare_chapters" },
   { source: "prepare_chapters", target: "synthesize_chapter" },
   { source: "synthesize_chapter", target: "review_chapter_coverage" },
-  { source: "review_chapter_coverage", target: "build_chapter_visuals" },
-  { source: "review_chapter_coverage", target: "synthesize_book" },
+  { source: "review_chapter_coverage", target: "dispatch_parallel_stages" },
+  { source: "dispatch_parallel_stages", target: "build_chapter_visuals" },
+  { source: "dispatch_parallel_stages", target: "report_pipeline" },
+  { source: "build_chapter_visuals", target: "publish_report" },
+  { source: "report_pipeline", target: "publish_report" },
+] as const;
+
+export const DISTILL_REPORT_PIPELINE_CONNECTIONS = [
   { source: "synthesize_book", target: "research_context" },
   { source: "research_context", target: "write_decision_brief" },
-  { source: "build_chapter_visuals", target: "publish_report" },
-  { source: "write_decision_brief", target: "publish_report" },
 ] as const;
 
 export const DISTILL_POSITIONS = {
@@ -158,26 +213,39 @@ export const DISTILL_POSITIONS = {
   prepare_chapters: { x: 284, y: 514 },
   synthesize_chapter: { x: 284, y: 680 },
   review_chapter_coverage: { x: 284, y: 846 },
-  build_chapter_visuals: { x: 16, y: 1012 },
-  synthesize_book: { x: 418, y: 1012 },
-  research_context: { x: 418, y: 1178 },
-  write_decision_brief: { x: 418, y: 1344 },
-  publish_report: { x: 284, y: 1510 },
+  dispatch_parallel_stages: { x: 284, y: 1012 },
+  build_chapter_visuals: { x: 16, y: 1178 },
+  report_pipeline: { x: 552, y: 1178 },
+  publish_report: { x: 284, y: 1344 },
 } as const;
 
-export type DistillNode = (typeof DISTILL_NODES)[number];
+export const DISTILL_REPORT_PIPELINE_POSITIONS = {
+  synthesize_book: { x: 284, y: 16 },
+  research_context: { x: 284, y: 182 },
+  write_decision_brief: { x: 284, y: 348 },
+} as const;
 
 export const DISTILL_USAGE_COUNTERS: Partial<Record<DistillNode["id"], readonly string[]>> = {
   extract_unit: ["learning_extractor"],
   verify_unit: ["evidence_verifier"],
   synthesize_chapter: ["chapter_synthesizer"],
-  review_chapter_coverage: ["report_reviewer"],
+  review_chapter_coverage: ["report_reviewer", "chapter_coverage_corrector"],
   build_chapter_visuals: ["visual_artifact_builder"],
   synthesize_book: ["book_synthesizer"],
   write_decision_brief: ["decision_brief_writer"],
   research_context: ["research_analyst"],
   publish_report: ["report_reviewer"],
 };
+
+/** Usage attributed to the report subgraph is the sum of its three contained stages. */
+export const DISTILL_REPORT_PIPELINE_USAGE_COUNTERS: readonly string[] =
+  DISTILL_REPORT_PIPELINE_NODE_IDS.flatMap((nodeId) => DISTILL_USAGE_COUNTERS[nodeId] ?? []);
+
+/** The dispatcher has no model call of its own; these are the branches it schedules. */
+export const DISTILL_DISPATCH_USAGE_COUNTERS: readonly string[] = [
+  "visual_artifact_builder",
+  ...DISTILL_REPORT_PIPELINE_USAGE_COUNTERS,
+];
 
 export function distillNodeViews(
   status: DistillRun["status"] | null,
@@ -195,6 +263,77 @@ export function distillNodeViews(
       progress: nodeProgress(node.id, nodeStatus, progress),
     };
   });
+}
+
+export function distillLangGraphNodeViews(
+  status: DistillRun["status"] | null,
+  progress: DistillRun["progress"] | null,
+): AgenticNodeView[] {
+  const stageViews = new Map(distillNodeViews(status, progress).map((view) => [view.id, view]));
+  const reportStatuses = DISTILL_REPORT_PIPELINE_NODE_IDS.map((nodeId) =>
+    distillNodeStatus(nodeId, status, progress),
+  );
+  const reportStatus = reportPipelineStatus(status, reportStatuses);
+  const reportDone = reportStatuses.filter((nodeStatus) => nodeStatus === "done").length;
+  const reportCurrentNode = DISTILL_NODES.find((node) => node.id === progress?.current_node);
+  const visualStatus = distillNodeStatus("build_chapter_visuals", status, progress);
+  const reviewStatus = distillNodeStatus("review_chapter_coverage", status, progress);
+  const dispatchStarted = visualStatus !== "pending" || reportStatus !== "pending";
+  const dispatchStatus = dispatchStarted
+    ? "done"
+    : reviewStatus === "done" && status === "running"
+      ? "running"
+      : reviewStatus === "done" && status === "failed"
+        ? "failed"
+        : reviewStatus === "done" && status === "done"
+          ? "done"
+          : "pending";
+
+  return DISTILL_LANGGRAPH_NODES.map((node) => {
+    if (node.kind === "stage") {
+      const stageView = stageViews.get(node.id);
+      return stageView ? { ...stageView, replayable: true } : emptyLangGraphNodeView(node.id, node.id);
+    }
+    if (node.kind === "control") {
+      return {
+        ...emptyLangGraphNodeView(node.id, node.label),
+        status: dispatchStatus,
+        liveLine: dispatchStatus === "running" ? "Choosing parallel branches" : null,
+        replayable: true,
+      };
+    }
+
+    return {
+      ...emptyLangGraphNodeView(node.id, node.label),
+      status: reportStatus,
+      kpi: reportDone > 0 ? `${reportDone}/${DISTILL_REPORT_PIPELINE_NODE_IDS.length} report stages` : null,
+      liveLine: reportStatus === "running" ? (reportCurrentNode?.label ?? "Report stages active") : null,
+      replayable: true,
+    };
+  });
+}
+
+function emptyLangGraphNodeView(id: string, label: string): AgenticNodeView {
+  return {
+    id,
+    label,
+    status: "pending",
+    kpi: null,
+    liveLine: null,
+    resources: { agents: [], skills: [], tools: [] },
+    progress: null,
+  };
+}
+
+function reportPipelineStatus(
+  runStatus: DistillRun["status"] | null,
+  nodeStatuses: readonly AgenticNodeStatus[],
+): AgenticNodeStatus {
+  if (nodeStatuses.includes("failed")) return "failed";
+  if (nodeStatuses.every((nodeStatus) => nodeStatus === "done")) return "done";
+  if (nodeStatuses.includes("running")) return "running";
+  if (runStatus === "running" && nodeStatuses.includes("done")) return "running";
+  return "pending";
 }
 
 function nodeProgress(
@@ -286,11 +425,10 @@ export function distillNodeStatus(
   status: DistillRun["status"] | null,
   progress: DistillRun["progress"] | null,
 ): AgenticNodeStatus {
-  if (status === "done") return "done";
-
   const recorded = progress?.node_status[nodeId];
   if (recorded === "done") return "done";
   if (recorded === "failed") return "failed";
+  if (status === "done" && (!progress || Object.keys(progress.node_status).length === 0)) return "done";
 
   const current = progress?.current_node === nodeId;
   if (status === "failed") return current ? "failed" : "pending";
@@ -306,7 +444,7 @@ export function distillBoardCaption(
 ): string {
   if (status === null) return "Select a stage to inspect its inputs and outputs.";
   if (status === "queued") return "Run queued · waiting for a worker.";
-  if (status === "done") return `${DISTILL_NODES.length} of ${DISTILL_NODES.length} stages complete.`;
+  if (status === "done") return "Learning Guide published.";
   if (status === "cancelled") return "Run stopped before the Learning Guide was published.";
   if (status === "failed") {
     const failed = DISTILL_NODES.find((node) => distillNodeStatus(node.id, status, progress) === "failed");

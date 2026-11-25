@@ -15,10 +15,10 @@ def distill_graph(
 ):
     """Compile the resumable Distill workflow with bounded retries for provider failures."""
     provider_retry_policy = RetryPolicy(
-        max_attempts = domains.bd.distill.params.TRANSIENT_NODE_RETRY_ATTEMPTS,
-        initial_interval = domains.bd.distill.params.TRANSIENT_NODE_RETRY_INITIAL_INTERVAL_S,
+        max_attempts = domains.bd.distill.ai.params.TRANSIENT_NODE_RETRY_ATTEMPTS,
+        initial_interval = domains.bd.distill.ai.params.TRANSIENT_NODE_RETRY_INITIAL_INTERVAL_S,
         backoff_factor = 2.0,
-        max_interval = domains.bd.distill.params.TRANSIENT_NODE_RETRY_MAX_INTERVAL_S,
+        max_interval = domains.bd.distill.ai.params.TRANSIENT_NODE_RETRY_MAX_INTERVAL_S,
         jitter = True,
         retry_on = domains.settings.chat.domain.is_transient_provider_error,
     )
@@ -87,7 +87,7 @@ def distill_graph(
         nodes.distill.review_chapter_coverage.node.review_chapter_coverage,
     )
     workflow.add_node(
-        domains.bd.distill.params.PARALLEL_DISPATCH_NODE,
+        domains.bd.distill.ai.params.PARALLEL_DISPATCH_NODE,
         nodes.distill.synthesize_chapter.node.prepare_parallel_stages,
     )
     workflow.add_node(
@@ -123,9 +123,9 @@ def distill_graph(
     )
     # Fan-in all chapter synthesis Send tasks before running coverage review once.
     workflow.add_edge("synthesize_chapter", "review_chapter_coverage")
-    workflow.add_edge("review_chapter_coverage", domains.bd.distill.params.PARALLEL_DISPATCH_NODE)
+    workflow.add_edge("review_chapter_coverage", domains.bd.distill.ai.params.PARALLEL_DISPATCH_NODE)
     workflow.add_conditional_edges(
-        domains.bd.distill.params.PARALLEL_DISPATCH_NODE,
+        domains.bd.distill.ai.params.PARALLEL_DISPATCH_NODE,
         nodes.distill.synthesize_chapter.node.dispatch_parallel_stages,
         ["build_chapter_visuals", "report_pipeline"],
     )

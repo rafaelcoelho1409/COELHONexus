@@ -26,7 +26,7 @@ async def publish_report(
             total_count = total_count,
         )
 
-    return await domains.bd.distill.publish_report.service.publish_report(
+    return await domains.bd.distill.ai.publish_report.service.publish_report(
         dependencies.storage,
         state,
         review_report = review_report,

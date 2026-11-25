@@ -27,11 +27,19 @@ import {
   useDistillRuns,
   useSaveContentSelection,
 } from "../hooks/use-distill-data";
-import { DISTILL_CANCEL_RETRY_MS, DISTILL_RUN_PARAM, distillHref, distillStudyHref } from "../params";
+import {
+  DISTILL_CANCEL_RETRY_MS,
+  DISTILL_RUN_PARAM,
+  distillHref,
+  distillStudyHref,
+  STUDY_VIEW_PARAM,
+  type StudyViewId,
+} from "../params";
 import { DistillNodeBoard } from "./distill-node-board";
 import { DistillOutputPanel } from "./distill-output-panel";
 import { DistillProcessProgress } from "./distill-process-progress";
 import { DistillProgressPanel } from "./distill-progress-panel";
+import { StudyContextBar } from "./study-navbar";
 
 export function DistillPage() {
   return <DistillWorkspacePage view="agents" />;
@@ -44,15 +52,17 @@ export function DistillStudyPage() {
 function DistillWorkspacePage({ view }: { view: "agents" | "study" }) {
   return (
     <BdOverlaysProvider>
-      <Suspense
-        fallback={
-          <p className="p-4 text-sm text-muted-foreground">
-            {view === "study" ? "Loading Study…" : "Loading Distill…"}
-          </p>
-        }
-      >
-        <DistillStage view={view} />
-      </Suspense>
+      <div className={view === "study" ? "bd-pages-workspace flex min-h-0 flex-1 flex-col" : "min-w-0"}>
+        <Suspense
+          fallback={
+            <p className="p-4 text-sm text-muted-foreground">
+              {view === "study" ? "Loading Study…" : "Loading Distill…"}
+            </p>
+          }
+        >
+          <DistillStage view={view} />
+        </Suspense>
+      </div>
     </BdOverlaysProvider>
   );
 }
@@ -62,34 +72,44 @@ function DistillStage({ view }: { view: "agents" | "study" }) {
   const params = useSearchParams();
   const bookId = params.get(BOOK_PARAM);
   const requestedRunId = params.get(DISTILL_RUN_PARAM);
+  const studyView: StudyViewId = params.get(STUDY_VIEW_PARAM) === "selection" ? "selection" : "guide";
   const library = useLibrary();
   const selectedBook = library.data?.find((book) => book.book_id === bookId);
-  return (
-    <div className="min-w-0">
-      <ContextBar
-        pinned
-        start={
-          <>
-            <LibraryPicker
-              selected={bookId}
-              onOpen={(id) => router.push(view === "study" ? distillStudyHref(id) : distillHref(id))}
-              showActions={false}
-            />
-            {selectedBook ? (
-              <p className="text-xs text-muted-foreground">
-                {selectedBook.n_pages} {bookUnits(selectedBook.filename).plural}
-              </p>
-            ) : null}
-          </>
+  const contextBarStart = (
+    <>
+      <LibraryPicker
+        selected={bookId}
+        onOpen={(id) =>
+          router.push(view === "study" ? distillStudyHref(id, null, null, studyView) : distillHref(id))
         }
+        showActions={false}
       />
-      <div className="mx-auto w-full max-w-screen-2xl p-4">
+      {selectedBook ? (
+        <p className="text-xs text-muted-foreground">
+          {selectedBook.n_pages} {bookUnits(selectedBook.filename).plural}
+        </p>
+      ) : null}
+    </>
+  );
+  return (
+    <div className={view === "study" ? "flex min-h-0 min-w-0 flex-1 flex-col" : "min-w-0"}>
+      {view === "study" ? (
+        <StudyContextBar bookId={bookId} start={contextBarStart} />
+      ) : (
+        <ContextBar pinned start={contextBarStart} />
+      )}
+      <div
+        className={
+          view === "study" ? "flex min-h-0 min-w-0 flex-1 flex-col" : "mx-auto w-full max-w-screen-2xl p-4"
+        }
+      >
         {bookId ? (
           <DistillBookStage
             key={`${bookId}:${view}`}
             bookId={bookId}
             requestedRunId={requestedRunId}
             view={view}
+            studyView={studyView}
           />
         ) : (
           <section
@@ -133,10 +153,12 @@ function DistillBookStage({
   bookId,
   requestedRunId,
   view,
+  studyView,
 }: {
   bookId: string;
   requestedRunId: string | null;
   view: "agents" | "study";
+  studyView: StudyViewId;
 }) {
   const snapshot = useSnapshot(bookId);
 
@@ -161,18 +183,28 @@ function DistillBookStage({
   }
 
   const book = snapshot.data;
-  return <DistillWorkspaceView bookId={bookId} requestedRunId={requestedRunId} view={view} book={book} />;
+  return (
+    <DistillWorkspaceView
+      bookId={bookId}
+      requestedRunId={requestedRunId}
+      view={view}
+      studyView={studyView}
+      book={book}
+    />
+  );
 }
 
 function DistillWorkspaceView({
   bookId,
   requestedRunId,
   view,
+  studyView,
   book,
 }: {
   bookId: string;
   requestedRunId: string | null;
   view: "agents" | "study";
+  studyView: StudyViewId;
   book: BookSnapshot;
 }) {
   const router = useRouter();
@@ -578,6 +610,7 @@ function DistillWorkspaceView({
       onSaveSelection={savePageSelection}
       run={selected}
       runState={selectedState}
+      studyView={studyView}
       streamStatus={stream.status}
       runsPending={runs.isPending}
       runsError={runs.isError ? runs.error : null}
@@ -588,10 +621,10 @@ function DistillWorkspaceView({
   return (
     <section
       aria-label={view === "study" ? "Study workspace" : "Distill Agents workspace"}
-      className="min-w-0"
+      className={view === "study" ? "flex min-h-0 min-w-0 flex-1 flex-col" : "min-w-0"}
     >
       {view === "study" ? (
-        <div className="min-w-0">{outputPanel}</div>
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col">{outputPanel}</div>
       ) : (
         <div className="mt-4 min-w-0 space-y-4">
           <DistillNodeBoard

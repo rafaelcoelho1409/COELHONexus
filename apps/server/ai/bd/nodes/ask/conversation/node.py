@@ -1,6 +1,5 @@
 """LangGraph adapter for corpus-free BD Ask replies."""
 from __future__ import annotations
-
 from . import service
 from .... import graphs
 

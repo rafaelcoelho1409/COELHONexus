@@ -140,7 +140,7 @@ export function AgenticNodeList({
               ) : null}
               {row.progress ? <AgenticNodeProgressBar label={row.label} progress={row.progress} /> : null}
             </button>
-            {onPlay ? (
+            {onPlay && row.replayable !== false ? (
               <AgenticReplayButton
                 label={row.label}
                 onPlay={() => onPlay(row.id)}

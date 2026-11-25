@@ -18,7 +18,7 @@ async def review_packet(
     *,
     run_id: str,
     context_kind: str = "chapter",
-) -> domains.bd.distill.schemas.ReportReviewOutput:
+) -> domains.bd.distill.ai.schemas.ReportReviewOutput:
     """Try structured review once, then one bounded JSON fallback if needed."""
     return await asyncio.wait_for(
         _review_packet(
@@ -37,7 +37,7 @@ async def _review_packet(
     *,
     run_id: str,
     context_kind: str,
-) -> domains.bd.distill.schemas.ReportReviewOutput:
+) -> domains.bd.distill.ai.schemas.ReportReviewOutput:
     packet_json = json.dumps(packet, ensure_ascii = False)
     text_fallback_packet = (
         f"Review packet JSON:\n{packet_json}\n\n"
@@ -69,7 +69,7 @@ async def _review_packet(
                         "callbacks": [domains.settings.llm_counter.service.LLMCounterCallback()],
                     }),
                     attempts = params.PROVIDER_CALL_ATTEMPTS,
-                    wait_base_s = domains.bd.distill.params.AGENT_CALL_RETRY_WAIT_BASE_S,
+                    wait_base_s = domains.bd.distill.ai.params.AGENT_CALL_RETRY_WAIT_BASE_S,
                 )
 
         try:
@@ -84,8 +84,8 @@ async def _review_packet(
             if mode == "structured":
                 continue
             raise
-        review = domains.bd.distill.domain.report_review_from_agent_result(result)
-        if isinstance(review, domains.bd.distill.schemas.ReportReviewOutput):
+        review = domains.bd.distill.ai.domain.report_review_from_agent_result(result)
+        if isinstance(review, domains.bd.distill.ai.schemas.ReportReviewOutput):
             return review
 
         response_messages = result.get("messages") if isinstance(result, Mapping) else None

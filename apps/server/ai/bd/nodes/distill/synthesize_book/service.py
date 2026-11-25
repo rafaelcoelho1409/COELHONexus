@@ -14,12 +14,12 @@ logger = logging.getLogger(__name__)
 def _fallback_book_synthesis(
     batch: list[dict[str, Any]],
     allowed_citation_ids: list[str],
-) -> domains.bd.distill.schemas.BookSynthesis:
+) -> domains.bd.distill.ai.schemas.BookSynthesis:
     """Build a source-grounded whole-book summary from completed chapter guides."""
     allowed_ids = set(allowed_citation_ids)
     thesis_parts: list[str] = []
     thesis_ids: list[str] = []
-    takeaways: list[domains.bd.distill.schemas.ChapterLesson] = []
+    takeaways: list[domains.bd.distill.ai.schemas.ChapterLesson] = []
     seen_takeaways: set[tuple[str, str]] = set()
 
     for guide in batch:
@@ -61,7 +61,7 @@ def _fallback_book_synthesis(
                 continue
             seen_takeaways.add(identity)
             attribution = item.get("attribution")
-            takeaways.append(domains.bd.distill.schemas.ChapterLesson(
+            takeaways.append(domains.bd.distill.ai.schemas.ChapterLesson(
                 title = title.strip()[:180],
                 explanation = explanation.strip()[:3000],
                 attribution = attribution if attribution in ("book", "agent_inference") else "book",
@@ -92,7 +92,7 @@ def _fallback_book_synthesis(
     if len(thesis) > 2500:
         thesis = thesis[:2499].rsplit(" ", 1)[0].rstrip(" ,;:") + "…"
 
-    return domains.bd.distill.schemas.BookSynthesis(
+    return domains.bd.distill.ai.schemas.BookSynthesis(
         central_thesis = thesis,
         central_thesis_attribution = "agent_inference",
         central_thesis_learning_unit_ids = thesis_ids[:24],
@@ -104,7 +104,7 @@ def _fallback_book_synthesis(
 
 
 def _book_synthesis_learning_unit_ids(
-    synthesis: domains.bd.distill.schemas.BookSynthesis,
+    synthesis: domains.bd.distill.ai.schemas.BookSynthesis,
 ) -> set[str]:
     """Collect every source citation emitted by a whole-book synthesis."""
     ids = set(synthesis.central_thesis_learning_unit_ids)
@@ -124,11 +124,11 @@ async def _synthesize_book_batch_with_llm(
     prompt: str,
     allowed_citation_ids: list[str],
     source_guides: list[dict[str, Any]],
-) -> domains.bd.distill.schemas.BookSynthesis:
+) -> domains.bd.distill.ai.schemas.BookSynthesis:
     """Use the whole-book DeepAgent with bounded retries for its structured contract."""
     system_prompt = prompts.distill.book_synthesizer.prompts.SYSTEM_PROMPT
     user_request = prompt.removeprefix(system_prompt).strip()
-    attempts = domains.bd.distill.params.BOOK_AGENT_RESPONSE_ATTEMPTS
+    attempts = domains.bd.distill.ai.params.BOOK_AGENT_RESPONSE_ATTEMPTS
     allowed_ids = set(allowed_citation_ids)
     last_error: Exception | None = None
     for attempt in range(attempts):
@@ -143,7 +143,7 @@ async def _synthesize_book_batch_with_llm(
             "allowed_learning_unit_ids": allowed_citation_ids,
         }
         if mode == "text_fallback":
-            payload["output_contract"] = domains.bd.distill.schemas.BookSynthesisOutput.model_json_schema()
+            payload["output_contract"] = domains.bd.distill.ai.schemas.BookSynthesisOutput.model_json_schema()
         result: Any = None
         issues: list[str] = []
         if attempt or mode == "text_fallback":
@@ -173,12 +173,12 @@ async def _synthesize_book_batch_with_llm(
             ):
                 result = await domains.settings.chat.service.resilient_ainvoke(
                     invoke_with_payload,
-                    attempts = domains.bd.distill.params.AGENT_CALL_ATTEMPTS,
-                    wait_base_s = domains.bd.distill.params.AGENT_CALL_RETRY_WAIT_BASE_S,
+                    attempts = domains.bd.distill.ai.params.AGENT_CALL_ATTEMPTS,
+                    wait_base_s = domains.bd.distill.ai.params.AGENT_CALL_RETRY_WAIT_BASE_S,
                 )
-            output = domains.bd.distill.domain.book_synthesis_output_from_agent_result(result)
+            output = domains.bd.distill.ai.domain.book_synthesis_output_from_agent_result(result)
             if output is not None:
-                synthesis = domains.bd.distill.schemas.BookSynthesis.model_validate(
+                synthesis = domains.bd.distill.ai.schemas.BookSynthesis.model_validate(
                     output.model_dump(mode = "json"),
                 )
                 unsupported_ids = _book_synthesis_learning_unit_ids(synthesis) - allowed_ids
@@ -191,7 +191,7 @@ async def _synthesize_book_batch_with_llm(
                 )
                 issues = [str(last_error)]
             else:
-                issues = domains.bd.distill.domain.book_synthesis_validation_issues(result)
+                issues = domains.bd.distill.ai.domain.book_synthesis_validation_issues(result)
                 last_error = ValueError(
                     "BookSynthesisOutput validation failed: " + ", ".join(issues),
                 )
@@ -253,7 +253,7 @@ async def synthesize_book(
     )
     for ref in ordered_refs:
         artifact = json.loads(await storage.read_text(ref["artifact_key"]))
-        chapter = domains.bd.distill.schemas.ChapterSynthesis.model_validate(artifact["synthesis"])
+        chapter = domains.bd.distill.ai.schemas.ChapterSynthesis.model_validate(artifact["synthesis"])
         chapter_summaries.append({
             "chapter_id": ref["chapter_id"],
             "title": artifact["title"],
@@ -287,7 +287,7 @@ async def synthesize_book(
     if not chapter_summaries:
         raise ValueError("book synthesis has no completed chapter guides")
 
-    batch_size = domains.bd.distill.params.MAX_BOOK_SYNTHESIS_BATCH_SIZE
+    batch_size = domains.bd.distill.ai.params.MAX_BOOK_SYNTHESIS_BATCH_SIZE
     remaining_batches = len(chapter_summaries)
     total_batches = 0
     while remaining_batches > 0:
@@ -306,8 +306,8 @@ async def synthesize_book(
     level = 0
     while True:
         batches = [
-            current[index:index + domains.bd.distill.params.MAX_BOOK_SYNTHESIS_BATCH_SIZE]
-            for index in range(0, len(current), domains.bd.distill.params.MAX_BOOK_SYNTHESIS_BATCH_SIZE)
+            current[index:index + domains.bd.distill.ai.params.MAX_BOOK_SYNTHESIS_BATCH_SIZE]
+            for index in range(0, len(current), domains.bd.distill.ai.params.MAX_BOOK_SYNTHESIS_BATCH_SIZE)
         ]
         next_level = []
         for batch_index, batch in enumerate(batches):
@@ -328,7 +328,7 @@ async def synthesize_book(
                     f"batch {batch_index + 1} of {len(batches)}"
                 ),
             )
-            key = domains.bd.distill.keys.synthesis_key(state["book_id"], state["run_id"], level, batch_index)
+            key = domains.bd.distill.ai.keys.synthesis_key(state["book_id"], state["run_id"], level, batch_index)
             if await storage.exists(key):
                 record = json.loads(await storage.read_text(key))
                 expected_inputs = [item.get("chapter_id", item.get("synthesis_id")) for item in batch]
@@ -345,7 +345,7 @@ async def synthesize_book(
                         persisted_inputs[:3] if isinstance(persisted_inputs, list) else persisted_inputs,
                     )
                     raise ValueError("a persisted whole-book synthesis batch has different inputs")
-                synthesis = domains.bd.distill.schemas.BookSynthesis.model_validate(record["synthesis"])
+                synthesis = domains.bd.distill.ai.schemas.BookSynthesis.model_validate(record["synthesis"])
                 self_ids = set(record["unit_ids"])
                 referenced_ids = set(synthesis.central_thesis_learning_unit_ids)
                 for item in [*synthesis.key_takeaways, *synthesis.cross_chapter_connections, *synthesis.limitations]:
@@ -358,7 +358,7 @@ async def synthesize_book(
                     raise ValueError("a persisted whole-book synthesis contains unresolved source IDs")
                 next_level.append({
                     **record,
-                    "summary": domains.bd.distill.synthesize.domain.book_summary(synthesis),
+                    "summary": domains.bd.distill.ai.synthesize.domain.book_summary(synthesis),
                 })
                 await graphs.service.report_node_item_progress(
                     dependencies.progress_callback,
@@ -370,9 +370,9 @@ async def synthesize_book(
                 continue
 
             unit_ids = sorted({unit_id for item in batch for unit_id in item["unit_ids"]})
-            citation_ids, prompt_guides = domains.bd.distill.synthesize.domain.book_synthesis_context(
+            citation_ids, prompt_guides = domains.bd.distill.ai.synthesize.domain.book_synthesis_context(
                 batch,
-                domains.bd.distill.params.MAX_BOOK_SYNTHESIS_CONTEXT_CITATION_IDS,
+                domains.bd.distill.ai.params.MAX_BOOK_SYNTHESIS_CONTEXT_CITATION_IDS,
             )
             if not citation_ids:
                 raise ValueError("whole-book synthesis batch has no cited summary evidence")
@@ -419,12 +419,12 @@ async def synthesize_book(
             }
             await storage.write(
                 key,
-                domains.bd.distill.domain.json_body(record),
-                content_type = domains.bd.distill.params.JSON_TYPE,
+                domains.bd.distill.ai.domain.json_body(record),
+                content_type = domains.bd.distill.ai.params.JSON_TYPE,
             )
             next_level.append({
                 **record,
-                "summary": domains.bd.distill.synthesize.domain.book_summary(synthesis),
+                "summary": domains.bd.distill.ai.synthesize.domain.book_summary(synthesis),
             })
             await graphs.service.report_node_item_progress(
                 dependencies.progress_callback,
@@ -434,7 +434,7 @@ async def synthesize_book(
                 total_count = total_batches,
             )
         if len(next_level) == 1:
-            synthesis_key = domains.bd.distill.keys.synthesis_key(
+            synthesis_key = domains.bd.distill.ai.keys.synthesis_key(
                 state["book_id"], state["run_id"], level, 0,
             )
             return {"book_synthesis_key": synthesis_key}

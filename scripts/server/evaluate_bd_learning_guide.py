@@ -26,13 +26,13 @@ def main() -> int:
     parser = argparse.ArgumentParser(description = "Evaluate paired human reviews of Book Distiller reports.")
     parser.add_argument("reviews", type = Path, help = "JSONL file using the documented HumanLearningReview fields")
     arguments = parser.parse_args()
-    review_type = domains.bd.distill.evaluation.HumanLearningReview
+    review_type = domains.bd.distill.ai.evaluation.HumanLearningReview
     reviews = [
         review_type.model_validate_json(line)
         for line in arguments.reviews.read_text(encoding = "utf-8").splitlines()
         if line.strip()
     ]
-    result = domains.bd.distill.evaluation.aggregate_human_reviews(reviews)
+    result = domains.bd.distill.ai.evaluation.aggregate_human_reviews(reviews)
     print(json.dumps(result, ensure_ascii = False, indent = 2, sort_keys = True))
     return 0 if result["small_beta_gate_passed"] else 2
 

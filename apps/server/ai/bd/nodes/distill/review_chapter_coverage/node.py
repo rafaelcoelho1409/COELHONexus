@@ -45,7 +45,7 @@ async def review_chapter_coverage(
             total_count,
         )
         semaphore = asyncio.Semaphore(
-            domains.bd.distill.params.COVERAGE_REVIEW_CONCURRENCY,
+            domains.bd.distill.ai.params.COVERAGE_REVIEW_CONCURRENCY,
         )
 
         async def review_one(ref: dict) -> list[dict]:

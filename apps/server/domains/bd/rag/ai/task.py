@@ -101,7 +101,7 @@ def index_processed_book(self, book_id: str, agentic_run_id: str) -> dict:
                 heartbeat = asyncio.create_task(renew_execution_lease())
                 await infra.postgres.service.init_checkpointer()
                 checkpointer_initialized = True
-                graph = ai.bd.graphs.rag.graphs.retrieval_index_graph(
+                graph = ai.bd.graphs.rag.index.graphs.retrieval_index_graph(
                     checkpointer = infra.postgres.service.get_checkpointer(),
                 )
                 config = {"configurable": {"thread_id": keys.thread_id(
@@ -246,13 +246,13 @@ def index_processed_book(self, book_id: str, agentic_run_id: str) -> dict:
                     return await runs.service.cancel_requested(book_id, agentic_run_id)
 
                 graph_transformer = (
-                    ai.bd.agents.rag.graph_transformer.agent.graph_transformer(
+                    ai.bd.agents.rag.neo4j.index.agent.graph_transformer(
                         _build_graph_transformer_model(),
                     )
                     if manifest.get("node_status", {}).get("neo4j") != "done"
                     else None
                 )
-                context = ai.bd.graphs.rag.entities.ProcessedBookIndexDependencies(
+                context = ai.bd.graphs.rag.index.entities.ProcessedBookIndexDependencies(
                     storage = storage,
                     graph_transformer = graph_transformer,
                     progress_callback = report_progress,

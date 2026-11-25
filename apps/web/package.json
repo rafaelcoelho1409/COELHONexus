@@ -47,7 +47,7 @@
     "lucide-react": "1.50.0",
     "mdast-util-to-string": "4.0.0",
     "mermaid": "12.2.0",
-    "next": "16.4.3",
+    "next": "16.4.6",
     "react": "19.3.1",
     "react-dom": "19.3.1",
     "react-markdown": "10.1.0",
@@ -83,7 +83,7 @@
     "@vitejs/plugin-react": "6.1.1",
     "culori": "4.0.2",
     "eslint": "9.39.5",
-    "eslint-config-next": "16.4.3",
+    "eslint-config-next": "16.4.6",
     "eslint-plugin-boundaries": "7.3.0",
     "jsdom": "30.1.1",
     "knip": "6.43.0",
@@ -94,6 +94,9 @@
     "vitest": "5.0.3"
   },
   "overrides": {
+    "@ts-morph/common": {
+      "minimatch": "11.0.9"
+    },
     "@hey-api/json-schema-ref-parser": {
       "js-yaml": "4.3.2"
     },

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from ai.bd.tools.search_mcp import domain
+from ai.bd.tools.search import domain
 
 
 class MCPToolArguments:

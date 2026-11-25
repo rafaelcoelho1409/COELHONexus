@@ -17,9 +17,9 @@ async def _build_visual_artifacts(
     run_id: str,
     chapter_id: str,
     payload: dict[str, Any],
-) -> domains.bd.distill.schemas.VisualArtifactOutput:
+) -> domains.bd.distill.ai.schemas.VisualArtifactOutput:
     """Build separately typed visuals, retrying malformed results without weakening citations."""
-    attempts = domains.bd.distill.params.CHAPTER_VISUAL_REPAIR_ATTEMPTS + 1
+    attempts = domains.bd.distill.ai.params.CHAPTER_VISUAL_REPAIR_ATTEMPTS + 1
     last_error: Exception | None = None
     for attempt in range(attempts):
         request = dict(payload)
@@ -32,7 +32,10 @@ async def _build_visual_artifacts(
             request["validation_issue"] = str(payload.get("validation_findings") or "invalid evidence")[:1200]
         try:
             with domains.settings.llm_counter.service.llm_context(
-                ns = "bd", run_id = run_id, node_id = "visual_artifact_builder", stage = "distill",
+                ns = "bd",
+                run_id = run_id,
+                node_id = "visual_artifact_builder",
+                stage = "distill",
             ):
                 result = await domains.settings.chat.service.resilient_ainvoke(
                     lambda: dependencies.visual_artifact_builder.ainvoke({
@@ -44,14 +47,14 @@ async def _build_visual_artifacts(
                     }, config = {
                         "callbacks": [domains.settings.llm_counter.service.LLMCounterCallback()],
                     }),
-                    attempts = domains.bd.distill.params.AGENT_CALL_ATTEMPTS,
-                    wait_base_s = domains.bd.distill.params.AGENT_CALL_RETRY_WAIT_BASE_S,
+                    attempts = domains.bd.distill.ai.params.AGENT_CALL_ATTEMPTS,
+                    wait_base_s = domains.bd.distill.ai.params.AGENT_CALL_RETRY_WAIT_BASE_S,
                 )
-            visuals = domains.bd.distill.domain.structured_model_from_agent_result(
+            visuals = domains.bd.distill.ai.domain.structured_model_from_agent_result(
                 result,
-                domains.bd.distill.schemas.VisualArtifactOutput,
+                domains.bd.distill.ai.schemas.VisualArtifactOutput,
             )
-            if isinstance(visuals, domains.bd.distill.schemas.VisualArtifactOutput):
+            if isinstance(visuals, domains.bd.distill.ai.schemas.VisualArtifactOutput):
                 return visuals
             last_error = ValueError("visual-artifact DeepAgent returned no valid VisualArtifactOutput")
         except Exception as error:  # noqa: BLE001 — optional visuals cannot invalidate an otherwise sound guide.
@@ -99,14 +102,14 @@ async def build_chapter_visuals(
         raise ValueError("chapter visual artifact has an unknown generation status")
 
     chapter_input = json.loads(await storage.read_text(ref["input_key"]))
-    units = await domains.bd.distill.synthesize.service.read_learning_units(
+    units = await domains.bd.distill.ai.synthesize.service.read_learning_units(
         storage,
         state["book_id"],
         state["run_id"],
         ref["unit_ids"],
         ref.get("unit_sources") or chapter_input.get("unit_sources"),
     )
-    synthesis = domains.bd.distill.schemas.ChapterSynthesis.model_validate(artifact["synthesis"])
+    synthesis = domains.bd.distill.ai.schemas.ChapterSynthesis.model_validate(artifact["synthesis"])
     allowed_ids = set(ref["unit_ids"])
     visual_request: dict[str, Any] = {
         "section": chapter_input,
@@ -170,8 +173,8 @@ async def build_chapter_visuals(
     visual_request["source_figure_context"] = source_figure_context
 
     async def retain_verified_source_figures(
-        visuals: domains.bd.distill.schemas.VisualArtifactOutput,
-    ) -> domains.bd.distill.schemas.VisualArtifactOutput:
+        visuals: domains.bd.distill.ai.schemas.VisualArtifactOutput,
+    ) -> domains.bd.distill.ai.schemas.VisualArtifactOutput:
         selected = []
         seen = set()
         for figure in visuals.source_figures:
@@ -203,14 +206,14 @@ async def build_chapter_visuals(
                     )
                     continue
                 verified_source_text_by_page[figure.page_number] = source_text
-            if not domains.bd.distill.domain.quote_is_supported(figure.caption, source_text):
+            if not domains.bd.distill.ai.domain.quote_is_supported(figure.caption, source_text):
                 visual_review_flags.append(
                     f"A source figure on page {figure.page_number} was omitted because its caption was not found verbatim."
                 )
                 continue
             seen.add(identity)
             selected.append(figure.model_dump(mode = "python"))
-        return domains.bd.distill.schemas.VisualArtifactOutput.model_validate({
+        return domains.bd.distill.ai.schemas.VisualArtifactOutput.model_validate({
             **visuals.model_dump(mode = "python"),
             "source_figures": selected,
         })
@@ -230,7 +233,7 @@ async def build_chapter_visuals(
             visual_request,
         )
         visual_output = await retain_verified_source_figures(visual_output)
-        synthesis = domains.bd.distill.synthesize.domain.merge_visual_artifacts(synthesis, visual_output)
+        synthesis = domains.bd.distill.ai.synthesize.domain.merge_visual_artifacts(synthesis, visual_output)
     except Exception as error:  # noqa: BLE001 — optional visuals cannot invalidate the saved chapter guide.
         visual_generation_unavailable = True
         visual_review_flags.append(
@@ -243,8 +246,8 @@ async def build_chapter_visuals(
             type(error).__name__,
         )
 
-    visual_issues = domains.bd.distill.synthesize.domain.visual_evidence_issues(synthesis, units)
-    for _ in range(domains.bd.distill.params.CHAPTER_VISUAL_REPAIR_ATTEMPTS):
+    visual_issues = domains.bd.distill.ai.synthesize.domain.visual_evidence_issues(synthesis, units)
+    for _ in range(domains.bd.distill.ai.params.CHAPTER_VISUAL_REPAIR_ATTEMPTS):
         if not visual_issues:
             break
         visual_request["validation_findings"] = [
@@ -267,7 +270,6 @@ async def build_chapter_visuals(
                 visual_request,
             )
             repaired_visuals = await retain_verified_source_figures(repaired_visuals)
-            repaired_visuals = await retain_verified_source_figures(repaired_visuals)
         except Exception as error:  # noqa: BLE001 — retain the valid guide if optional repairs fail.
             visual_review_flags.append(
                 f"Visual repair could not be completed ({type(error).__name__}); unsupported visuals were omitted."
@@ -279,11 +281,11 @@ async def build_chapter_visuals(
                 type(error).__name__,
             )
             break
-        synthesis = domains.bd.distill.synthesize.domain.merge_visual_artifacts(synthesis, repaired_visuals)
-        visual_issues = domains.bd.distill.synthesize.domain.visual_evidence_issues(synthesis, units)
+        synthesis = domains.bd.distill.ai.synthesize.domain.merge_visual_artifacts(synthesis, repaired_visuals)
+        visual_issues = domains.bd.distill.ai.synthesize.domain.visual_evidence_issues(synthesis, units)
 
     if visual_issues:
-        synthesis, omitted_visual_flags = domains.bd.distill.synthesize.domain.omit_unsupported_visuals(
+        synthesis, omitted_visual_flags = domains.bd.distill.ai.synthesize.domain.omit_unsupported_visuals(
             synthesis, visual_issues,
         )
         visual_review_flags.extend(omitted_visual_flags)
@@ -299,8 +301,8 @@ async def build_chapter_visuals(
     })
     await storage.write(
         ref["artifact_key"],
-        domains.bd.distill.domain.json_body(artifact),
-        content_type = domains.bd.distill.params.JSON_TYPE,
+        domains.bd.distill.ai.domain.json_body(artifact),
+        content_type = domains.bd.distill.ai.params.JSON_TYPE,
     )
     await graphs.service.report(
         dependencies.progress_callback,

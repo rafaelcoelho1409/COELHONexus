@@ -433,6 +433,7 @@ export type AgenticNodeView = {
   liveLine: string | null;
   resources: AgenticNodeResources;
   progress: AgenticNodeProgress | null;
+  replayable?: boolean;
 };
 
 function agenticNodeProgress(

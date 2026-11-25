@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import domains
-from ai.bd.nodes.rag.neo4j_index import service
+from ai.bd.nodes.rag.neo4j.index import service
 
 
 class Neo4jIndexNodeTests(unittest.IsolatedAsyncioTestCase):

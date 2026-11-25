@@ -18,6 +18,8 @@ for name, value in {"REDIS_HOST": "localhost", "REDIS_PORT": "6379", "REDIS_PASS
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "server"))
 import entrypoints  # noqa: E402
 import main as nexus  # noqa: E402
+from entrypoints.mcp.deployment import params as mcp_params  # noqa: E402
+from entrypoints.mcp.components import bd as mcp_bd  # noqa: E402
 
 import httpx  # noqa: E402
 import uvicorn  # noqa: E402
@@ -43,15 +45,21 @@ def check_edge_settings() -> None:
     assert domain.host_origin_protection([]) == "auto"
     assert domain.host_origin_protection(["svc"]) is True
     assert entrypoints.api.params.CORS_ORIGINS == ["*"] or "CORS_ORIGINS" in os.environ
-    assert [t for t in dir(entrypoints.mcp.tools) if not t.startswith("_")] == ["annotations", "system"]
+    assert hasattr(mcp_bd, "registry")
 
 
 async def run_checks(base: str) -> None:
     async with Client(f"{base}/mcp") as client:
         tools = await client.list_tools()
-        assert [t.name for t in tools] == ["ping"], tools
-        result = await client.call_tool("ping", {})
-        assert result.data == {"status": "ok"}, result
+        expected = []
+        if mcp_params.MCP_PROFILE in {"local_demo", "protected"}:
+            expected.extend([
+                "bd_search_elasticsearch",
+                "bd_search_qdrant",
+                "bd_search_neo4j",
+                "bd_search_web",
+            ])
+        assert {t.name for t in tools} == set(expected), tools
 
     async with httpx.AsyncClient(base_url=base) as http:
         r = await http.get("/health")

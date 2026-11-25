@@ -32,9 +32,9 @@ def check(label: str, got, want) -> None:
 
 
 async def verify_gate() -> None:
-    params = domains.bd.distill.params
-    service = domains.bd.distill.service
-    task = domains.bd.distill.task.run_distill
+    params = domains.bd.distill.ai.params
+    service = domains.bd.distill.ai.service
+    task = domains.bd.distill.ai.task.run_distill
     old_flag = params.DISTILL_EXECUTION_ENABLED
     old_create = service.create_distill_run
     old_resume = service.queue_resume

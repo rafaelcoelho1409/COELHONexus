@@ -23,7 +23,7 @@ TASK_INCLUDE = [
     "domains.bd.ingestion.source.task",
     "domains.bd.ingestion.ai.task",
     "domains.bd.rag.ai.task",
-    "domains.bd.distill.task",
+    "domains.bd.distill.ai.task",
     "domains.ycs.ingestion.extract.task",
     "domains.ycs.ingestion.qdrant_task.task",
     "domains.ycs.ingestion.neo4j_task.task",

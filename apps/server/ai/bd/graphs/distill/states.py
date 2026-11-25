@@ -29,19 +29,20 @@ class DistillRunState(TypedDict, total = False):
     replay_target_node: str | None
     title: str
     source_chapters: list[dict[str, Any]]
-    source_pages: list[domains.bd.distill.entities.SourcePage]
-    unit_refs: list[domains.bd.distill.entities.UnitRef]
-    extracted_units: Annotated[list[domains.bd.distill.entities.UnitRef], operator.add]
-    completed_units: Annotated[list[domains.bd.distill.entities.UnitRef], operator.add]
-    unit_ref: domains.bd.distill.entities.UnitRef
-    unit_batch: list[domains.bd.distill.entities.UnitRef]
-    chapter_refs: list[domains.bd.distill.entities.ChapterRef]
-    report_chapters: list[domains.bd.distill.entities.ChapterRef]
-    synthesized_chapters: Annotated[list[domains.bd.distill.entities.ChapterRef], operator.add]
-    reviewed_chapters: Annotated[list[domains.bd.distill.entities.ChapterRef], operator.add]
-    completed_chapters: Annotated[list[domains.bd.distill.entities.ChapterRef], operator.add]
-    chapter_ref: domains.bd.distill.entities.ChapterRef
-    chapter_batch: list[domains.bd.distill.entities.ChapterRef]
+    chapter_mapping_notes: list[str]
+    source_pages: list[domains.bd.distill.ai.entities.SourcePage]
+    unit_refs: list[domains.bd.distill.ai.entities.UnitRef]
+    extracted_units: Annotated[list[domains.bd.distill.ai.entities.UnitRef], operator.add]
+    completed_units: Annotated[list[domains.bd.distill.ai.entities.UnitRef], operator.add]
+    unit_ref: domains.bd.distill.ai.entities.UnitRef
+    unit_batch: list[domains.bd.distill.ai.entities.UnitRef]
+    chapter_refs: list[domains.bd.distill.ai.entities.ChapterRef]
+    report_chapters: list[domains.bd.distill.ai.entities.ChapterRef]
+    synthesized_chapters: Annotated[list[domains.bd.distill.ai.entities.ChapterRef], operator.add]
+    reviewed_chapters: Annotated[list[domains.bd.distill.ai.entities.ChapterRef], operator.add]
+    completed_chapters: Annotated[list[domains.bd.distill.ai.entities.ChapterRef], operator.add]
+    chapter_ref: domains.bd.distill.ai.entities.ChapterRef
+    chapter_batch: list[domains.bd.distill.ai.entities.ChapterRef]
     book_synthesis_key: str
     decision_brief_key: str
     research_context_key: str

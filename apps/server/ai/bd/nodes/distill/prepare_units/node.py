@@ -33,8 +33,8 @@ def dispatch_units(state: graphs.distill.states.DistillRunState) -> list[Send] |
     refs = state.get("unit_refs", [])
     if not refs:
         return "prepare_chapters"
-    size = domains.bd.distill.params.FANOUT_UNIT_BATCH_SIZE
-    identity = domains.bd.distill.domain.graph_identity(state)
+    size = domains.bd.distill.ai.params.FANOUT_UNIT_BATCH_SIZE
+    identity = domains.bd.distill.ai.domain.graph_identity(state)
     return [
         Send("extract_unit", {**identity, "unit_batch": refs[index:index + size]})
         for index in range(0, len(refs), size)
@@ -57,7 +57,7 @@ async def prepare_units(
                 total_count = total_count,
             )
 
-        result = await domains.bd.distill.extract_learning_units.service.prepare_units(
+        result = await domains.bd.distill.ai.extract_learning_units.service.prepare_units(
             dependencies.storage,
             graph_state,
             on_page_progress = report_page_progress,
