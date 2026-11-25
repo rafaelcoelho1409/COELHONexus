@@ -13,14 +13,14 @@ from langgraph.checkpoint.memory import InMemorySaver
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "server"))
 
 from ai.bd.agents import schemas
-from ai.bd.nodes.ingestion.metadata_normalization.service import _fallback_title, _matches_filename_label
-from ai.bd.nodes.ingestion.repair_pages.domain import (
+from ai.bd.nodes.ingestion.main.normalize_metadata.service import _fallback_title, _matches_filename_label
+from ai.bd.nodes.ingestion.subgraphs.content_repair.repair_pages.domain import (
     apply_mechanical_fixes,
     apply_mechanical_fixes_for_issues,
     apply_proposals,
 )
-from ai.bd.nodes.ingestion.repair_pages.domain import validate_proposals
-from ai.bd.nodes.ingestion.audit_batch.domain import sanitize_assessment
+from ai.bd.nodes.ingestion.subgraphs.content_repair.repair_pages.domain import validate_proposals
+from ai.bd.nodes.ingestion.main.audit_batch.domain import sanitize_assessment
 from domains.bd.ingestion.ai.inventory.domain import assess_page, build_repair_context, effective_length, merge_issues
 import domains
 import infra

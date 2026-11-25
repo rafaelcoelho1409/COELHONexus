@@ -20,7 +20,7 @@ from deepagents import HarnessProfile, register_harness_profile
 from ai.bd import tools
 from ai.bd.agents import schemas
 from ai.bd.agents.ingestion import structure_repair, text_repair
-from ai.bd.nodes.ingestion.repair_pages import domain, service
+from ai.bd.nodes.ingestion.subgraphs.content_repair.repair_pages import domain, service
 
 
 def check(label: str, got, want) -> None:

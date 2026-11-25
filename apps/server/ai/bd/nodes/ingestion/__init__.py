@@ -1,26 +1,6 @@
-"""LangGraph node implementations for Book Distiller ingestion."""
+"""Nodes owned by the Book Distiller ingestion graph."""
 from __future__ import annotations
 
-from . import (
-    audit_batch,
-    content_classification,
-    materialize_processed_book,
-    metadata_normalization,
-    plan_repairs,
-    publish,
-    reconcile_contents,
-    repair_pages,
-    visual_enrichment,
-)
+from . import main, subgraphs
 
-__all__ = [
-    "audit_batch",
-    "content_classification",
-    "materialize_processed_book",
-    "metadata_normalization",
-    "plan_repairs",
-    "publish",
-    "reconcile_contents",
-    "repair_pages",
-    "visual_enrichment",
-]
+__all__ = ["main", "subgraphs"]

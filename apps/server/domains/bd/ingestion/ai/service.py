@@ -1140,7 +1140,7 @@ async def queue_ingestion_ai_node_replay(
         if extraction_id != manifest["extraction_run_id"] or source_manifest_sha256 != manifest["source_manifest_sha256"]:
             raise ValueError("the agentic run no longer matches the current extraction")
 
-        graph = ai.bd.graphs.ingestion.graphs.ingestion_graph(
+        graph = ai.bd.graphs.ingestion.service.ingestion_graph(
             checkpointer = infra.postgres.service.get_checkpointer(),
         )
         graph_config = {"configurable": {
@@ -1281,20 +1281,23 @@ async def _checkpoint_before_ingestion_node(
     config: dict[str, Any],
     node_id: str,
 ) -> tuple[dict[str, Any], str | None]:
-    """Find a replay point and the parent to resume when the selected node shares a fork checkpoint."""
-    fork_nodes = {"classify_content", "normalize_metadata"}
+    """Find the root checkpoint that schedules a selected stage or its containing subgraph."""
+    graph_node = params.SUBGRAPH_BY_GRAPH_NODE.get(node_id, node_id)
+    parallel_content_fork = {"content_repair", "normalize_metadata"}
     async for snapshot in graph.aget_state_history(config):
         next_nodes = set(snapshot.next or ())
-        if node_id not in next_nodes:
+        if graph_node not in next_nodes:
             continue
-        if next_nodes == {node_id}:
-            return snapshot.config, None
-        if node_id in fork_nodes and next_nodes == fork_nodes:
+        if graph_node == "content_repair" and next_nodes == parallel_content_fork:
             return snapshot.config, "audit_batch"
+        if graph_node == "normalize_metadata" and next_nodes == parallel_content_fork:
+            return snapshot.config, "audit_batch"
+        if next_nodes == {graph_node}:
+            return snapshot.config, None
         raise ValueError(
-            f"node {node_id!r} shares a checkpoint with unrelated pending nodes and cannot be replayed independently"
+            f"stage {node_id!r} shares a checkpoint with unrelated pending nodes and cannot be replayed independently"
         )
-    raise ValueError(f"no saved checkpoint schedules ingestion node {node_id!r}")
+    raise ValueError(f"no saved checkpoint schedules ingestion stage {node_id!r}")
 
 
 async def mark_ingestion_ai_run_failed(
@@ -1427,7 +1430,7 @@ async def run_page_audit(
     if auditor is None:
         auditor = ai.bd.agents.ingestion.page_auditor.agent.page_auditor()
 
-    audited = await ai.bd.nodes.ingestion.audit_batch.service.audit_page(
+    audited = await ai.bd.nodes.ingestion.main.audit_batch.service.audit_page(
         page_ref,
         markdown,
         auditor,
@@ -1818,7 +1821,7 @@ async def run_ingestion_ai(
             "source_metadata": source_metadata,
             "status": "running",
         }
-        graph = ai.bd.graphs.ingestion.graphs.ingestion_graph(checkpointer = checkpointer)
+        graph = ai.bd.graphs.ingestion.service.ingestion_graph(checkpointer = checkpointer)
         dependencies = ai.bd.graphs.ingestion.entities.IngestionDependencies(
             read_page = storage.read_text,
             write_artifact = write_artifact,
@@ -1846,7 +1849,11 @@ async def run_ingestion_ai(
             if replay_from_node is not None:
                 if replay_from_node not in params.GRAPH_NODES:
                     raise ValueError(f"unknown saved ingestion replay node {replay_from_node!r}")
-                replay_config, _ = await _checkpoint_before_ingestion_node(graph, config, replay_from_node)
+                replay_config, replay_as_node = await _checkpoint_before_ingestion_node(
+                    graph,
+                    config,
+                    replay_from_node,
+                )
                 descendants = set(params.REPLAY_DESCENDANTS[replay_from_node])
                 reset_state: dict[str, Any] = {}
                 if "audit_batch" in descendants:
@@ -1883,10 +1890,9 @@ async def run_ingestion_ai(
                 node_status = (manifest_fields.get("progress") or {}).get("node_status", {})
                 replay_skip_nodes = [
                     replay_node
-                    for replay_node in (
-                        "classify_content", "plan_repairs", "repair_pages", "normalize_metadata",
-                    )
-                    if replay_node not in descendants
+                    for replay_node in params.GRAPH_NODES
+                    if replay_node in params.REPLAY_SKIPPABLE_NODES
+                    and replay_node not in descendants
                     and node_status.get(replay_node) == runs.schemas.AgenticNodeStatus.DONE.value
                 ]
                 reset_state["replay_skip_nodes"] = replay_skip_nodes
@@ -1902,16 +1908,26 @@ async def run_ingestion_ai(
                     "plan_repairs": ("work_items",),
                     "repair_pages": ("page_results",),
                     "normalize_metadata": ("book_metadata", "book_metadata_sha256"),
+                    "materialize_processed_book": (
+                        "processed_book_candidate_key",
+                        "processed_page_count",
+                        "processed_book_revision",
+                    ),
+                    "reconcile_contents": (
+                        "processed_book_key",
+                        "processed_book_sha256",
+                        "contents_status",
+                    ),
                 }
                 for skipped_node in reset_state["replay_skip_nodes"]:
                     for field in replay_state_fields.get(skipped_node, ()):
                         if field in snapshot.values:
                             reset_state[field] = snapshot.values[field]
-                if replay_from_node in {"classify_content", "normalize_metadata"}:
+                if replay_as_node is not None:
                     replay_config = await graph.aupdate_state(
                         replay_config,
                         reset_state,
-                        as_node = "audit_batch",
+                        as_node = replay_as_node,
                     )
                 else:
                     replay_config = await graph.aupdate_state(replay_config, reset_state)

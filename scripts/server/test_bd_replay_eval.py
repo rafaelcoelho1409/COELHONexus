@@ -19,8 +19,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "server"))
 import domains
 import domains.bd.ingestion.ai.params
 from ai.bd.agents import schemas
-from ai.bd.nodes.ingestion.plan_repairs.domain import STRUCTURE_ISSUES, TEXT_ISSUES
-from ai.bd.nodes.ingestion.repair_pages.domain import apply_proposals, validate_proposals
+from ai.bd.nodes.ingestion.subgraphs.content_repair.plan_repairs.domain import STRUCTURE_ISSUES, TEXT_ISSUES
+from ai.bd.nodes.ingestion.subgraphs.content_repair.repair_pages.domain import apply_proposals, validate_proposals
 from domains.bd.ingestion.ai.inventory.domain import build_repair_context
 
 FIXTURE = Path(__file__).parent / "data" / "bd_replay_workflow_1_10.json.gz"

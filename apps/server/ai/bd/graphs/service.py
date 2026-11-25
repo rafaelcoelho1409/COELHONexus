@@ -1,4 +1,4 @@
-"""Progress reporting shared by Book Distiller graphs and their nodes."""
+"""Progress reporting shared by BD agentic graphs and their nodes."""
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable

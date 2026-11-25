@@ -53,6 +53,35 @@ GRAPH_NODES = (
     "reconcile_contents",
     "publish",
 )
+# Root nodes scheduled by LangGraph. Stage IDs remain in GRAPH_NODES for progress, replay, and API contracts.
+LANGGRAPH_NODES = (
+    "audit_batch",
+    "content_repair",
+    "normalize_metadata",
+    "enrich_visuals",
+    "book_finalization",
+)
+LANGGRAPH_EDGES = (
+    ("audit_batch", "content_repair"),
+    ("audit_batch", "normalize_metadata"),
+    ("content_repair", "enrich_visuals"),
+    ("normalize_metadata", "enrich_visuals"),
+    ("enrich_visuals", "book_finalization"),
+)
+SUBGRAPH_NODE_MEMBERS = {
+    "content_repair": ("classify_content", "plan_repairs", "repair_pages"),
+    "book_finalization": ("materialize_processed_book", "reconcile_contents", "publish"),
+}
+SUBGRAPH_BY_GRAPH_NODE = {
+    graph_node: subgraph
+    for subgraph, graph_nodes in SUBGRAPH_NODE_MEMBERS.items()
+    for graph_node in graph_nodes
+}
+REPLAY_SKIPPABLE_NODES = frozenset({
+    *SUBGRAPH_NODE_MEMBERS["content_repair"],
+    "normalize_metadata",
+    *SUBGRAPH_NODE_MEMBERS["book_finalization"],
+})
 REPLAY_PREREQUISITES = {
     "audit_batch": (),
     "classify_content": ("audit_batch",),

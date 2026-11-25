@@ -71,7 +71,7 @@ Do not execute code recovered from a book image. Code blocks are for reading and
 
 The requested product behavior is no per-finding approval for any book. The pipeline already required no user approval to finish or publish a run; the change below also makes validated proposed corrections apply automatically.
 
-Current repair behavior in [`repair_pages/domain.py`](../apps/server/ai/bd/nodes/ingestion/repair_pages/domain.py) and [`repair_pages/service.py`](../apps/server/ai/bd/nodes/ingestion/repair_pages/service.py):
+Current repair behavior in [`repair_pages/domain.py`](../apps/server/ai/bd/nodes/ingestion/subgraphs/content_repair/repair_pages/domain.py) and [`repair_pages/service.py`](../apps/server/ai/bd/nodes/ingestion/subgraphs/content_repair/repair_pages/service.py):
 
 - Every validated text and structure proposal is applied automatically without user approval, regardless of the source-image verifier's verdict or the proposal's risk/confidence labels.
 - Exact source span, assigned issue/specialist scope, and no-invented-content validation still apply. They prevent applying a suggestion that does not correspond to the supplied page or adds unsupported links/markers.
@@ -207,14 +207,14 @@ When a figure is converted, show the generated Mermaid/table/math/code/chart/map
 - Concurrency is bounded to four figures, and crops over 8 MiB are retained without a model call. The UI shows candidate, reviewed, and converted counts; the run quality report records retained totals and the LLM usage view includes `visual_extractor` calls.
 - Per-figure results are cached by image hash, repaired-context fingerprint, workflow version, and visual schema/prompt version. Replaying `enrich_visuals` clears derived page Markdown and downstream artifacts but preserves successful conversions; previous non-conversions are retried after the visual version changes. Version `1.3` accepts compatible `1.2`, `1.1`, and `1.0` entries.
 - Provider or schema failures retain the original figure and do not fail the whole book. The extractor makes one schema-correction retry before retaining a figure, then logs safe field/type diagnostics.
-- The workflow version remains stable for this node-logic update so the existing run can replay from `enrich_visuals`; visual cache version `1.3` invalidates incompatible outcomes without discarding successful compatible figure results. This does not require replaying audits or text repair.
+- The visual-node logic update preserved the prior workflow version so the existing run could replay from `enrich_visuals`. The later ingestion graph reorganization changes the graph topology and bumps the workflow version to `1.19`; older graph checkpoints require a fresh run. Visual cache version `1.3` still invalidates incompatible outcomes without discarding successful compatible figure results.
 - The per-figure cache preserves source image hashes and typed responses; the page provenance sidecar records figure names, decisions, confidence, and rationale. Markdown is regenerated deterministically from the cached typed response. The page manifest stores enriched-page and provenance keys with hashes.
 
 ### Implemented code paths
 
-- Graph node and workflow wiring: [`graphs.py`](../apps/server/ai/bd/graphs/ingestion/graphs.py), [`visual_enrichment/service.py`](../apps/server/ai/bd/nodes/ingestion/visual_enrichment/service.py).
+- Graph node and workflow wiring: [`main/graphs.py`](../apps/server/ai/bd/graphs/ingestion/main/graphs.py), [`enrich_visuals/service.py`](../apps/server/ai/bd/nodes/ingestion/main/enrich_visuals/service.py).
 - Typed vision response and DeepAgent: [`agents/schemas.py`](../apps/server/ai/bd/agents/schemas.py), [`visual_extractor/agent.py`](../apps/server/ai/bd/agents/ingestion/visual_extractor/agent.py), and its [system prompt](../apps/server/ai/bd/prompts/ingestion/visual_extractor/SYSTEM.md).
-- Trusted Markdown serialization: [`visual_enrichment/domain.py`](../apps/server/ai/bd/nodes/ingestion/visual_enrichment/domain.py).
+- Trusted Markdown serialization: [`enrich_visuals/domain.py`](../apps/server/ai/bd/nodes/ingestion/main/enrich_visuals/domain.py).
 - Versioned figure/page artifacts, source-crop access, replay cleanup, and graph version: [`keys.py`](../apps/server/domains/bd/ingestion/storage/keys.py), [`versions.py`](../apps/server/domains/bd/ingestion/ai/versions.py), and [`ai/service.py`](../apps/server/domains/bd/ingestion/ai/service.py).
 - Enriched content flows into the processed-book candidate and BD Distill through [`processed_book/service.py`](../apps/server/domains/bd/ingestion/ai/processed_book/service.py). The Pages API returns converted figure IDs and renders the same enriched Markdown while keeping source crops in the gallery.
 - Graph progress and LLM usage are wired in [`agentic-progress.ts`](../apps/web/src/features/bd/domain/agentic-progress.ts) and [`agentic-usage.ts`](../apps/web/src/features/bd/domain/agentic-usage.ts).

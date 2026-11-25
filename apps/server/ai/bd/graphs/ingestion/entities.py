@@ -1,10 +1,10 @@
 """Ingestion graph entities — what the nodes of one run need."""
 from __future__ import annotations
-from ... import graphs, nodes
+from ... import graphs
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any, NotRequired, TypedDict
+from typing import Any, NotRequired, Protocol, TypedDict
 
 
 PageReader = Callable[[str], str | None | Awaitable[str | None]]
@@ -92,17 +92,39 @@ class IngestionPageResult(TypedDict, total = False):
     converted_figures: list[str]
 
 
+class AgentInvoker(Protocol):
+    """Structured model interface used by ingestion graph stages."""
+
+    async def ainvoke(
+        self,
+        input: dict[str, Any],
+        config: dict[str, Any] | None = None,
+    ) -> dict[str, Any]: ...
+
+
+class SpecialistInvoker(Protocol):
+    """Specialist agent interface that accepts page repair context."""
+
+    async def ainvoke(
+        self,
+        input: dict[str, Any],
+        config: dict[str, Any] | None = None,
+        *,
+        context: Any | None = None,
+    ) -> dict[str, Any]: ...
+
+
 @dataclass(frozen = True, slots = True)
 class IngestionDependencies:
-    """What the nodes of one run need, handed to them as the graph's `context`: where pages and artifacts live, the agents, and where progress goes."""
+    """Runtime inputs for graph nodes: page and artifact access, agents, and progress reporting."""
 
     read_page: PageReader
     write_artifact: ArtifactWriter
     artifact_exists: ArtifactExists
-    auditor: nodes.ingestion.audit_batch.service.Auditor
-    specialists: dict[str, nodes.ingestion.repair_pages.service.Specialist]
-    metadata_normalizer: nodes.ingestion.metadata_normalization.service.Normalizer
-    content_classifier: nodes.ingestion.content_classification.service.ContentClassifier
+    auditor: AgentInvoker
+    specialists: dict[str, SpecialistInvoker]
+    metadata_normalizer: AgentInvoker
+    content_classifier: AgentInvoker
     progress_callback: graphs.service.ProgressReporter | None = None
     cancel_check: CancelCheck | None = None
     finding_verifier: Any | None = None

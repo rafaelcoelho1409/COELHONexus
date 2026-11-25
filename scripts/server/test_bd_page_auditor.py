@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "server"))
 import domains.bd.ingestion.ai  # noqa: F401  (the agent factories read its params at build time)
 from ai.bd.agents import schemas
 from ai.bd.agents.ingestion.page_auditor import agent as auditor_agent
-from ai.bd.nodes.ingestion.audit_batch.service import audit_page
+from ai.bd.nodes.ingestion.main.audit_batch.service import audit_page
 
 
 def check(label: str, got, want) -> None:
