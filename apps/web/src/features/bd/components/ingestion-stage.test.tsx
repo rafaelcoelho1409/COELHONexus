@@ -171,14 +171,14 @@ describe("Library", () => {
     expect(firstItem).toHaveTextContent("A Newer Book");
     expect(items[1]).toHaveTextContent("A Broken Book");
     expect(items[2]).toHaveTextContent("An Older Book");
-    expect(firstItem).toHaveClass("grid-cols-[minmax(0,1fr)_auto_auto]");
+    expect(firstItem).toHaveClass("grid-cols-[minmax(0,1fr)_auto]");
     expect(within(firstItem).getByRole("button", { name: /^A Newer Book/ })).toHaveClass("min-w-0");
     expect(firstItem).toHaveTextContent("extracting");
     expect(firstItem).toHaveTextContent("3/9 pages");
     expect(firstItem).toHaveTextContent("PDF · 3/9 pages · 18 MB");
     expect(items[1]).toHaveTextContent("failed");
-    expect(within(list).getByRole("button", { name: "Refresh A Newer Book" })).toBeDisabled();
-    expect(within(list).getByRole("button", { name: "Refresh An Older Book" })).toBeEnabled();
+    expect(within(list).getByRole("button", { name: "Delete A Newer Book" })).toBeDisabled();
+    expect(within(list).getByRole("button", { name: "Delete An Older Book" })).toBeEnabled();
     await userEvent.click(within(list).getByRole("button", { name: /^A Newer Book/ }));
     expect(push).toHaveBeenCalledWith("/bd/ingestion?book=new", { scroll: false });
   });
@@ -611,7 +611,7 @@ describe("A book being extracted", () => {
     );
     expect(screen.queryByRole("button", { name: "Extract again" })).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: BOOK_TITLE }));
-    expect(screen.getByRole("button", { name: `Refresh ${BOOK_TITLE}` })).toBeEnabled();
+    expect(screen.getByRole("button", { name: `Delete ${BOOK_TITLE}` })).toBeEnabled();
     await userEvent.click(screen.getByRole("button", { name: BOOK_TITLE }));
     expect(
       within(screen.getByRole("region", { name: "Docling extraction progress" })).getByRole("button", {
@@ -1236,26 +1236,13 @@ describe("A book being extracted", () => {
     expect(await screen.findByText(/Resuming the extraction where it stopped/)).toBeInTheDocument();
   });
 
-  it("refreshes a finished book from its library dropdown option", async () => {
-    const runs: string[] = [];
+  it("does not offer a refresh action in the library dropdown", async () => {
     serveLibrary([bookRow({ status: "done", pages_done: 9 })]);
-    serveBook(snapshot({ status: "done", pages: [pageEntry(1)] }, null));
-    server.use(
-      http.get(`${API}/${BOOK_ID}/pages/1`, () =>
-        HttpResponse.json({ book_id: BOOK_ID, page: 1, markdown: "First page" }),
-      ),
-      http.post(`${API}/${BOOK_ID}/run`, ({ request }) => {
-        runs.push(new URL(request.url).search);
-        return HttpResponse.json(queued);
-      }),
-    );
     renderStage(BOOK_ID);
 
     await userEvent.click(await screen.findByRole("button", { name: BOOK_TITLE }));
-    await userEvent.click(screen.getByRole("button", { name: `Refresh ${BOOK_TITLE}` }));
-    await waitFor(() => expect(runs).toEqual(["?refresh=true"]));
-    expect(push).toHaveBeenCalledWith(`/bd/ingestion?book=${BOOK_ID}`, { scroll: false });
-    expect(await screen.findByText("Extraction queued.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: `Refresh ${BOOK_TITLE}` })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: `Delete ${BOOK_TITLE}` })).toBeEnabled();
   });
 
   it("reconnects when the stream drops, and the replay does not double anything", async () => {
@@ -1308,7 +1295,7 @@ describe("A finished book", () => {
     await userEvent.click(screen.getByRole("button", { name: "Show outline" }));
     expect(screen.queryByRole("button", { name: "Extract again" })).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: BOOK_TITLE }));
-    expect(screen.getByRole("button", { name: `Refresh ${BOOK_TITLE}` })).toBeEnabled();
+    expect(screen.getByRole("button", { name: `Delete ${BOOK_TITLE}` })).toBeEnabled();
     await userEvent.click(screen.getByRole("button", { name: /^p\. 3\b/ }));
     expect(await screen.findByText("480 ms")).toBeInTheDocument();
     expect(fetched).toEqual(["1", "3"]);

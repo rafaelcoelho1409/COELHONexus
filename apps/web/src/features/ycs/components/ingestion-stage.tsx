@@ -48,7 +48,7 @@ const IDLE_STEPS: ReadonlyArray<Step> = [
   {
     key: "neo4j",
     title: "Phase 4 · Neo4j",
-    defaultHint: "LLMGraphTransformer extraction, transcript-evidence validation, and Neo4j graph writes.",
+    defaultHint: "Docling Graph extraction, transcript-evidence validation, and Neo4j graph writes.",
     reads: ["Transcripts", "Video metadata"],
     writes: ["Knowledge graph", "Evidence-linked relationships"],
     view: { state: "pending", pct: 0, label: "Waiting", hint: null },

@@ -10,7 +10,7 @@ class RetrievalGraphState(TypedDict, total = False):
     elasticsearch_result: dict[str, Any]
     qdrant_result: dict[str, Any]
     neo4j_result: dict[str, Any]
-    search_mcp_result: dict[str, Any]
+    web_search_result: dict[str, Any]
     evidence: list[dict[str, Any]]
     source_status: dict[str, str]
     source_queries: dict[str, list[str]]

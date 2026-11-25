@@ -12,7 +12,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 
 def graph_batches(rows: list[dict[str, Any]]) -> list[tuple[str, list[dict[str, Any]]]]:
-    """Split processed page text into chapter-scoped transformer documents."""
+    """Split processed page text into chapter-scoped extraction batches."""
     splitter = RecursiveCharacterTextSplitter(
         chunk_size = params.GRAPH_BATCH_CHARS // 2,
         chunk_overlap = 240,
@@ -61,43 +61,16 @@ def source_material(rows: list[dict[str, Any]]) -> str:
     )
 
 
-def graph_facts(candidate: Any) -> dict[str, list[dict[str, Any]]]:
-    """Convert LangChain's GraphDocument into plain facts for the storage layer."""
-    entities: list[dict[str, str]] = []
-    for node in _value(candidate, "nodes", []) or []:
-        name = _string_value(_value(node, "id"))
-        entity_type = _string_value(_value(node, "type")) or "Entity"
-        if name:
-            entities.append({"id": name, "type": entity_type})
-
-    relationships: list[dict[str, Any]] = []
-    for relationship in _value(candidate, "relationships", []) or []:
-        source_id = _string_value(_value(_value(relationship, "source"), "id"))
-        target_id = _string_value(_value(_value(relationship, "target"), "id"))
-        relation_type = _string_value(_value(relationship, "type"))
-        if source_id and target_id and relation_type:
-            relationship_properties = _value(relationship, "properties", {})
-            fact = {
-                "source_id": source_id,
-                "target_id": target_id,
-                "type": relation_type,
-                "properties": relationship_properties if isinstance(relationship_properties, dict) else {},
-            }
-            source_type = _string_value(_value(_value(relationship, "source"), "type"))
-            target_type = _string_value(_value(_value(relationship, "target"), "type"))
-            if source_type:
-                fact["source_type"] = source_type
-            if target_type:
-                fact["target_type"] = target_type
-            relationships.append(fact)
-    return {"entities": entities, "relationships": relationships}
-
-
-def _value(candidate: Any, name: str, default: Any = None) -> Any:
-    return candidate.get(name, default) if isinstance(candidate, dict) else getattr(candidate, name, default)
+def graph_facts(extraction: Any) -> dict[str, list[dict[str, Any]]]:
+    """Project Docling Graph's typed extraction into the storage contract."""
+    return {
+        "entities": list(extraction.entities),
+        "relationships": list(extraction.relationships),
+    }
 
 
 def _string_value(value: Any) -> str:
+    """Return a usable evidence string from a graph property value."""
     if isinstance(value, (list, tuple)):
         value = next((item for item in value if item is not None), None)
     return str(value or "").strip()
@@ -287,7 +260,7 @@ def build_graph(
     agentic_run_id: str,
     revision: int,
 ) -> tuple[list[entities.GraphNode], list[entities.GraphEdge]]:
-    """Project source pages, sections, transformer entities, and relations into graph rows."""
+    """Project source pages, sections, extracted entities, and relations into graph rows."""
     nodes: dict[str, entities.GraphNode] = {}
     edges: dict[str, entities.GraphEdge] = {}
     book_node_id = _stable_id(book_id, agentic_run_id, revision, "book", book_id)

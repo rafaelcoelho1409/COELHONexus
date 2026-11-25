@@ -90,11 +90,86 @@ export const DISTILL_NODES = [
     },
   },
   {
+    id: "prepare_retrieval",
+    label: "Plan book retrieval",
+    detail:
+      "Build a concise query from the book title and mapped chapters before querying the pinned Ingestion index.",
+    reads: ["Book title", "Chapter map", "Ingestion retrieval run ID"],
+    writes: ["Book-level retrieval query"],
+    llm: "No LLM call. The query is deterministic and bounded.",
+    resources: { agents: [], skills: [], tools: [] },
+  },
+  {
+    id: "elasticsearch",
+    label: "Retrieve from Elasticsearch",
+    detail:
+      "Use the Elasticsearch specialist and its source-limited MCP tool against the selected book index.",
+    reads: ["Book-level retrieval query", "Pinned Ingestion index"],
+    writes: ["Ranked Elasticsearch passages", "Source status"],
+    llm: "Elasticsearch retrieval DeepAgent using bd_search_elasticsearch.",
+    resources: {
+      agents: ["elasticsearch_retriever"],
+      skills: ["rag-elasticsearch"],
+      tools: ["retrieve_elasticsearch"],
+    },
+  },
+  {
+    id: "qdrant",
+    label: "Retrieve from Qdrant",
+    detail:
+      "Use the Qdrant specialist and its source-limited MCP tool against the selected book index.",
+    reads: ["Book-level retrieval query", "Pinned Ingestion index"],
+    writes: ["Ranked Qdrant passages", "Source status"],
+    llm: "Qdrant retrieval DeepAgent using bd_search_qdrant.",
+    resources: {
+      agents: ["qdrant_retriever"],
+      skills: ["rag-qdrant"],
+      tools: ["retrieve_qdrant"],
+    },
+  },
+  {
+    id: "neo4j",
+    label: "Retrieve from Neo4j",
+    detail:
+      "Use the Neo4j specialist and its source-limited MCP tool against the selected book index.",
+    reads: ["Book-level retrieval query", "Pinned Ingestion index"],
+    writes: ["Ranked graph passages", "Source status"],
+    llm: "Neo4j retrieval DeepAgent using bd_search_neo4j.",
+    resources: {
+      agents: ["neo4j_retriever"],
+      skills: ["rag-neo4j"],
+      tools: ["retrieve_neo4j"],
+    },
+  },
+  {
+    id: "web_search",
+    label: "Web search",
+    detail:
+      "When external research is enabled, use the configured Search MCP to find preliminary leads for the separately attributed research stage.",
+    reads: ["Book-level retrieval query", "Configured Search MCP"],
+    writes: ["Unverified search leads", "Source status"],
+    llm: "Search retrieval DeepAgent using the Settings-selected Search MCP tool.",
+    resources: {
+      agents: ["web_search_retriever"],
+      skills: ["rag-web-search"],
+      tools: ["search_mcp_web"],
+    },
+  },
+  {
+    id: "fuse_evidence",
+    label: "Fuse retrieved evidence",
+    detail: "Merge specialist results deterministically and preserve each source's status and query.",
+    reads: ["Elasticsearch, Qdrant, Neo4j and optional Search MCP results"],
+    writes: ["Fused evidence", "Per-source status and queries"],
+    llm: "No LLM call. Evidence is fused by the shared RAG ranking service.",
+    resources: { agents: [], skills: [], tools: [] },
+  },
+  {
     id: "synthesize_book",
     label: "Connect the book",
     detail:
-      "Connect chapter findings into the book’s thesis, key takeaways, and cross-chapter relationships.",
-    reads: ["Chapter explanations", "Verified lessons"],
+      "Connect chapter findings into the book’s thesis, key takeaways, and cross-chapter relationships, with supplemental retrieval context.",
+    reads: ["Chapter explanations", "Verified lessons", "Retrieved book passages"],
     writes: ["Central thesis", "Key takeaways", "Cross-chapter connections"],
     llm: "Book Synthesizer; its hierarchical batches are reported as they run.",
     resources: {
@@ -142,13 +217,19 @@ export const DISTILL_NODES = [
 
 export type DistillNode = (typeof DISTILL_NODES)[number];
 
-export const DISTILL_REPORT_PIPELINE_NODE_IDS = [
+export const DISTILL_REPORT_STAGE_NODE_IDS = [
+  "prepare_retrieval",
+  "elasticsearch",
+  "qdrant",
+  "neo4j",
+  "web_search",
+  "fuse_evidence",
   "synthesize_book",
   "research_context",
   "write_decision_brief",
 ] as const;
 
-/** Top-level nodes registered in the compiled Distill LangGraph. */
+/** Distill stages as compiled directly in the main LangGraph. */
 export const DISTILL_LANGGRAPH_NODES = [
   { id: "prepare_units", kind: "stage" },
   { id: "extract_unit", kind: "stage" },
@@ -164,13 +245,15 @@ export const DISTILL_LANGGRAPH_NODES = [
       "After chapter coverage review, choose the chapter-visual and report branches. Both branches can run in parallel.",
   },
   { id: "build_chapter_visuals", kind: "stage" },
-  {
-    id: "report_pipeline",
-    kind: "subgraph",
-    label: "Report pipeline",
-    detail:
-      "This compiled subgraph runs book synthesis, current-context research, and the decision brief in sequence. Open it to inspect its internal LangGraph.",
-  },
+  { id: "prepare_retrieval", kind: "stage" },
+  { id: "elasticsearch", kind: "stage" },
+  { id: "qdrant", kind: "stage" },
+  { id: "neo4j", kind: "stage" },
+  { id: "web_search", kind: "stage" },
+  { id: "fuse_evidence", kind: "stage" },
+  { id: "synthesize_book", kind: "stage" },
+  { id: "research_context", kind: "stage" },
+  { id: "write_decision_brief", kind: "stage" },
   { id: "publish_report", kind: "stage" },
 ] as const;
 
@@ -195,15 +278,31 @@ export const DISTILL_CONNECTIONS = [
   { source: "prepare_chapters", target: "synthesize_chapter" },
   { source: "synthesize_chapter", target: "review_chapter_coverage" },
   { source: "review_chapter_coverage", target: "dispatch_parallel_stages" },
-  { source: "dispatch_parallel_stages", target: "build_chapter_visuals" },
-  { source: "dispatch_parallel_stages", target: "report_pipeline" },
-  { source: "build_chapter_visuals", target: "publish_report" },
-  { source: "report_pipeline", target: "publish_report" },
-] as const;
-
-export const DISTILL_REPORT_PIPELINE_CONNECTIONS = [
+  {
+    source: "dispatch_parallel_stages",
+    target: "build_chapter_visuals",
+    sourceHandle: "source-left",
+    targetHandle: "target-right",
+  },
+  {
+    source: "dispatch_parallel_stages",
+    target: "prepare_retrieval",
+    sourceHandle: "source-right",
+    targetHandle: "target-left",
+  },
+  { source: "prepare_retrieval", target: "elasticsearch" },
+  { source: "prepare_retrieval", target: "qdrant" },
+  { source: "prepare_retrieval", target: "neo4j" },
+  { source: "prepare_retrieval", target: "web_search" },
+  { source: "elasticsearch", target: "fuse_evidence" },
+  { source: "qdrant", target: "fuse_evidence" },
+  { source: "neo4j", target: "fuse_evidence" },
+  { source: "web_search", target: "fuse_evidence" },
+  { source: "fuse_evidence", target: "synthesize_book" },
   { source: "synthesize_book", target: "research_context" },
   { source: "research_context", target: "write_decision_brief" },
+  { source: "build_chapter_visuals", target: "publish_report" },
+  { source: "write_decision_brief", target: "publish_report" },
 ] as const;
 
 export const DISTILL_POSITIONS = {
@@ -215,15 +314,28 @@ export const DISTILL_POSITIONS = {
   review_chapter_coverage: { x: 284, y: 846 },
   dispatch_parallel_stages: { x: 284, y: 1012 },
   build_chapter_visuals: { x: 16, y: 1178 },
-  report_pipeline: { x: 552, y: 1178 },
-  publish_report: { x: 284, y: 1344 },
+  prepare_retrieval: { x: 912, y: 1178 },
+  elasticsearch: { x: 544, y: 1344 },
+  qdrant: { x: 792, y: 1344 },
+  neo4j: { x: 1040, y: 1344 },
+  web_search: { x: 1288, y: 1344 },
+  fuse_evidence: { x: 912, y: 1510 },
+  synthesize_book: { x: 912, y: 1676 },
+  research_context: { x: 912, y: 1842 },
+  write_decision_brief: { x: 912, y: 2008 },
+  publish_report: { x: 284, y: 2200 },
 } as const;
 
-export const DISTILL_REPORT_PIPELINE_POSITIONS = {
-  synthesize_book: { x: 284, y: 16 },
-  research_context: { x: 284, y: 182 },
-  write_decision_brief: { x: 284, y: 348 },
-} as const;
+export const DISTILL_GRAPH_GROUPS = [
+  {
+    id: "report_stages_group",
+    label: "Book report stages",
+    x: 520,
+    y: 1148,
+    width: 1000,
+    height: 1040,
+  },
+] as const;
 
 export const DISTILL_USAGE_COUNTERS: Partial<Record<DistillNode["id"], readonly string[]>> = {
   extract_unit: ["learning_extractor"],
@@ -231,20 +343,24 @@ export const DISTILL_USAGE_COUNTERS: Partial<Record<DistillNode["id"], readonly 
   synthesize_chapter: ["chapter_synthesizer"],
   review_chapter_coverage: ["report_reviewer", "chapter_coverage_corrector"],
   build_chapter_visuals: ["visual_artifact_builder"],
+  elasticsearch: ["distill_retrieval_elasticsearch"],
+  qdrant: ["distill_retrieval_qdrant"],
+  neo4j: ["distill_retrieval_neo4j"],
+  web_search: ["distill_retrieval_web_search"],
   synthesize_book: ["book_synthesizer"],
   write_decision_brief: ["decision_brief_writer"],
   research_context: ["research_analyst"],
   publish_report: ["report_reviewer"],
 };
 
-/** Usage attributed to the report subgraph is the sum of its three contained stages. */
-export const DISTILL_REPORT_PIPELINE_USAGE_COUNTERS: readonly string[] =
-  DISTILL_REPORT_PIPELINE_NODE_IDS.flatMap((nodeId) => DISTILL_USAGE_COUNTERS[nodeId] ?? []);
+/** The report branch usage is the sum of its directly compiled stages. */
+export const DISTILL_REPORT_STAGE_USAGE_COUNTERS: readonly string[] =
+  DISTILL_REPORT_STAGE_NODE_IDS.flatMap((nodeId) => DISTILL_USAGE_COUNTERS[nodeId] ?? []);
 
 /** The dispatcher has no model call of its own; these are the branches it schedules. */
 export const DISTILL_DISPATCH_USAGE_COUNTERS: readonly string[] = [
   "visual_artifact_builder",
-  ...DISTILL_REPORT_PIPELINE_USAGE_COUNTERS,
+  ...DISTILL_REPORT_STAGE_USAGE_COUNTERS,
 ];
 
 export function distillNodeViews(
@@ -270,15 +386,12 @@ export function distillLangGraphNodeViews(
   progress: DistillRun["progress"] | null,
 ): AgenticNodeView[] {
   const stageViews = new Map(distillNodeViews(status, progress).map((view) => [view.id, view]));
-  const reportStatuses = DISTILL_REPORT_PIPELINE_NODE_IDS.map((nodeId) =>
-    distillNodeStatus(nodeId, status, progress),
-  );
-  const reportStatus = reportPipelineStatus(status, reportStatuses);
-  const reportDone = reportStatuses.filter((nodeStatus) => nodeStatus === "done").length;
-  const reportCurrentNode = DISTILL_NODES.find((node) => node.id === progress?.current_node);
   const visualStatus = distillNodeStatus("build_chapter_visuals", status, progress);
+  const reportStarted = DISTILL_REPORT_STAGE_NODE_IDS.some(
+    (nodeId) => distillNodeStatus(nodeId, status, progress) !== "pending",
+  );
   const reviewStatus = distillNodeStatus("review_chapter_coverage", status, progress);
-  const dispatchStarted = visualStatus !== "pending" || reportStatus !== "pending";
+  const dispatchStarted = visualStatus !== "pending" || reportStarted;
   const dispatchStatus = dispatchStarted
     ? "done"
     : reviewStatus === "done" && status === "running"
@@ -290,10 +403,6 @@ export function distillLangGraphNodeViews(
           : "pending";
 
   return DISTILL_LANGGRAPH_NODES.map((node) => {
-    if (node.kind === "stage") {
-      const stageView = stageViews.get(node.id);
-      return stageView ? { ...stageView, replayable: true } : emptyLangGraphNodeView(node.id, node.id);
-    }
     if (node.kind === "control") {
       return {
         ...emptyLangGraphNodeView(node.id, node.label),
@@ -302,14 +411,8 @@ export function distillLangGraphNodeViews(
         replayable: true,
       };
     }
-
-    return {
-      ...emptyLangGraphNodeView(node.id, node.label),
-      status: reportStatus,
-      kpi: reportDone > 0 ? `${reportDone}/${DISTILL_REPORT_PIPELINE_NODE_IDS.length} report stages` : null,
-      liveLine: reportStatus === "running" ? (reportCurrentNode?.label ?? "Report stages active") : null,
-      replayable: true,
-    };
+    const stageView = stageViews.get(node.id);
+    return stageView ? { ...stageView, replayable: true } : emptyLangGraphNodeView(node.id, node.id);
   });
 }
 
@@ -323,17 +426,6 @@ function emptyLangGraphNodeView(id: string, label: string): AgenticNodeView {
     resources: { agents: [], skills: [], tools: [] },
     progress: null,
   };
-}
-
-function reportPipelineStatus(
-  runStatus: DistillRun["status"] | null,
-  nodeStatuses: readonly AgenticNodeStatus[],
-): AgenticNodeStatus {
-  if (nodeStatuses.includes("failed")) return "failed";
-  if (nodeStatuses.every((nodeStatus) => nodeStatus === "done")) return "done";
-  if (nodeStatuses.includes("running")) return "running";
-  if (runStatus === "running" && nodeStatuses.includes("done")) return "running";
-  return "pending";
 }
 
 function nodeProgress(

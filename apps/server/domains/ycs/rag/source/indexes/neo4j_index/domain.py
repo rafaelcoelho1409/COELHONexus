@@ -84,8 +84,8 @@ def should_merge_by_cosine(
 
 
 # Three small helpers that harden the entity-resolution pipeline
-# against bad input from `LLMGraphTransformer`:
-#   `coerce_entity_id`   — accept anything the transformer might emit
+# against malformed or ambiguous graph extraction output:
+#   `coerce_entity_id`   — accept anything a graph extractor might emit
 #                          (str, list, tuple, None, int, etc.), return
 #                          a single string. Used at the SOURCE (before
 #                          `add_graph_documents`) so the StringArray
@@ -104,7 +104,7 @@ def should_merge_by_cosine(
 #                          inconsistent short-string cosine. Fix `E`.
 
 def coerce_entity_id(value: Any) -> str:
-    """Coerce whatever `LLMGraphTransformer` emitted as a node `id`
+    """Coerce a graph extraction node `id`
     into a single string. Observed bad shapes:
       - `StringArray` (Python `list`) of alternate-name strings when
         the LLM was uncertain. We take the FIRST element — same
@@ -125,8 +125,8 @@ def coerce_entity_id(value: Any) -> str:
 
 
 def sanitize_neo4j_label(value: Any, fallback: str = "Entity") -> str:
-    """Coerce whatever `LLMGraphTransformer` emitted as a node/relationship
-    `type` into something Neo4j's kernel will actually accept as a label/
+    """Coerce a graph extraction node/relationship `type` into something
+    Neo4j's kernel will actually accept as a label/
     relationship-type token.
 
     2026-09-14: root-caused a live failure —
@@ -229,6 +229,7 @@ def is_overflow_error(err: str | None) -> bool:
         or "context_length" in m or "contextwindow" in m
         or "lengthfinishreasonerror" in m
         or "length limit was reached" in m
+        or "graphoutputlimiterror" in m
         or "finish_reason=length" in m
     )
 
@@ -271,8 +272,8 @@ def validate_graph_candidates(
 ) -> tuple[list[dict[str, str]], list[dict[str, str]], list[str]]:
     """Return bounded graph facts grounded in a transcript.
 
-    Structured transformer output must include exact evidence properties.
-    The provider compatibility path has no property schema, so it instead
+    Structured graph output must include exact evidence properties.
+    Unstructured graph output has no property schema, so it instead
     requires each entity name to occur in the transcript and both relation
     endpoints to occur in one sentence. Graph library objects stay outside
     this functional core; the return values are plain fact dictionaries.

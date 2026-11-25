@@ -25,6 +25,9 @@ class DistillRunControls:
 
 @dataclass(frozen = True, slots = True)
 class DistillDependencies:
+    book_id: str
+    run_id: str
+    ingestion_ai_run_id: str
     storage: infra.minio.service.MinIOStorage
     learning_extractor: Any
     evidence_verifier: Any

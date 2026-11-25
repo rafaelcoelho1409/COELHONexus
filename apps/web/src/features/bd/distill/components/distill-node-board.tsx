@@ -24,13 +24,10 @@ import type { DistillLangGraphNode } from "../domain/distill-progress";
 import {
   DISTILL_CONNECTIONS,
   DISTILL_DISPATCH_USAGE_COUNTERS,
+  DISTILL_GRAPH_GROUPS,
   DISTILL_LANGGRAPH_NODES,
   DISTILL_NODES,
   DISTILL_POSITIONS,
-  DISTILL_REPORT_PIPELINE_CONNECTIONS,
-  DISTILL_REPORT_PIPELINE_NODE_IDS,
-  DISTILL_REPORT_PIPELINE_POSITIONS,
-  DISTILL_REPORT_PIPELINE_USAGE_COUNTERS,
   DISTILL_USAGE_COUNTERS,
   distillBoardCaption,
   distillLangGraphNodeViews,
@@ -99,11 +96,6 @@ export function DistillNodeBoard({
     views.find((view) => view.id === selectedNodeId) ??
     progressViews.find((view) => view.id === selectedNodeId);
   const caption = distillBoardCaption(status, progress);
-  const playLangGraphNode = onPlayNode
-    ? (nodeId: string) => onPlayNode(nodeId === "report_pipeline" ? "synthesize_book" : nodeId)
-    : undefined;
-  const topLevelReplayPendingNodeId =
-    replayPendingNodeId === "synthesize_book" ? "report_pipeline" : replayPendingNodeId;
 
   return (
     <>
@@ -141,23 +133,24 @@ export function DistillNodeBoard({
               <AgenticFlow
                 views={views}
                 onOpenNode={setSelectedNodeId}
-                onPlayNode={playLangGraphNode}
+                onPlayNode={onPlayNode}
                 replayDisabled={replayDisabled}
                 replayPending={replayPending}
-                replayPendingNodeId={topLevelReplayPendingNodeId}
+                replayPendingNodeId={replayPendingNodeId}
                 ariaLabel="Distill pipeline graph"
                 connections={DISTILL_CONNECTIONS}
                 positions={DISTILL_POSITIONS}
+                groups={DISTILL_GRAPH_GROUPS}
               />
             ) : mode === "list" ? (
               <div className="p-3">
                 <AgenticNodeList
                   rows={views}
                   onOpen={setSelectedNodeId}
-                  onPlay={playLangGraphNode}
+                  onPlay={onPlayNode}
                   replayDisabled={replayDisabled}
                   replayPending={replayPending}
-                  replayPendingNodeId={topLevelReplayPendingNodeId}
+                  replayPendingNodeId={replayPendingNodeId}
                   label="Distill pipeline nodes"
                 />
               </div>
@@ -200,21 +193,6 @@ export function DistillNodeBoard({
           replayPendingNodeId={replayPendingNodeId}
           onClose={() => setSelectedNodeId(null)}
         />
-      ) : selectedGraphNode?.kind === "subgraph" ? (
-        <DistillReportPipelineSheet
-          bookId={bookId}
-          runId={runId}
-          runStatus={status}
-          progress={progress}
-          status={selectedView?.status ?? "pending"}
-          kpi={selectedView?.kpi ?? null}
-          onClose={() => setSelectedNodeId(null)}
-          onOpenNode={setSelectedNodeId}
-          onPlayNode={onPlayNode}
-          replayDisabled={replayDisabled}
-          replayPending={replayPending}
-          replayPendingNodeId={replayPendingNodeId}
-        />
       ) : selectedStage ? (
         <DistillNodeSheet
           key={selectedStage.id}
@@ -243,6 +221,10 @@ export function DistillNodeBoard({
             "learning_extractor",
             "evidence_verifier",
             "chapter_synthesizer",
+            "distill_retrieval_elasticsearch",
+            "distill_retrieval_qdrant",
+            "distill_retrieval_neo4j",
+            "distill_retrieval_web_search",
             "visual_artifact_builder",
             "book_synthesizer",
             "decision_brief_writer",
@@ -571,104 +553,6 @@ function DistillControlNodeSheet({
             description="Calls and token counts from the parallel branches scheduled by this node."
             emptyMessage="Usage appears here when Distill has a run."
             noCallsMessage="No LLM calls have been recorded for the dispatched branches."
-          />
-        </TabsContent>
-      </Tabs>
-    </SideSheet>
-  );
-}
-
-function DistillReportPipelineSheet({
-  bookId,
-  runId,
-  runStatus,
-  progress,
-  status,
-  kpi,
-  onClose,
-  onOpenNode,
-  onPlayNode,
-  replayDisabled,
-  replayPending,
-  replayPendingNodeId,
-}: {
-  bookId: string;
-  runId: string | null;
-  runStatus: DistillRun["status"] | null;
-  progress: DistillRun["progress"] | null;
-  status: AgenticNodeStatus;
-  kpi: string | null;
-  onClose: () => void;
-  onOpenNode: (nodeId: string) => void;
-  onPlayNode?: (nodeId: string) => void;
-  replayDisabled: boolean;
-  replayPending: boolean;
-  replayPendingNodeId: string | null;
-}) {
-  const reportNodeIds = new Set<string>(DISTILL_REPORT_PIPELINE_NODE_IDS);
-  const views = distillNodeViews(runStatus, progress)
-    .filter((view) => reportNodeIds.has(view.id))
-    .map((view) => ({ ...view, replayable: true }));
-
-  return (
-    <SideSheet
-      title="Report pipeline"
-      subtitle={
-        <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
-          <AgenticStatusBadge status={status} />
-          <span className="font-mono">distill · report_pipeline</span>
-          {kpi ? <span className="font-medium tabular-nums">{kpi}</span> : null}
-        </span>
-      }
-      closeLabel="Close report pipeline details"
-      onClose={onClose}
-    >
-      <Tabs defaultValue="overview" className="w-full">
-        <TabsList aria-label="Report pipeline details">
-          <TabsTrigger value="overview">Overview</TabsTrigger>
-          <TabsTrigger value="llm-calls">LLM Calls</TabsTrigger>
-        </TabsList>
-        <TabsContent value="overview" className="flex flex-col gap-4 pt-4">
-          <div className="flex items-start justify-between gap-3">
-            <p className="text-sm text-muted-foreground">
-              {runStatus === "done" && status === "pending"
-                ? "This subgraph was not part of the completed run path."
-                : "This view expands the compiled report_pipeline subgraph. Its normal path runs in sequence. A targeted replay may start at a later report stage or skip this subgraph for visual-only work."}
-            </p>
-            {onPlayNode ? (
-              <AgenticReplayButton
-                label="Report pipeline"
-                onPlay={() => onPlayNode("synthesize_book")}
-                pending={replayPending && replayPendingNodeId === "synthesize_book"}
-                disabled={replayDisabled || replayPending}
-              />
-            ) : null}
-          </div>
-          <div className="overflow-hidden rounded-sm border border-border bg-background">
-            <AgenticFlow
-              views={views}
-              onOpenNode={onOpenNode}
-              onPlayNode={onPlayNode}
-              replayDisabled={replayDisabled}
-              replayPending={replayPending}
-              replayPendingNodeId={replayPendingNodeId}
-              ariaLabel="Distill report pipeline LangGraph"
-              connections={DISTILL_REPORT_PIPELINE_CONNECTIONS}
-              positions={DISTILL_REPORT_PIPELINE_POSITIONS}
-              className="h-[min(58vh,680px)] min-h-[360px]"
-              fitView
-            />
-          </div>
-        </TabsContent>
-        <TabsContent value="llm-calls" className="pt-4">
-          <DistillNodeUsage
-            bookId={bookId}
-            runId={runId}
-            runStatus={runStatus}
-            nodeIds={DISTILL_REPORT_PIPELINE_USAGE_COUNTERS}
-            description="Calls and token counts across the stages inside this subgraph."
-            emptyMessage="Usage appears here when Distill has a run."
-            noCallsMessage="No LLM calls have been recorded for this report pipeline."
           />
         </TabsContent>
       </Tabs>

@@ -1,5 +1,5 @@
-from . import agent
+from importlib import import_module
 
-__all__ = ["agent"]
+graph_extractor = import_module(".graph_extractor", __name__)
 
-__all__ = ["agent"]
+__all__ = ["graph_extractor"]

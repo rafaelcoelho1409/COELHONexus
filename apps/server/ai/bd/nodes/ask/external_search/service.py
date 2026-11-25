@@ -73,7 +73,7 @@ async def search_external_evidence(
                 "external_search_provider": connection.provider_id,
                 "external_search_error": "SearchToolUnavailable",
             }
-        arguments = tools.search.domain.search_arguments(
+        arguments = tools.web_search.domain.search_arguments(
             search_tool,
             query,
             str(state.get("turn_id") or state.get("thread_id") or "bd-ask")[:100],
@@ -96,7 +96,7 @@ async def search_external_evidence(
             "external_search_error": type(error).__name__,
         }
 
-    normalized = tools.search.domain.normalize_sources(
+    normalized = tools.web_search.domain.normalize_sources(
         raw,
         provider_id = connection.provider_id,
         query = query,
@@ -108,7 +108,7 @@ async def search_external_evidence(
     async def _read_source(source: dict) -> tuple[str, bool]:
         if read_tool is None:
             return source["snippet"], False
-        arguments = tools.search.domain.source_read_arguments(
+        arguments = tools.web_search.domain.source_read_arguments(
             read_tool,
             source["url"],
             str(state.get("turn_id") or state.get("thread_id") or "bd-ask")[:100],
@@ -124,7 +124,7 @@ async def search_external_evidence(
             raise
         except Exception:
             return source["snippet"], False
-        full_text = tools.search.domain.normalize_source_text(raw_source, params.MAX_SOURCE_CHARS)
+        full_text = tools.web_search.domain.normalize_source_text(raw_source, params.MAX_SOURCE_CHARS)
         return (full_text, True) if len(full_text) >= 120 else (source["snippet"], False)
 
     read_results = await asyncio.gather(*(_read_source(source) for source in source_records))

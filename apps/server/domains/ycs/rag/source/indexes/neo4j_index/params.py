@@ -93,10 +93,9 @@ FUZZ_MERGE_CUTOFF = 75
 # source Document alongside `transcript_sha`. Bump when the extraction
 # prompt/schema changes in a way that makes previously-extracted graphs
 # stale — the skip-on-video_id check then re-extracts instead of
-# trusting outdated entities. This version marks the move from the
-# custom DeepAgent output contract to LLMGraphTransformer with evidence
-# properties.
-EXTRACT_PROMPT_VERSION = 3
+# trusting outdated entities. Bumped for the Docling Graph schema and
+# evidence projection so existing graphs are re-extracted.
+EXTRACT_PROMPT_VERSION = 4
 
 MAX_EXTRACTED_NODES = 150
 MAX_EXTRACTED_RELATIONSHIPS = 300

@@ -110,7 +110,7 @@ async def search_web(query: str, trusted_in_process: bool) -> schemas.RetrievalR
                 status = "unavailable", source = "external_search", query = normalized_query,
                 evidence = [], error_type = "SearchToolUnavailable",
             )
-        arguments = ai.bd.tools.search.domain.search_arguments(
+        arguments = ai.bd.tools.web_search.domain.search_arguments(
             search_tool,
             normalized_query,
             f"bd-mcp-{int(time.time())}",
@@ -133,36 +133,14 @@ async def search_web(query: str, trusted_in_process: bool) -> schemas.RetrievalR
             evidence = [], error_type = type(error).__name__,
         )
 
-    sources = ai.bd.tools.search.domain.normalize_sources(
+    sources = ai.bd.tools.web_search.domain.normalize_sources(
         raw,
         provider_id = connection.provider_id,
         query = normalized_query,
         accessed_at = time.time(),
         limit = params.MAX_WEB_RESULTS,
     )
-    evidence = [
-        {
-            "id": f"external:{item['source_id']}",
-            "text": str(item.get("snippet") or "")[:3000],
-            "score": float(len(sources) - rank),
-            "source": "external_search",
-            "citation": {
-                "title": str(item.get("title") or "External search source"),
-                "url": str(item.get("url") or ""),
-                "book_id": "",
-                "page": None,
-                "chapter": str(item.get("publisher") or ""),
-                "section": "External search",
-                "snippet": str(item.get("snippet") or "")[:1000],
-                "source": "external_search",
-                "provider_id": connection.provider_id,
-                "published_at": item.get("published_at"),
-                "accessed_at": item.get("accessed_at"),
-            },
-        }
-        for rank, item in enumerate(sources)
-        if item.get("source_id") and item.get("url")
-    ]
+    evidence = ai.bd.tools.web_search.domain.to_retrieval_evidence(sources)
     return schemas.RetrievalResult(
         status = "complete" if evidence else "no_results",
         source = "external_search",

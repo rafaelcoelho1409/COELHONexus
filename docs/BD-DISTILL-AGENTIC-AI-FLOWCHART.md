@@ -43,7 +43,7 @@ flowchart TB
     BUILD["Pin processed pages"]
     ES["Elasticsearch<br/>full-text index"]
     QDRANT["Qdrant<br/>vector index"]
-    NEO4J["Neo4j<br/>LLMGraphTransformer graph"]
+    NEO4J["Neo4j<br/>Docling Graph extraction"]
     PUBLISH_RAG["Publish retrieval index"]
     STATUS["Independent status and controls<br/>under Ingestion"]
     CHAT["BD Ask<br/>current book index"]

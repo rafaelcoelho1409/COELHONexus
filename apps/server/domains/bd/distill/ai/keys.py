@@ -26,6 +26,15 @@ def execution_lock_key(book_id: str, run_id: str) -> str:
     return f"coelhonexus:bd:distill:run-execution:{_safe_segment(book_id, 'book_id')}:{_safe_segment(run_id, 'distill_run_id')}"
 
 
+def thread_id(book_id: str, extraction_run_id: str, run_id: str) -> str:
+    """Stable LangGraph checkpoint identity for one Distill run."""
+    return (
+        f"bd-distill:{_safe_segment(book_id, 'book_id')}:"
+        f"{_safe_segment(extraction_run_id, 'extraction_run_id')}:"
+        f"{_safe_segment(run_id, 'distill_run_id')}"
+    )
+
+
 def runs_prefix(book_id: str) -> str:
     return f"bd/books/{_safe_segment(book_id, 'book_id')}/distill/runs/"
 
@@ -73,6 +82,10 @@ def synthesis_key(book_id: str, run_id: str, level: int, batch: int) -> str:
 
 def research_context_key(book_id: str, run_id: str) -> str:
     return f"{run_prefix(book_id, run_id)}synthesis/research-context.json"
+
+
+def retrieval_context_key(book_id: str, run_id: str) -> str:
+    return f"{run_prefix(book_id, run_id)}retrieval/context.json"
 
 
 def decision_brief_key(book_id: str, run_id: str) -> str:

@@ -47,6 +47,12 @@ export type AgenticFlowConnection = {
   feedback?: boolean;
 };
 export type AgenticFlowPosition = { x: number; y: number };
+type AgenticFlowGroup = AgenticFlowPosition & {
+  id: string;
+  label: string;
+  width: number;
+  height: number;
+};
 type AgenticFlowData = {
   nodeId: string;
   label: string;
@@ -61,10 +67,13 @@ type AgenticFlowData = {
   playPending: boolean;
   replayPending: boolean;
 };
-type AgenticFlowNode = Node<AgenticFlowData, "agentic">;
+type AgenticFlowGroupData = { label: string };
+type AgenticFlowStageNode = Node<AgenticFlowData, "agentic">;
+type AgenticFlowGroupNode = Node<AgenticFlowGroupData, "group">;
+type AgenticFlowNode = AgenticFlowStageNode | AgenticFlowGroupNode;
 
 /** The title and metrics remain clickable; replay has its own header cell with no overlapping hit area. */
-function AgenticNodeCard({ data }: NodeProps<AgenticFlowNode>) {
+function AgenticNodeCard({ data }: NodeProps<AgenticFlowStageNode>) {
   const borderTone =
     data.status === "running"
       ? "border-running"
@@ -182,8 +191,21 @@ function AgenticNodeCard({ data }: NodeProps<AgenticFlowNode>) {
   );
 }
 
+function AgenticFlowGroupCard({ data }: NodeProps<AgenticFlowGroupNode>) {
+  return (
+    <div
+      aria-hidden="true"
+      className="pointer-events-none relative h-full rounded-md border border-dashed border-border bg-muted/30"
+    >
+      <span className="absolute left-3 top-2 font-mono text-xs text-muted-foreground">
+        {data.label}
+      </span>
+    </div>
+  );
+}
+
 // Stable identity: React Flow re-registers its types whenever this object changes.
-const NODE_TYPES = { agentic: AgenticNodeCard };
+const NODE_TYPES = { agentic: AgenticNodeCard, group: AgenticFlowGroupCard };
 
 /** Return Ask retry edges around the left margin and back into the earlier node from below. */
 function AgenticFeedbackEdge({ sourceX, sourceY, targetX, targetY, markerEnd, style }: EdgeProps) {
@@ -208,6 +230,7 @@ export function AgenticFlow({
   ariaLabel = "Book Distiller agentic ingestion graph",
   connections,
   positions,
+  groups,
   className,
   fitView = false,
   fitViewOptions,
@@ -223,11 +246,24 @@ export function AgenticFlow({
   connections?: readonly AgenticFlowConnection[];
   /** Supply node coordinates for DAG layouts; omitted nodes use the standard vertical layout. */
   positions?: Readonly<Record<string, AgenticFlowPosition>>;
+  /** Add non-interactive boundaries around nodes that belong to a nested graph. */
+  groups?: readonly AgenticFlowGroup[];
   className?: string;
   fitView?: boolean;
   fitViewOptions?: FitViewOptions;
 }) {
-  const nodes: AgenticFlowNode[] = views.map((view, index) => ({
+  const groupNodes: AgenticFlowGroupNode[] = (groups ?? []).map((group) => ({
+    id: group.id,
+    type: "group",
+    position: { x: group.x, y: group.y },
+    width: group.width,
+    height: group.height,
+    zIndex: -1,
+    selectable: false,
+    draggable: false,
+    data: { label: group.label },
+  }));
+  const stageNodes: AgenticFlowStageNode[] = views.map((view, index) => ({
     id: view.id,
     type: "agentic",
     position: positions?.[view.id] ?? { x: PADDING, y: PADDING + index * (NODE_HEIGHT + NODE_GAP) },
@@ -248,6 +284,7 @@ export function AgenticFlow({
       replayPending,
     },
   }));
+  const nodes: AgenticFlowNode[] = [...groupNodes, ...stageNodes];
   const flowConnections: readonly AgenticFlowConnection[] =
     connections ??
     views.slice(0, -1).flatMap((view, index) => {

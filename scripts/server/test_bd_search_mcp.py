@@ -44,7 +44,7 @@ def check_scope_domain() -> None:
 def check_retrieval_graph_compiles() -> None:
     graph = ai.bd.graphs.rag.retrieval.graphs.retrieval_graph()
     node_names = set(graph.get_graph().nodes)
-    assert {"elasticsearch", "qdrant", "neo4j", "search_mcp", "fuse_evidence"} <= node_names
+    assert {"elasticsearch", "qdrant", "neo4j", "web_search", "fuse_evidence"} <= node_names
 
 
 def check_specialist_agents_build() -> None:
@@ -53,14 +53,14 @@ def check_specialist_agents_build() -> None:
         ai.bd.agents.rag.elasticsearch.agent.elasticsearch_retriever,
         ai.bd.agents.rag.qdrant.agent.qdrant_retriever,
         ai.bd.agents.rag.neo4j.retrieval.agent.neo4j_retriever,
-        ai.bd.agents.rag.search.agent.search_retriever,
+        ai.bd.agents.rag.web_search.agent.web_search_retriever,
     )
     agents = [builder(model) for builder in builders]
     assert [agent.name for agent in agents] == [
         "bd_rag_elasticsearch_retriever",
         "bd_rag_qdrant_retriever",
         "bd_rag_neo4j_retriever",
-        "bd_rag_search_retriever",
+        "bd_rag_web_search_retriever",
     ]
 
 
@@ -83,11 +83,11 @@ def check_graph_fusion_preserves_sources() -> None:
             }],
         },
         "neo4j_result": {"status": "timeout", "queries": [], "evidence": []},
-        "search_mcp_result": {"status": "not_requested", "queries": [], "evidence": []},
+        "web_search_result": {"status": "not_requested", "queries": [], "evidence": []},
     })
     assert fused["source_status"] == {
         "elasticsearch": "complete", "qdrant": "complete", "neo4j": "timeout",
-        "search_mcp": "not_requested",
+        "web_search": "not_requested",
     }
     assert len(fused["evidence"]) == 1
     assert fused["evidence"][0]["matched_sources"] == ["elasticsearch_bm25", "qdrant_hybrid"]
@@ -127,14 +127,18 @@ async def check_mcp_tool_contract() -> None:
                 "query": "Ada Lovelace",
             })
             assert not result.is_error, result
-            data = ai.bd.tools.rag.domain.to_plain_data(result.data)
+            data = ai.bd.tools.retrieval.domain.to_plain_data(result.data)
             assert data["status"] == "complete", data
             assert data["evidence"][0]["id"] == "elasticsearch:1", data
-            session = ai.bd.tools.rag.entities.RetrievalSession(
+            session = ai.bd.tools.retrieval.entities.RetrievalSession(
                 book_id = "book-01", run_id = "run-01", source = "elasticsearch",
             )
             replies = await asyncio.gather(*(
-                ai.bd.tools.rag.service.call_source_tool(session, f"query {index}")
+                ai.bd.tools.retrieval.service.call_source_tool(
+                    session,
+                    f"query {index}",
+                    source = "elasticsearch",
+                )
                 for index in range(3)
             ))
             assert session.tool_calls == 2
@@ -148,7 +152,7 @@ async def check_mcp_tool_contract() -> None:
             try:
                 web_result = await client.call_tool("bd_search_web", {"query": "current events"})
                 assert not web_result.is_error
-                assert ai.bd.tools.rag.domain.to_plain_data(web_result.data)["status"] == "disabled"
+                assert ai.bd.tools.retrieval.domain.to_plain_data(web_result.data)["status"] == "disabled"
             finally:
                 params.WEB_SEARCH_ENABLED = web_enabled
     finally:

@@ -48,10 +48,10 @@ neo4j:
 #   --enable-native-access=ALL-UNNAMED silences Java 21 JNA warning
 #
 # Removed 2026-06-07:
-#   -XX:MaxMetaspaceSize=128m  was bounding APOC class loading, but APOC
-#                              + LangChain LLMGraphTransformer (COELHO
-#                              Nexus YCS Phase 3) hit the cap and the JVM
-#                              crash-looped with OutOfMemoryError:
+#   -XX:MaxMetaspaceSize=128m  was bounding APOC class loading, but the
+#                              COELHO Nexus YCS Phase 3 graph-indexing
+#                              workload hit the cap and Neo4j crash-looped
+#                              with OutOfMemoryError:
 #                              Metaspace. Letting the JVM pick its stock
 #                              default — same approach as the v1 cloud
 #                              module that ran stable for months.

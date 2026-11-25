@@ -48,7 +48,7 @@ export function AskStage(): JSX.Element {
             for current or outside questions.
           </p>
         </div>
-        <LibraryPicker selected={null} showActions={false} onOpen={(id) => router.push(askHref(id))} />
+        <LibraryPicker selected={null} onOpen={(id) => router.push(askHref(id))} />
       </div>
     );
   }

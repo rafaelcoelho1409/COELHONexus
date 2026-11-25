@@ -16,6 +16,6 @@ class ProcessedBookIndexDependencies:
     """Services required by nodes that index an immutable processed-book revision."""
 
     storage: infra.minio.service.MinIOStorage
-    graph_transformer: Any
+    graph_extractor: Any
     progress_callback: ProgressReporter
     cancel_check: CancelCheck

@@ -17,4 +17,4 @@ Discuss how to combine and verify the results, preserve page-level source citati
 
 ## Trigger for implementation discussion
 
-First review the output and gaps from a complete BD Distill run; then decide whether this retrieval subgraph and other proposed improvements would materially improve the final report.
+First review the output and gaps from a complete BD Distill run; then decide whether this retrieval integration and other proposed improvements would materially improve the final report.

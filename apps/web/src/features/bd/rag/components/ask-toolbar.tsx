@@ -30,7 +30,7 @@ export function AskToolbar({
   return (
     <div className="grid w-full min-w-0 grid-cols-2 items-end gap-2 sm:flex sm:flex-wrap sm:gap-x-4">
       <div className="min-w-0">
-        <LibraryPicker selected={bookId} showActions={false} onOpen={onOpenBook} />
+        <LibraryPicker selected={bookId} onOpen={onOpenBook} />
       </div>
       <div className="col-span-2 flex min-w-0 items-center justify-between gap-2 sm:ml-auto">
         <AskThreads

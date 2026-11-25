@@ -15,7 +15,7 @@ def retrieval_graph():
         ("elasticsearch", nodes.rag.elasticsearch.retrieval.node.retrieve),
         ("qdrant", nodes.rag.qdrant.retrieval.node.retrieve),
         ("neo4j", nodes.rag.neo4j.retrieval.node.retrieve),
-        ("search_mcp", nodes.rag.search.retrieval.node.retrieve),
+        ("web_search", nodes.rag.web_search.retrieval.node.retrieve),
     )
     workflow = StateGraph(states.RetrievalGraphState, context_schema = entities.RetrievalContext)
     for name, node in source_nodes:

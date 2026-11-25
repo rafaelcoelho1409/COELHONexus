@@ -263,7 +263,7 @@ async def _build_neo4j_schema() -> dict[str, Any]:
 
     Declared floor (`domain.declared_neo4j_schema`) is sourced from
     the actual writer code in `domains/ycs/rag/source/indexes/neo4j_index/` so it
-    matches what the LLMGraphTransformer + the YCS-specific
+    matches what the Docling Graph extractor + the YCS-specific
     `build_video_metadata_graph` produce."""
     declared = domain.declared_neo4j_schema()
     try:

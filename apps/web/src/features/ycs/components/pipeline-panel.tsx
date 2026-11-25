@@ -70,7 +70,7 @@ const BAR_HINTS: Record<PipelinePrefix, string> = {
   playwright: "yt-dlp metadata + Playwright transcript scrape.",
   elasticsearch: "Bulk-index fetched transcripts (chunk-grained).",
   qdrant: "Hybrid dense + BM25 upsert.",
-  neo4j: "LLMGraphTransformer extraction, transcript-evidence validation, and Neo4j graph writes.",
+  neo4j: "Docling Graph extraction, transcript-evidence validation, and Neo4j graph writes.",
 };
 
 const BAR_READS: Record<PipelinePrefix, readonly string[]> = {

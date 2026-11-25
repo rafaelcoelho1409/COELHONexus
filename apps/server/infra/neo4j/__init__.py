@@ -2,7 +2,7 @@
 
 Two consumer flavors:
   - `get_driver()` for custom Cypher (entity retriever)
-  - `get_graph()`  for `LLMGraphTransformer` + LangChain helpers
+  - `get_graph()`  for LangChain's `Neo4jGraph` helper
 
 Mirror of `infra/qdrant/` shape. See `docs/CODE-CONVENTIONS.md` §8 +
 `docs/YCS-PORT-PLAN-2026-06-06.md` Wave 2."""

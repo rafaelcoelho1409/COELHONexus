@@ -18,25 +18,19 @@ export function IngestionStage({ view = "pipeline" }: { view?: BookViewId }) {
   const searchParams = useSearchParams();
   const bookId = searchParams.get(BOOK_PARAM);
   const initialPage = parsePageParam(searchParams.get(PAGE_PARAM));
-  const [refreshKey, setRefreshKey] = useState(0);
   const [pageControlsHost, setPageControlsHost] = useState<HTMLDivElement | null>(null);
   const [uploadProgressHost, setUploadProgressHost] = useState<HTMLDivElement | null>(null);
   const autoChain = false;
-  const openingKey = `${view}-${bookId}-${initialPage ?? ""}-${refreshKey}`;
+  const openingKey = `${view}-${bookId}-${initialPage ?? ""}`;
   const open = (id: string | null) =>
     router.push(view === "materials" ? bookPagesHref(id) : bookHref(id), { scroll: false });
-  const refresh = (id: string) => {
-    setRefreshKey((key) => key + 1);
-    open(id);
-  };
-
   return (
     <div className={view === "materials" ? "flex min-h-0 min-w-0 flex-1 flex-col" : "min-w-0"}>
       <ContextBar
         pinned
         start={
           <>
-            <LibraryPicker selected={bookId} onOpen={open} onRefresh={refresh} autoChain={autoChain} />
+            <LibraryPicker selected={bookId} onOpen={open} />
             {view === "materials" ? (
               <div ref={setPageControlsHost} className="flex min-w-0 flex-wrap items-center gap-1.5" />
             ) : null}

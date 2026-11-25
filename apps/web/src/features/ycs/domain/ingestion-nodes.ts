@@ -25,7 +25,7 @@ const NODE_RESOURCES = {
   neo4j: {
     agents: ["None (fixed extraction component)"],
     skills: ["Extract entities and relationships", "Validate transcript evidence", "Write graph data"],
-    tools: ["LLMGraphTransformer", "Neo4j"],
+    tools: ["Docling Graph", "Neo4j"],
   },
 } satisfies Record<string, IngestionNodeResources>;
 

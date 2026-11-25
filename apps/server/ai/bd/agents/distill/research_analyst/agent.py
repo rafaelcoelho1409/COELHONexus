@@ -44,14 +44,14 @@ def research_analyst(model = None):
         ),
     )
     agent_tools = [
-        tools.search.tools.search_mcp_web,
-        tools.search.tools.read_search_source,
+        tools.web_search.tools.search_mcp_web,
+        tools.web_search.tools.read_search_source,
     ]
     allowed_tools = skills.params.ALLOWED_TOOL_NAMES | {item.name for item in agent_tools}
     agent = create_deep_agent(
         model = model,
         tools = agent_tools,
-        context_schema = tools.search.entities.SearchSession,
+        context_schema = tools.web_search.entities.SearchSession,
         system_prompt = prompts.distill.research_analyst.prompts.SYSTEM_PROMPT,
         middleware = [
             middlewares.middleware.ToolAllowlistMiddleware(frozenset(allowed_tools)),

@@ -82,7 +82,6 @@ function DistillStage({ view }: { view: "agents" | "study" }) {
         onOpen={(id) =>
           router.push(view === "study" ? distillStudyHref(id, null, null, studyView) : distillHref(id))
         }
-        showActions={false}
       />
       {selectedBook ? (
         <p className="text-xs text-muted-foreground">

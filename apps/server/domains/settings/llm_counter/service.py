@@ -7,7 +7,7 @@ Attribution is a `ContextVar`, so concurrent asyncio tasks (YCS extracts N video
 made outside any context is not counted rather than mis-attributed. Counting is best-effort: it never raises.
 
 The chat adapter (`settings.chat`) counts each call it makes (`bump_response` / `bump_current_failure`). Calls LangChain
-makes where no response reaches the caller (YCS's `LLMGraphTransformer`) are counted by `LLMCounterCallback`, attached
+makes where no response reaches the caller (YCS's Docling Graph client) are counted by `LLMCounterCallback`, attached
 with `llm.with_config(callbacks=[...])`; it also opens the `gen_ai.chat` span and records `gen_ai_call_total` /
 `gen_ai_call_duration` for those calls, keyed by LangChain's `run_id` (one instance serves every concurrent extract)."""
 from __future__ import annotations
@@ -294,7 +294,7 @@ async def delete_run(ns: str, run_id: str) -> None:
 
 class LLMCounterCallback(AsyncCallbackHandler):
     """Counts every LLM call made through the LLM it is attached to (`llm.with_config(callbacks=[LLMCounterCallback()])`)
-    on the current attribution, without needing the call's return value — `LLMGraphTransformer` never exposes it.
+    on the current attribution, without needing the call's return value — graph extraction callbacks observe usage directly.
     `with_structured_output` goes through the same hooks (it only wraps the inner Runnable). A fresh instance per
     `.with_config(...)`; `_pending` holds the span / timer of each in-flight call, keyed by LangChain's `run_id`."""
 

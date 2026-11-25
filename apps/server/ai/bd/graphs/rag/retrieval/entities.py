@@ -10,3 +10,5 @@ class RetrievalContext:
     book_id: str
     run_id: str
     model: Any = None
+    counter_run_id: str | None = None
+    counter_node_prefix: str = "retrieval"

@@ -159,7 +159,7 @@ def project_neo4j_row(row: dict[str, Any], app: str) -> dict[str, Any]:
 #                                               writer's payload shape)
 #   Neo4j  → domains/ycs/rag/source/indexes/neo4j_index/* + entity-merger Cypher
 #            (build_video_metadata_graph creates Video+Channel+BELONGS_TO;
-#             LLMGraphTransformer creates __Entity__ + Document with
+#             Docling Graph creates __Entity__ + Document with
 #             the .video_id tag).
 #
 # Update these functions when the writer shape changes.
@@ -227,7 +227,7 @@ def declared_qdrant_schema() -> dict[str, Any]:
 def declared_neo4j_schema() -> dict[str, Any]:
     """YCS graph shape — what the writers actually create:
 
-      · LLMGraphTransformer  → (:__Entity__) + (:Document) +
+      · Docling Graph        → (:__Entity__) + (:Document) +
                                (Document)-[:MENTIONS]->(__Entity__)
       · build_video_metadata_graph → (:Video) + (:Channel) +
                                (Video)-[:BELONGS_TO]->(Channel)
@@ -265,7 +265,7 @@ def declared_neo4j_schema() -> dict[str, Any]:
         # pattern exists in the writer code; we just don't know how
         # many instances are live". Live discovery fills in the
         # count + may add patterns the writer didn't predict (e.g.
-        # the LLMGraphTransformer invents inter-entity rels with
+        # the graph extractor creates inter-entity rels with
         # type names derived from the LLM's output).
         "relationship_patterns": [
             {"src": "Document", "rel": "MENTIONS",   "dst": "__Entity__", "count": None, "declared": True},

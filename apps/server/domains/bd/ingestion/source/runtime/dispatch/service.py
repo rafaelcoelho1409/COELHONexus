@@ -10,11 +10,12 @@ import tempfile
 import time
 import uuid
 from collections.abc import Awaitable, Callable
+from typing import Any
 
 import infra
 
 from ...... import settings
-from ..... import ingestion
+from ..... import ask, distill, ingestion
 from .... import source
 from . import domain
 
@@ -150,7 +151,10 @@ async def wipe_book(
     delete_indexed_book: Callable[[str], Awaitable[dict[str, int]]],
     has_active_index_run: Callable[[str], Awaitable[bool]],
 ) -> dict:
-    """Delete a book and its retrieval projections unless a run still holds it."""
+    """Delete a book and its persisted data across BD stores unless work is still active."""
+    from ..... import rag
+
+    storage = infra.minio.service.get_storage()
     async with (
         infra.redis.service.client() as r,
         r.lock(
@@ -161,18 +165,38 @@ async def wipe_book(
     ):
         if await source.runtime.progress.service.read_lock(r, book_id):
             return {"book_id": book_id, "deleted": False, "reason": "an extraction is running"}
-        active_agentic = await _active_agentic_run(book_id)
-        if active_agentic is not None:
-            return {"book_id": book_id, "deleted": False, "reason": "an Agentic AI run is running"}
         try:
+            agentic_runs = await _agentic_runs(book_id)
+            active_statuses = {
+                ingestion.ai.runs.schemas.AgenticRunStatus.QUEUED.value,
+                ingestion.ai.runs.schemas.AgenticRunStatus.RUNNING.value,
+            }
+            for run in agentic_runs:
+                if run["status"] in active_statuses or await ingestion.ai.progress.service.run_execution_lock_is_held(
+                    r,
+                    book_id,
+                    run["agentic_run_id"],
+                ):
+                    return {"book_id": book_id, "deleted": False, "reason": "an Agentic AI run is running"}
+            if await _has_active_ask_turn(r, book_id):
+                return {"book_id": book_id, "deleted": False, "reason": "a BD Ask turn is running"}
+            distill_runs = await distill.ai.service.list_runs(book_id, storage = storage)
+            for run in distill_runs:
+                if run["status"] in {"queued", "running"} or await r.exists(
+                    distill.ai.keys.execution_lock_key(book_id, run["run_id"]),
+                ):
+                    return {"book_id": book_id, "deleted": False, "reason": "a BD Distill run is running"}
             if await has_active_index_run(book_id):
                 return {"book_id": book_id, "deleted": False, "reason": "a BD Agentic RAG run is running"}
+            retrieval_runs = await rag.ai.runs.service.list_book_indexes(book_id, storage = storage)
+            if any(run["status"] in {"queued", "running"} for run in retrieval_runs):
+                return {"book_id": book_id, "deleted": False, "reason": "a BD Agentic RAG run is running"}
         except Exception as error:
-            logger.exception(f"[bd-delete] unable to verify retrieval-index run state for {book_id}")
+            logger.exception(f"[bd-delete] unable to verify run state for {book_id}")
             return {
                 "book_id": book_id,
                 "deleted": False,
-                "reason": f"Agentic RAG run state could not be verified; the uploaded book was retained. {error}",
+                "reason": f"BD run state could not be verified; the uploaded book was retained. {error}",
             }
         try:
             index_cleanup = await delete_indexed_book(book_id)
@@ -184,9 +208,120 @@ async def wipe_book(
                 "reason": f"Indexed data could not be fully deleted; the uploaded book was retained. {error}",
             }
         logger.info(f"[bd-delete] removed indexed data for {book_id}: {index_cleanup}")
-        removed = await source.storage.service.wipe_book(infra.minio.service.get_storage(), book_id)
-        await infra.redis.service.delete_matching(r, source.runtime.progress.keys.book_keys_pattern(book_id))
+        try:
+            await ask.source.conversation.service.ensure_table()
+            ask_thread_ids = await ask.source.conversation.service.list_book_thread_ids(book_id)
+            await ingestion.ai.service.delete_ingestion_ai_checkpoints(
+                agentic_runs,
+                include_inventory = True,
+            )
+            thread_ids = set(ask_thread_ids)
+            thread_ids.update(
+                distill.ai.keys.thread_id(book_id, run["extraction_run_id"], run["run_id"])
+                for run in distill_runs
+            )
+            for run in retrieval_runs:
+                thread_ids.update(_retrieval_checkpoint_ids(rag, book_id, run))
+            await _delete_checkpoints(thread_ids)
+
+            for thread_id in ask_thread_ids:
+                await settings.llm_counter.service.delete_run("bd", thread_id)
+            await ask.source.conversation.service.delete_book(book_id)
+            for run in agentic_runs:
+                await settings.llm_counter.service.delete_run("bd", run["agentic_run_id"])
+            for run in distill_runs:
+                await settings.llm_counter.service.delete_run("bd", run["run_id"])
+                await distill.ai.progress.service.clear(book_id, run["run_id"])
+            for run in retrieval_runs:
+                await settings.llm_counter.service.delete_run(
+                    "bd",
+                    rag.ai.keys.usage_run_id(book_id, run["agentic_run_id"]),
+                )
+                await r.delete(
+                    rag.ai.keys.cancel_key(book_id, run["agentic_run_id"]),
+                    rag.ai.keys.enqueue_lock_key(book_id, run["agentic_run_id"]),
+                )
+        except Exception as error:
+            logger.exception(f"[bd-delete] persisted-data cleanup failed for {book_id}")
+            return {
+                "book_id": book_id,
+                "deleted": False,
+                "reason": f"Saved book data could not be fully deleted; the uploaded book was retained. {error}",
+            }
+        try:
+            await infra.redis.service.delete_matching(r, source.runtime.progress.keys.book_keys_pattern(book_id))
+        except Exception as error:
+            logger.exception(f"[bd-delete] Redis cleanup failed for {book_id}")
+            return {
+                "book_id": book_id,
+                "deleted": False,
+                "reason": f"Book progress data could not be fully deleted; retry deletion to finish cleanup. {error}",
+            }
+        try:
+            removed = await source.storage.service.wipe_book(storage, book_id)
+        except Exception as error:
+            logger.exception(f"[bd-delete] MinIO cleanup failed for {book_id}")
+            return {
+                "book_id": book_id,
+                "deleted": False,
+                "reason": f"Book files could not be fully deleted; retry deletion to finish cleanup. {error}",
+            }
         return {"book_id": book_id, "deleted": True, "objects": removed}
+
+
+async def _has_active_ask_turn(redis: infra.redis.service.Redis, book_id: str) -> bool:
+    pattern = ask.source.conversation.keys.active_turn_pattern(book_id)
+    async for _key in redis.scan_iter(match = pattern, count = 100):
+        return True
+    return False
+
+
+async def _delete_checkpoints(thread_ids: set[str]) -> None:
+    if not thread_ids:
+        return
+    checkpointer = await infra.postgres.service.init_checkpointer()
+    semaphore = asyncio.Semaphore(8)
+
+    async def delete_thread(thread_id: str) -> None:
+        async with semaphore:
+            await checkpointer.adelete_thread(thread_id)
+
+    await asyncio.gather(*(delete_thread(thread_id) for thread_id in sorted(thread_ids)))
+
+
+def _retrieval_checkpoint_ids(rag: Any, book_id: str, run: dict) -> set[str]:
+    """Cover checkpoints from prior attempts and source/profile revisions of a retrieval run."""
+    revisions = {run["processed_book_revision"]}
+    previous_revision = run.get("previous_processed_book_revision")
+    if isinstance(previous_revision, int) and not isinstance(previous_revision, bool) and previous_revision > 0:
+        revisions.add(previous_revision)
+    profiles = {
+        run.get("qdrant_index_profile_fingerprint"),
+        run.get("previous_qdrant_index_profile_fingerprint"),
+        None,
+        "",
+    }
+    workflow_versions = {
+        run["workflow_version"],
+        *rag.ai.versions.NEO4J_REPLAY_COMPATIBLE_WORKFLOW_VERSIONS,
+    }
+    latest_generation = max(run.get("checkpoint_generation", 0), run.get("attempt", 1) + 1)
+    generations = {0, run.get("checkpoint_generation", 0), *range(2, latest_generation + 1)}
+    return {
+        rag.ai.keys.thread_id(
+            book_id,
+            run["extraction_run_id"],
+            run["agentic_run_id"],
+            workflow_version,
+            revision,
+            profile,
+            generation,
+        )
+        for workflow_version in workflow_versions
+        for revision in revisions
+        for profile in profiles
+        for generation in generations
+    }
 
 
 async def wipe_extraction(book_id: str) -> dict:
@@ -259,14 +394,6 @@ async def _agentic_runs(book_id: str) -> list[dict]:
         if run_id != "current"
     ))
     return [run for run in runs if run is not None]
-
-
-async def _active_agentic_run(book_id: str) -> dict | None:
-    active_statuses = {
-        ingestion.ai.runs.schemas.AgenticRunStatus.QUEUED.value,
-        ingestion.ai.runs.schemas.AgenticRunStatus.RUNNING.value,
-    }
-    return next((run for run in await _agentic_runs(book_id) if run["status"] in active_statuses), None)
 
 
 async def run(book_id: str, run_id: str, refresh: bool = False) -> dict:

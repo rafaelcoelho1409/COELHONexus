@@ -1,7 +1,19 @@
-"""Internal references used by the Distill graph and its persisted artifacts."""
+"""Typed artifact references and runtime contexts for BD Distill."""
 from __future__ import annotations
 
-from typing import NotRequired, TypedDict
+from dataclasses import dataclass
+from typing import Any, NotRequired, TypedDict
+
+
+@dataclass(frozen = True, slots = True)
+class DistillRetrievalContext:
+    """Runtime identity and accounting data passed to Distill source retrievers."""
+
+    book_id: str
+    run_id: str
+    model: Any = None
+    counter_run_id: str | None = None
+    counter_node_prefix: str = "distill_retrieval"
 
 
 class SourcePage(TypedDict):

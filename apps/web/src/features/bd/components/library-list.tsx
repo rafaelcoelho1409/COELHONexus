@@ -1,12 +1,12 @@
 "use client";
 
-import { ChevronDown, RotateCw, Trash2 } from "lucide-react";
+import { ChevronDown, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import type { BookRow } from "@/shared/api";
 import { apiErrorMessage } from "@/shared/lib/api-error";
 import { bookFormat, bookUnits, fmtBytes, isLive, newestFirst, toBookStatus } from "../domain/books";
-import { useDeleteBook, useLibrary, useRunBook } from "../hooks/use-bd-data";
+import { useDeleteBook, useLibrary } from "../hooks/use-bd-data";
 import { useBdOverlays } from "../hooks/use-overlays";
 import { ActionButton } from "./action-button";
 import { StatusChip } from "./status-chip";
@@ -16,21 +16,14 @@ const titleOf = (row: BookRow) => row.title.trim() || row.filename;
 export function LibraryPicker({
   selected,
   onOpen,
-  onRefresh,
-  autoChain = false,
-  showActions = true,
   showSelectedTitle = true,
 }: {
   selected: string | null;
   onOpen: (bookId: string | null) => void;
-  onRefresh?: (bookId: string) => void;
-  autoChain?: boolean;
-  showActions?: boolean;
   showSelectedTitle?: boolean;
 }) {
   const library = useLibrary();
   const del = useDeleteBook();
-  const runBook = useRunBook();
   const { confirm, notice } = useBdOverlays();
   const rows = newestFirst(library.data ?? []);
   const [open, setOpen] = useState(false);
@@ -71,7 +64,7 @@ export function LibraryPicker({
     return rows.filter((row) => `${titleOf(row)} ${row.filename}`.toLowerCase().includes(search));
   }, [rows, query]);
   const currentBook = rows.find((row) => row.book_id === selected);
-  const busy = runBook.isPending || del.isPending;
+  const busy = del.isPending;
 
   const close = () => {
     setOpen(false);
@@ -81,7 +74,7 @@ export function LibraryPicker({
   const remove = async (row: BookRow) => {
     const yes = await confirm({
       title: "Delete this book?",
-      message: `This permanently deletes ${titleOf(row)}, its extracted files, and all related Elasticsearch, Qdrant, and Neo4j data.`,
+      message: `This permanently deletes ${titleOf(row)}, its files, saved conversations and run history, and its Elasticsearch, Qdrant, and Neo4j data. Upload it again for a clean start.`,
       confirmLabel: "Delete",
     });
     if (!yes) return;
@@ -91,34 +84,11 @@ export function LibraryPicker({
           notice(result.reason ?? "The book could not be deleted.", "error");
           return;
         }
-        notice(`Deleted ${titleOf(row)} and its indexed data.`);
+        notice(`Deleted ${titleOf(row)} and all related book data.`);
         if (row.book_id === selected) onOpen(null);
       },
       onError: (error) => notice(apiErrorMessage(error), "error"),
     });
-  };
-
-  const refreshBook = (row: BookRow) => {
-    if (!onRefresh) return;
-    runBook.mutate(
-      { bookId: row.book_id, refresh: true, autoChain },
-      {
-        onSuccess: (result) => {
-          if (result.status === "queued") {
-            close();
-            onRefresh(row.book_id);
-            notice("Extraction queued.");
-          } else if (result.status === "locked") {
-            close();
-            onRefresh(row.book_id);
-            notice("This book is already being extracted — following the live run.");
-          } else {
-            notice("Already extracted.");
-          }
-        },
-        onError: (error) => notice(apiErrorMessage(error), "error"),
-      },
-    );
   };
 
   return (
@@ -175,7 +145,7 @@ export function LibraryPicker({
                 return (
                   <li
                     key={row.book_id}
-                    className={`group grid min-w-0 ${showActions && onRefresh ? "grid-cols-[minmax(0,1fr)_auto_auto]" : "grid-cols-1"} items-center gap-1 rounded-sm px-1 ${current ? "bg-muted" : "hover:bg-muted"}`}
+                    className={`group grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-1 rounded-sm px-1 ${current ? "bg-muted" : "hover:bg-muted"}`}
                   >
                     <button
                       type="button"
@@ -197,28 +167,15 @@ export function LibraryPicker({
                         </span>
                       </span>
                     </button>
-                    {showActions && onRefresh ? (
-                      <>
-                        <ActionButton
-                          iconOnly
-                          aria-label={`Refresh ${titleOf(row)}`}
-                          title="Refresh extraction"
-                          disabled={busy || isLive(status)}
-                          onClick={() => refreshBook(row)}
-                        >
-                          <RotateCw aria-hidden="true" />
-                        </ActionButton>
-                        <ActionButton
-                          iconOnly
-                          aria-label={`Delete ${titleOf(row)}`}
-                          title={isLive(status) ? "Cancel the extraction first" : "Delete"}
-                          disabled={busy || isLive(status)}
-                          onClick={() => void remove(row)}
-                        >
-                          <Trash2 aria-hidden="true" />
-                        </ActionButton>
-                      </>
-                    ) : null}
+                    <ActionButton
+                      iconOnly
+                      aria-label={`Delete ${titleOf(row)}`}
+                      title={isLive(status) ? "Stop active processing first" : "Delete"}
+                      disabled={busy || isLive(status)}
+                      onClick={() => void remove(row)}
+                    >
+                      <Trash2 aria-hidden="true" />
+                    </ActionButton>
                   </li>
                 );
               })}

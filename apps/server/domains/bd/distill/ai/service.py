@@ -63,6 +63,7 @@ def _normalize_progress(manifest: dict[str, Any]) -> dict[str, Any]:
     progress_state = manifest.setdefault("progress", {})
     node_status = progress_state.setdefault("node_status", {})
     node_status.pop("generate_chapter_illustration", None)
+    node_status.pop("report_pipeline", None)
     old_status = dict(node_status)
     for node in params.GRAPH_NODES:
         node_status.setdefault(node, "pending")
@@ -200,10 +201,20 @@ async def _checkpoint_before_replay_node(
         return await infra.postgres.service.checkpoint_before_node(graph, graph_config, node_id), node_id
     except ValueError as error:
         fallback_nodes = {
+            "unit_extraction": "prepare_units",
+            "prepare_units": "unit_extraction",
+            "chapter_guides": "prepare_chapters",
+            "prepare_chapters": "chapter_guides",
             "verify_unit": "extract_unit",
             "review_chapter_coverage": "synthesize_chapter",
             "build_chapter_visuals": "synthesize_chapter",
             params.PARALLEL_DISPATCH_NODE: "review_chapter_coverage",
+            "prepare_retrieval": params.PARALLEL_DISPATCH_NODE,
+            "elasticsearch": params.PARALLEL_DISPATCH_NODE,
+            "qdrant": params.PARALLEL_DISPATCH_NODE,
+            "neo4j": params.PARALLEL_DISPATCH_NODE,
+            "web_search": params.PARALLEL_DISPATCH_NODE,
+            "fuse_evidence": params.PARALLEL_DISPATCH_NODE,
             "write_decision_brief": "synthesize_book",
             "research_context": "synthesize_book",
         }
@@ -214,6 +225,13 @@ async def _checkpoint_before_replay_node(
             return await infra.postgres.service.checkpoint_before_node(graph, graph_config, fallback), fallback
         except ValueError:
             raise error
+
+
+def _canonical_graph_node_id(node_id: str | None) -> str | None:
+    """Normalize persisted node IDs that predate the current graph layout."""
+    if node_id is None:
+        return None
+    return params.LEGACY_GRAPH_NODE_ID_ALIASES.get(node_id, node_id)
 
 
 async def read_run(
@@ -444,6 +462,7 @@ async def queue_resume(book_id: str, run_id: str) -> dict[str, Any]:
             raise ValueError("another Distill run is already active for this book")
         await progress.service.clear_cancel(book_id, run_id)
         _normalize_progress(manifest)
+        manifest["resume_from_node"] = _canonical_graph_node_id(manifest.get("resume_from_node"))
         if manifest.get("resume_from_node") == "generate_chapter_illustration":
             manifest["resume_from_node"] = "build_chapter_visuals"
         if manifest.get("resume_from_node") not in params.GRAPH_NODES:
@@ -457,13 +476,18 @@ async def queue_resume(book_id: str, run_id: str) -> dict[str, Any]:
                 for node in params.GRAPH_NODES
                 if manifest["progress"]["node_status"].get(node) != "done"
             ]
+            current_node = _canonical_graph_node_id(manifest["progress"].get("current_node"))
+            fallback_node = (
+                current_node
+                if current_node in params.GRAPH_NODES
+                else (unfinished_nodes[0] if unfinished_nodes else "prepare_units")
+            )
             manifest["resume_from_node"] = (
                 failed_nodes[0]
                 if failed_nodes
                 else "publish_report"
                 if not unfinished_nodes
-                else manifest["progress"].get("current_node")
-                or (unfinished_nodes[0] if unfinished_nodes else "prepare_units")
+                else fallback_node
             )
         manifest["status"] = "queued"
         manifest["replay_from_node"] = None
@@ -523,37 +547,41 @@ async def queue_node_replay(book_id: str, run_id: str, node_id: str) -> dict[str
 
         checkpoint_node_id = (
             params.PARALLEL_DISPATCH_NODE
-            if node_id in params.PARALLEL_REPORT_REPLAY_NODES
-            else node_id
+            if node_id in params.PARALLEL_STAGE_REPLAY_NODES
+            else params.SUBGRAPH_BY_GRAPH_NODE.get(node_id, node_id)
         )
         replay_output_nodes = set(params.REPLAY_DESCENDANTS[node_id])
         replay_execution_nodes = set(params.REPLAY_DESCENDANTS[node_id])
+        subgraph = params.SUBGRAPH_BY_GRAPH_NODE.get(node_id)
+        if subgraph is not None:
+            replay_output_nodes.update(params.SUBGRAPH_NODE_MEMBERS[subgraph])
+            replay_execution_nodes.update(params.SUBGRAPH_NODE_MEMBERS[subgraph])
 
         checkpointer = infra.postgres.service.get_checkpointer()
-        graph = ai.bd.graphs.distill.graphs.distill_graph(checkpointer = checkpointer)
+        graph = ai.bd.graphs.distill.service.distill_graph(checkpointer = checkpointer)
         graph_config = {"configurable": {
-            "thread_id": f"bd-distill:{book_id}:{manifest['extraction_run_id']}:{run_id}",
+            "thread_id": keys.thread_id(book_id, manifest["extraction_run_id"], run_id),
         }}
         _, resolved_checkpoint_node_id = await _checkpoint_before_replay_node(
             graph,
             graph_config,
             checkpoint_node_id,
         )
-        if node_id in params.PARALLEL_REPORT_REPLAY_NODES:
+        if node_id in params.PARALLEL_STAGE_REPLAY_NODES:
             replay_execution_nodes = set(params.REPLAY_DESCENDANTS[node_id])
             if resolved_checkpoint_node_id == "review_chapter_coverage":
                 replay_execution_nodes.add("review_chapter_coverage")
             elif resolved_checkpoint_node_id == "synthesize_chapter":
                 replay_execution_nodes.update({"synthesize_chapter", "review_chapter_coverage"})
+        if subgraph is not None:
+            replay_execution_nodes.update(params.SUBGRAPH_NODE_MEMBERS[subgraph])
         elif resolved_checkpoint_node_id in params.REPLAY_DESCENDANTS:
             replay_execution_nodes = set(params.REPLAY_DESCENDANTS[resolved_checkpoint_node_id])
         await progress.service.clear_cancel(book_id, run_id)
 
         prefix = keys.run_prefix(book_id, run_id)
-        if node_id in {"prepare_units", "extract_unit"}:
+        if node_id in {"prepare_units", "extract_unit", "verify_unit"}:
             await storage.delete_prefix(prefix + "extraction-candidates/")
-            await storage.delete_prefix(prefix + "learning-units/")
-        elif node_id == "verify_unit":
             await storage.delete_prefix(prefix + "learning-units/")
         if node_id in {
             "prepare_units",
@@ -561,6 +589,7 @@ async def queue_node_replay(book_id: str, run_id: str, node_id: str) -> dict[str
             "verify_unit",
             "prepare_chapters",
             "synthesize_chapter",
+            "review_chapter_coverage",
         }:
             await storage.delete_prefix(prefix + "chapters/")
         elif node_id == "build_chapter_visuals":
@@ -739,7 +768,7 @@ async def wipe_run(book_id: str, run_id: str) -> dict[str, Any]:
                  if run["run_id"] != run_id and run["extraction_run_id"] == manifest["extraction_run_id"]),
                 None,
             )
-            thread_id = f"bd-distill:{book_id}:{manifest['extraction_run_id']}:{run_id}"
+            thread_id = keys.thread_id(book_id, manifest["extraction_run_id"], run_id)
             checkpointer = await infra.postgres.service.init_checkpointer()
             await checkpointer.adelete_thread(thread_id)
             removed = await storage.delete_prefix(keys.run_prefix(book_id, run_id))
@@ -1266,8 +1295,11 @@ async def run_distill(
 
     try:
         learning_extractor = ai.bd.agents.distill.learning_extractor.agent.learning_extractor()
-        research_search_session = ai.bd.tools.search.entities.SearchSession(run_id = run_id)
+        research_search_session = ai.bd.tools.web_search.entities.SearchSession(run_id = run_id)
         dependencies = ai.bd.graphs.distill.entities.DistillDependencies(
+            book_id = book_id,
+            run_id = run_id,
+            ingestion_ai_run_id = manifest["ingestion_ai_run_id"],
             storage = storage,
             learning_extractor = learning_extractor,
             evidence_verifier = ai.bd.agents.distill.evidence_verifier.agent.evidence_verifier(),
@@ -1286,7 +1318,7 @@ async def run_distill(
             progress_callback = report_progress,
             research_enabled = bool(manifest.get("research_enabled", False)),
         )
-        graph = ai.bd.graphs.distill.graphs.distill_graph(checkpointer = checkpointer)
+        graph = ai.bd.graphs.distill.service.distill_graph(checkpointer = checkpointer)
         initial_state = {
             "book_id": book_id,
             "run_id": run_id,
@@ -1309,7 +1341,7 @@ async def run_distill(
             "expected_page_count": manifest["expected_page_count"],
             "selected_page_count": manifest.get("selected_page_count", manifest["expected_page_count"]),
             "run_created_at": manifest["created_at"],
-            "resume_from_node": manifest.get("resume_from_node"),
+            "resume_from_node": _canonical_graph_node_id(manifest.get("resume_from_node")),
             "extracted_units": [],
             "completed_units": [],
             "synthesized_chapters": [],
@@ -1319,112 +1351,163 @@ async def run_distill(
         }
         graph_config = {
             "configurable": {
-                "thread_id": f"bd-distill:{book_id}:{manifest['extraction_run_id']}:{run_id}",
+                "thread_id": keys.thread_id(book_id, manifest["extraction_run_id"], run_id),
                 **(
-                    {"distill_replay_target": manifest["replay_target_node"]}
+                    {"distill_replay_target": _canonical_graph_node_id(manifest["replay_target_node"])}
                     if manifest.get("replay_target_node")
                     else {}
                 ),
             },
             "max_concurrency": params.GRAPH_CONCURRENCY,
         }
-        replay_from_node = manifest.get("replay_from_node")
+        replay_from_node = _canonical_graph_node_id(manifest.get("replay_from_node"))
         completed_checkpoint_state = None
         if checkpointer is not None:
-            if replay_from_node in params.GRAPH_NODES or replay_from_node == params.PARALLEL_DISPATCH_NODE:
+            if (
+                replay_from_node in params.GRAPH_NODES
+                or replay_from_node in params.LANGGRAPH_NODES
+                or replay_from_node == params.PARALLEL_DISPATCH_NODE
+            ):
                 replay_config, resolved_checkpoint_node_id = await _checkpoint_before_replay_node(
                     graph,
                     graph_config,
                     replay_from_node,
                 )
-                replay_target_node = manifest.get("replay_target_node") or replay_from_node
-                reset_patch: dict[str, Any] = {
-                    "report_key": None,
-                    "report_sha256": None,
-                    "html_key": None,
-                    "html_sha256": None,
-                    "covered_page_count": 0,
-                    "uncovered_pages": [],
-                    "review_required": True,
-                    "structural_quality": None,
-                }
-                replay_descendants = set(params.REPLAY_DESCENDANTS.get(replay_target_node, ()))
-                if "synthesize_book" in replay_descendants:
-                    reset_patch["book_synthesis_key"] = None
-                if "write_decision_brief" in replay_descendants:
-                    reset_patch["decision_brief_key"] = None
-                if "research_context" in replay_descendants:
-                    reset_patch["research_context_key"] = None
-                if resolved_checkpoint_node_id == "prepare_units":
-                    reset_patch.update(
-                        unit_refs = [],
-                        extracted_units = Overwrite([]),
-                        completed_units = Overwrite([]),
-                        chapter_refs = [],
-                        synthesized_chapters = Overwrite([]),
-                        reviewed_chapters = Overwrite([]),
-                        completed_chapters = Overwrite([]),
-                    )
-                elif resolved_checkpoint_node_id == "extract_unit":
-                    reset_patch.update(
-                        extracted_units = Overwrite([]),
-                        completed_units = Overwrite([]),
-                        chapter_refs = [],
-                        synthesized_chapters = Overwrite([]),
-                        reviewed_chapters = Overwrite([]),
-                        completed_chapters = Overwrite([]),
-                    )
-                elif resolved_checkpoint_node_id == "verify_unit":
-                    reset_patch.update(
-                        completed_units = Overwrite([]),
-                        chapter_refs = [],
-                        synthesized_chapters = Overwrite([]),
-                        reviewed_chapters = Overwrite([]),
-                        completed_chapters = Overwrite([]),
-                    )
-                elif resolved_checkpoint_node_id == "prepare_chapters":
-                    reset_patch.update(
-                        chapter_refs = [],
-                        synthesized_chapters = Overwrite([]),
-                        reviewed_chapters = Overwrite([]),
-                        completed_chapters = Overwrite([]),
-                    )
-                elif resolved_checkpoint_node_id == "synthesize_chapter":
-                    reset_patch.update(
-                        synthesized_chapters = Overwrite([]),
-                        reviewed_chapters = Overwrite([]),
-                    )
-                    if replay_target_node not in params.REPORT_PIPELINE_NODES:
-                        reset_patch["completed_chapters"] = Overwrite([])
-                elif resolved_checkpoint_node_id == "review_chapter_coverage":
-                    reset_patch["reviewed_chapters"] = Overwrite([])
-                    if replay_target_node not in params.REPORT_PIPELINE_NODES:
-                        reset_patch["completed_chapters"] = Overwrite([])
-                elif replay_target_node == "build_chapter_visuals":
-                    reset_patch["completed_chapters"] = Overwrite([])
-                replay_config = await graph.aupdate_state(replay_config, reset_patch)
-                graph_config = {
-                    **graph_config,
-                    "configurable": {
-                        **graph_config["configurable"],
-                        **replay_config["configurable"],
-                    },
-                }
-                graph_input = None
-                logger.info(
-                    "[bd-distill] replaying graph from node=%s run=%s",
-                    replay_from_node,
-                    run_id,
+                replay_target_node = _canonical_graph_node_id(
+                    manifest.get("replay_target_node") or replay_from_node,
                 )
+                if (
+                    resolved_checkpoint_node_id not in params.LANGGRAPH_NODES
+                    and resolved_checkpoint_node_id != params.PARALLEL_DISPATCH_NODE
+                ):
+                    graph_input = initial_state
+                    logger.info(
+                        "[bd-distill] restarting node replay from persisted artifacts because its "
+                        "checkpoint predates the subgraph layout run=%s checkpoint_node=%s",
+                        run_id,
+                        resolved_checkpoint_node_id,
+                    )
+                else:
+                    reset_patch: dict[str, Any] = {
+                        "report_key": None,
+                        "report_sha256": None,
+                        "html_key": None,
+                        "html_sha256": None,
+                        "covered_page_count": 0,
+                        "uncovered_pages": [],
+                        "review_required": True,
+                        "structural_quality": None,
+                    }
+                    replay_descendants = set(params.REPLAY_DESCENDANTS.get(replay_target_node, ()))
+                    if "prepare_retrieval" in replay_descendants:
+                        reset_patch.update(
+                            query="",
+                            include_web=False,
+                            elasticsearch_result=None,
+                            qdrant_result=None,
+                            neo4j_result=None,
+                            web_search_result=None,
+                            evidence=[],
+                            source_status={},
+                            source_queries={},
+                        )
+                    elif replay_target_node in {"elasticsearch", "qdrant", "neo4j", "web_search"}:
+                        reset_patch[f"{replay_target_node}_result"] = None
+                        reset_patch.update(evidence=[], source_status={}, source_queries={})
+                    elif replay_target_node == "fuse_evidence":
+                        reset_patch.update(evidence=[], source_status={}, source_queries={})
+                    if "synthesize_book" in replay_descendants:
+                        reset_patch["book_synthesis_key"] = None
+                    if "write_decision_brief" in replay_descendants:
+                        reset_patch["decision_brief_key"] = None
+                    if "research_context" in replay_descendants:
+                        reset_patch["research_context_key"] = None
+                    if resolved_checkpoint_node_id in {"prepare_units", "unit_extraction"}:
+                        reset_patch.update(
+                            unit_refs = [],
+                            extracted_units = Overwrite([]),
+                            completed_units = Overwrite([]),
+                            chapter_refs = [],
+                            synthesized_chapters = Overwrite([]),
+                            reviewed_chapters = Overwrite([]),
+                            completed_chapters = Overwrite([]),
+                        )
+                    elif resolved_checkpoint_node_id == "extract_unit":
+                        reset_patch.update(
+                            extracted_units = Overwrite([]),
+                            completed_units = Overwrite([]),
+                            chapter_refs = [],
+                            synthesized_chapters = Overwrite([]),
+                            reviewed_chapters = Overwrite([]),
+                            completed_chapters = Overwrite([]),
+                        )
+                    elif resolved_checkpoint_node_id == "verify_unit":
+                        reset_patch.update(
+                            completed_units = Overwrite([]),
+                            chapter_refs = [],
+                            synthesized_chapters = Overwrite([]),
+                            reviewed_chapters = Overwrite([]),
+                            completed_chapters = Overwrite([]),
+                        )
+                    elif resolved_checkpoint_node_id in {"prepare_chapters", "chapter_guides"}:
+                        reset_patch.update(
+                            chapter_refs = [],
+                            synthesized_chapters = Overwrite([]),
+                            reviewed_chapters = Overwrite([]),
+                            completed_chapters = Overwrite([]),
+                        )
+                    elif resolved_checkpoint_node_id == "synthesize_chapter":
+                        reset_patch.update(
+                            synthesized_chapters = Overwrite([]),
+                            reviewed_chapters = Overwrite([]),
+                        )
+                        if replay_target_node not in params.REPORT_STAGE_NODES:
+                            reset_patch["completed_chapters"] = Overwrite([])
+                    elif resolved_checkpoint_node_id == "review_chapter_coverage":
+                        reset_patch["reviewed_chapters"] = Overwrite([])
+                        if replay_target_node not in params.REPORT_STAGE_NODES:
+                            reset_patch["completed_chapters"] = Overwrite([])
+                    elif replay_target_node == "build_chapter_visuals":
+                        reset_patch["completed_chapters"] = Overwrite([])
+                    replay_config = await graph.aupdate_state(replay_config, reset_patch)
+                    graph_config = {
+                        **graph_config,
+                        "configurable": {
+                            **graph_config["configurable"],
+                            **replay_config["configurable"],
+                        },
+                    }
+                    graph_input = None
+                    logger.info(
+                        "[bd-distill] replaying graph from node=%s run=%s",
+                        replay_from_node,
+                        run_id,
+                    )
             else:
                 snapshot = await graph.aget_state(graph_config)
                 if snapshot.next:
-                    graph_input = None
-                    logger.info(
-                        "[bd-distill] resuming LangGraph checkpoint run=%s pending_nodes=%s",
-                        run_id,
-                        snapshot.next,
+                    pending_nodes = tuple(snapshot.next)
+                    stale_pending_nodes = tuple(
+                        node
+                        for node in pending_nodes
+                        if node not in params.LANGGRAPH_NODES
+                        or _canonical_graph_node_id(node) != node
                     )
+                    if stale_pending_nodes:
+                        graph_input = initial_state
+                        logger.info(
+                            "[bd-distill] resuming saved artifacts after a graph-layout change "
+                            "run=%s stale_pending_nodes=%s",
+                            run_id,
+                            stale_pending_nodes,
+                        )
+                    else:
+                        graph_input = None
+                        logger.info(
+                            "[bd-distill] resuming LangGraph checkpoint run=%s pending_nodes=%s",
+                            run_id,
+                            pending_nodes,
+                        )
                 elif manifest.get("resume_from_node") == "publish_report":
                     required_resume_fields = (
                         "book_id",
@@ -1450,12 +1533,18 @@ async def run_distill(
                     graph_input = initial_state
         else:
             graph_input = initial_state
-        resume_from_node = manifest.get("resume_from_node")
+        resume_from_node = _canonical_graph_node_id(manifest.get("resume_from_node"))
         chapter_stage_nodes = {
             "prepare_chapters",
             "synthesize_chapter",
             "review_chapter_coverage",
             "build_chapter_visuals",
+            "prepare_retrieval",
+            "elasticsearch",
+            "qdrant",
+            "neo4j",
+            "web_search",
+            "fuse_evidence",
             "synthesize_book",
             "write_decision_brief",
             "research_context",
@@ -1486,7 +1575,7 @@ async def run_distill(
                     resume_from_node,
                 )
         if completed_checkpoint_state is not None:
-            result = await ai.bd.nodes.distill.publish_report.node.publish_report_with_dependencies(
+            result = await ai.bd.nodes.distill.main.publish_report.node.publish_report_with_dependencies(
                 dependencies,
                 completed_checkpoint_state,
             )

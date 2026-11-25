@@ -132,6 +132,24 @@ async def has_active_index_run(book_id: str) -> bool:
     return False
 
 
+async def list_book_indexes(
+    book_id: str,
+    *,
+    storage: infra.minio.service.MinIOStorage | None = None,
+) -> list[dict[str, Any]]:
+    """Load every valid retrieval-index manifest owned by a book."""
+    if not domain.safe_segment(book_id):
+        raise ValueError("book_id must be a safe path segment")
+    storage = storage or infra.minio.service.get_storage()
+    run_ids = await storage.list_subfolders(ingestion.source.storage.keys.agentic_runs_prefix(book_id))
+    manifests = await asyncio.gather(*(
+        read_index(book_id, run_id, storage = storage)
+        for run_id in run_ids
+        if run_id != "current" and domain.safe_segment(run_id)
+    ))
+    return [manifest for manifest in manifests if manifest is not None]
+
+
 async def queue_index(book_id: str, agentic_run_id: str) -> dict[str, Any]:
     """Idempotently queue the post-publication retrieval branch for one completed run."""
     if not domain.safe_segment(book_id) or not domain.safe_segment(agentic_run_id):

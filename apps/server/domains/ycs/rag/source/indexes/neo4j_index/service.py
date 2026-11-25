@@ -4,7 +4,7 @@ Imperative Shell (`docs/CODE-CONVENTIONS.md` §4): I/O + Cypher writes +
 LLM dispatch. Pure decisions delegated to `domain.py`.
 Public API:
   extract_and_store_graph(transcripts, metadata_map, llm, neo4j_graph, batch_size)
-    → LLMGraphTransformer extraction, evidence checks, then Neo4j writes
+    → Docling Graph extraction, evidence checks, then Neo4j writes
   resolve_entities(neo4j_graph) → int (merged count)
   discover_schema(sample_transcripts, llm) → dict
   get_graph_stats(neo4j_graph) → dict
@@ -26,7 +26,7 @@ from langchain_core.documents import Document
 from rapidfuzz import fuzz
 
 import infra
-from ai.ycs.prompts.rag.graph_transformer import prompts
+from ai.ycs.prompts.rag.graph_extractor import prompts
 
 from ...... import settings
 from ..... import ingestion
@@ -165,10 +165,10 @@ async def extract_and_store_graph(
     that come back in `failed_video_ids`, not the whole batch.
 
     Returns counters dict suitable for the API response envelope."""
-    # One reusable LangChain transformer runtime per Celery task. The
+    # One reusable Docling Graph extraction runtime per Celery task. The
     # surrounding streaming pool, retry loop, and Neo4j writes remain
     # the existing run shell.
-    graph_transformer = ai.service.graph_transformer_runtime(
+    graph_extractor = ai.service.graph_extractor_runtime(
         llm, run_id = extract_id,
     )
     concurrency = (
@@ -342,7 +342,7 @@ async def extract_and_store_graph(
             params.NEO4J_EXTRACT_SEM_LEASE_S,
         ):
             graph_document = await asyncio.wait_for(
-                ai.service.extract_graph_document(graph_transformer, doc),
+                ai.service.extract_graph_document(graph_extractor, doc),
                 timeout = params.GRAPH_BATCH_TIMEOUT_S,
             )
             return [graph_document]
@@ -532,7 +532,7 @@ async def extract_and_store_graph(
                 if vid and vid not in failed_ids:
                     failed_ids.append(vid)
             else:
-                # Keep defensive coercion for model and legacy transformer output before writing to Neo4j.
+                # Keep defensive coercion for model and legacy graph imports before writing to Neo4j.
                 # `type` is sanitized too (see sanitize_neo4j_label's
                 # docstring) — it's written verbatim as a Neo4j label/
                 # relationship-type token by langchain-neo4j's own
@@ -762,7 +762,7 @@ async def resolve_entities(neo4j_graph: infra.neo4j.service.Neo4jGraph) -> int:
     installed."""
     merged_count = 0
 
-    # Heal historical list-typed ids emitted by older transformer versions.
+    # Heal historical list-typed ids emitted by older graph extraction versions.
     # `apoc.refactor.mergeNodes(... properties: 'combine')` USED to
     # concatenate conflicting property values into lists, corrupting
     # `e.id` into `['brasil', 'brazil']` shapes that broke every

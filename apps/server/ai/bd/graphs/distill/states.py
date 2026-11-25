@@ -44,6 +44,16 @@ class DistillRunState(TypedDict, total = False):
     chapter_ref: domains.bd.distill.ai.entities.ChapterRef
     chapter_batch: list[domains.bd.distill.ai.entities.ChapterRef]
     book_synthesis_key: str
+    query: str
+    include_web: bool
+    retrieval_sources_to_run: list[str]
+    elasticsearch_result: dict[str, Any]
+    qdrant_result: dict[str, Any]
+    neo4j_result: dict[str, Any]
+    web_search_result: dict[str, Any]
+    evidence: list[dict[str, Any]]
+    source_status: dict[str, str]
+    source_queries: dict[str, list[str]]
     decision_brief_key: str
     research_context_key: str
     report_key: str

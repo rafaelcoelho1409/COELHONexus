@@ -15,7 +15,7 @@ class Neo4jIndexNodeTests(unittest.IsolatedAsyncioTestCase):
         max_active_calls = 0
         two_calls_started = asyncio.Event()
 
-        async def extract(_transformer, _rows, *, section_title: str) -> dict:
+        async def extract(_extractor, _rows, *, section_title: str) -> dict:
             nonlocal active_calls, max_active_calls
             active_calls += 1
             max_active_calls = max(max_active_calls, active_calls)
@@ -38,7 +38,7 @@ class Neo4jIndexNodeTests(unittest.IsolatedAsyncioTestCase):
         sibling_cancelled = asyncio.Event()
         active_calls = 0
 
-        async def extract(_transformer, _rows, *, section_title: str) -> dict:
+        async def extract(_extractor, _rows, *, section_title: str) -> dict:
             nonlocal active_calls
             active_calls += 1
             if active_calls == 2:
@@ -87,7 +87,7 @@ class Neo4jIndexNodeTests(unittest.IsolatedAsyncioTestCase):
         progress_callback = AsyncMock()
         context = SimpleNamespace(
             storage=object(),
-            graph_transformer=object(),
+            graph_extractor=object(),
             progress_callback=progress_callback,
             cancel_check=AsyncMock(return_value = False),
         )

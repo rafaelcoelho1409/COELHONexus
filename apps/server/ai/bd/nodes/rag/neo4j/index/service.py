@@ -9,28 +9,119 @@ import random
 from collections.abc import Coroutine, Iterable
 from typing import Any
 
-from langchain_core.documents import Document
-from langchain_neo4j import LLMGraphTransformer
-
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 logger = logging.getLogger(__name__)
 
 
+def _split_graph_rows(rows: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
+    """Split a failed graph batch while retaining page and section metadata."""
+    if len(rows) > 1:
+        midpoint = len(rows) // 2
+        return [rows[:midpoint], rows[midpoint:]]
+    if not rows:
+        return []
+
+    row = rows[0]
+    content = str(row.get("content") or "")
+    if len(content) <= 1_000:
+        return []
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=max(1_000, len(content) // 2),
+        chunk_overlap=120,
+        add_start_index=True,
+        separators=["\n\n", "\n", " ", ""],
+    )
+    parts = splitter.create_documents([content])
+    if len(parts) < 2:
+        return []
+    return [[{
+        **row,
+        "content": part.page_content,
+        "source_char_start": int(row.get("source_char_start") or 0)
+        + int(part.metadata.get("start_index") or 0),
+    }] for part in parts]
+
+
+def _merge_graph_facts(extractions: list[dict[str, list[dict[str, Any]]]]) -> dict[str, list[dict[str, Any]]]:
+    """Merge overlapping split results without duplicating graph identities."""
+    entities: dict[tuple[str, str], dict[str, Any]] = {}
+    relationships: dict[tuple[str, str, str], dict[str, Any]] = {}
+
+    def evidence_values(value: Any) -> list[str]:
+        values = value if isinstance(value, (list, tuple)) else [value]
+        return [str(item).strip() for item in values if isinstance(item, str) and item.strip()]
+
+    for extraction in extractions:
+        for entity in extraction["entities"]:
+            key = (entity["id"].casefold(), entity["type"].casefold())
+            entities.setdefault(key, entity)
+        for relationship in extraction["relationships"]:
+            key = (
+                relationship["source_id"].casefold(),
+                relationship["type"].casefold(),
+                relationship["target_id"].casefold(),
+            )
+            current = relationships.get(key)
+            if current is None:
+                relationships[key] = relationship
+                continue
+            current_evidence = (current.get("properties") or {}).get("evidence")
+            new_evidence = (relationship.get("properties") or {}).get("evidence")
+            merged_evidence = list(dict.fromkeys([
+                *evidence_values(current_evidence),
+                *evidence_values(new_evidence),
+            ]))
+            if merged_evidence:
+                properties = current.get("properties")
+                if not isinstance(properties, dict):
+                    properties = {}
+                    current["properties"] = properties
+                properties["evidence"] = merged_evidence
+    return {"entities": list(entities.values()), "relationships": list(relationships.values())}
+
+
 async def extract_graph_facts(
-    graph_transformer: LLMGraphTransformer,
+    graph_extractor: Any,
     rows: list[dict[str, Any]],
     *,
     section_title: str,
+    _split_depth: int = 0,
 ) -> dict[str, list[dict[str, Any]]]:
     """Extract graph facts from one book section for the Neo4j indexing node."""
-    document = Document(
-        page_content = (
-            f"Book section: {section_title}\n\n"
-            f"{domains.bd.rag.source.indexes.neo4j_index.domain.source_material(rows)}"
-        ),
+    text = (
+        f"Book section: {section_title}\n\n"
+        f"{domains.bd.rag.source.indexes.neo4j_index.domain.source_material(rows)}"
     )
-    candidate = await graph_transformer.aprocess_response(document)
-    return domains.bd.rag.source.indexes.neo4j_index.domain.graph_facts(candidate)
+    try:
+        extraction = await graph_extractor.aextract_text(
+            text,
+            source_name="bd-book-section.md",
+        )
+    except Exception as error:
+        source_chars = sum(len(str(row.get("content") or "")) for row in rows)
+        split_batches = _split_graph_rows(rows)
+        if (
+            not domains.settings.chat.domain.is_length_error(error)
+            or not split_batches
+            or _split_depth >= 8
+        ):
+            raise
+        logger.info(
+            "[bd:neo4j] Docling Graph response exceeded its output limit; splitting %d source chars",
+            source_chars,
+        )
+        split_results = [
+            await extract_graph_facts(
+                graph_extractor,
+                batch,
+                section_title=section_title,
+                _split_depth=_split_depth + 1,
+            )
+            for batch in split_batches
+        ]
+        return _merge_graph_facts(split_results)
+    return domains.bd.rag.source.indexes.neo4j_index.domain.graph_facts(extraction)
 
 
 async def index_book_graph(
@@ -102,7 +193,7 @@ async def index_book_graph(
                         stage = "agentic_rag",
                     ):
                         extraction = await extract_graph_facts(
-                            context.graph_transformer,
+                            context.graph_extractor,
                             batch_rows,
                             section_title = section_title,
                         )

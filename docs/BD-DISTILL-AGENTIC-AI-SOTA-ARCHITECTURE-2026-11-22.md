@@ -14,7 +14,7 @@ Treat “same learning in less time” as a result to demonstrate with readers, 
 
 ## What exists in the repository
 
-The current Distill graph is already a fixed, resumable workflow with bounded chapter and unit fan-out. It extracts and verifies lesson candidates, synthesizes chapters and the book, builds evidence-linked diagrams/charts/equations/timelines/maps, optionally gathers Search MCP context, writes a decision brief, reviews the report, and publishes JSON/HTML/PDF artifacts. See [the graph](../apps/server/ai/bd/graphs/distill/graphs.py), [run state and dependencies](../apps/server/ai/bd/graphs/distill/states.py), [report schemas](../apps/server/domains/bd/distill/schemas.py), [publication service](../apps/server/domains/bd/distill/publish_report/service.py), and [HTML/SVG renderer](../apps/server/domains/bd/distill/rendering/domain.py).
+The current Distill graph is already a fixed, resumable workflow with bounded chapter and unit fan-out. It extracts and verifies lesson candidates, synthesizes chapters and the book, builds evidence-linked diagrams/charts/equations/timelines/maps, optionally gathers Search MCP context, writes a decision brief, reviews the report, and publishes JSON/HTML/PDF artifacts. See [the root graph](../apps/server/ai/bd/graphs/distill/main/graphs.py), [run state and dependencies](../apps/server/ai/bd/graphs/distill/states.py), [report schemas](../apps/server/domains/bd/distill/schemas.py), [publication service](../apps/server/domains/bd/distill/publish_report/service.py), and [HTML/SVG renderer](../apps/server/domains/bd/distill/rendering/domain.py).
 
 | Existing capability | Code-grounded finding | Remaining product gap |
 |---|---|---|

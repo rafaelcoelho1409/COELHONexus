@@ -124,13 +124,13 @@ variable "memory_limit" {
 # -----------------------------------------------------------------------------
 
 variable "heap_initial_size" {
-  description = "Initial JVM heap (-Xms). Lazy-committed since AlwaysPreTouch is disabled. Restored 256m → 512m on 2026-06-07 to match the v1 cloud module that ran stable for months; the aggressive halving caused cold-pagecache→Metaspace pressure spirals when LangChain LLMGraphTransformer hit APOC."
+  description = "Initial JVM heap (-Xms). Lazy-committed since AlwaysPreTouch is disabled. Restored 256m → 512m on 2026-06-07 to match the v1 cloud module that ran stable for months; the aggressive halving caused cold-pagecache→Metaspace pressure spirals during large graph writes through APOC."
   type        = string
   default     = "512m"
 }
 
 variable "heap_max_size" {
-  description = "Max JVM heap (-Xmx). Restored 512m → 1G on 2026-06-07 (v1 default). Comfortably fits APOC + LangChain LLMGraphTransformer writes from COELHO Nexus YCS Phase 3."
+  description = "Max JVM heap (-Xmx). Restored 512m → 1G on 2026-06-07 (v1 default). Comfortably fits APOC + graph writes from COELHO Nexus YCS Phase 3."
   type        = string
   default     = "1G"
 }

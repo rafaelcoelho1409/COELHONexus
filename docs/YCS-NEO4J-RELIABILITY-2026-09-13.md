@@ -30,7 +30,7 @@ Investigated by tracing YCS's Neo4j chain builder and the shared client configur
    with no wire representation; the rotator has no way to observe or
    enforce it over the protocol.
 
-Conclusion: keep consumer-specific timeout and retry budgets in Nexus. Apply them to YCS's Neo4j path, which uses LangChain ChatOpenAI as required by LLMGraphTransformer.
+Conclusion: keep consumer-specific timeout and retry budgets in Nexus. The YCS Neo4j path at the time used LangChain ChatOpenAI for graph extraction.
 
 ## Fix 1 (shipped): configure Neo4j's chain explicitly
 

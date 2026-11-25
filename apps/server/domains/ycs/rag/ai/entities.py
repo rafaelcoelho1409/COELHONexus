@@ -6,7 +6,7 @@ from typing import Any
 
 
 @dataclass(frozen = True, slots = True)
-class GraphTransformerRuntime:
+class GraphExtractorRuntime:
     """Model and run attribution shared by a task's transcript transforms."""
 
     model: Any

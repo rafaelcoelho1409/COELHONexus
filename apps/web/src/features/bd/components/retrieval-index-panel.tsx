@@ -75,7 +75,7 @@ const INDEX_NODES = [
     resources: {
       agents: [],
       skills: [],
-      tools: ["LangChain LLMGraphTransformer", "Neo4j"],
+      tools: ["Docling Graph", "Neo4j"],
     },
   },
   {

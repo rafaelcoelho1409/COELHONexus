@@ -360,7 +360,26 @@ export function useDeleteBook() {
       const result = await deleteBdIngestionBookId({ path: { book_id: bookId }, throwOnError: true });
       return { deleted: result.data.deleted, reason: result.data.reason ?? null };
     },
-    onSuccess: () => {
+    onSuccess: (result, bookId) => {
+      if (result.deleted) {
+        queryClient.removeQueries({
+          queryKey: getBdIngestionBookIdQueryKey({ path: { book_id: bookId } }),
+        });
+        queryClient.removeQueries({
+          predicate: (query) =>
+            isBookPageQuery(query.queryKey, bookId) ||
+            (query.queryKey[0] === "bd" &&
+              query.queryKey[1] === "processed-book" &&
+              query.queryKey[2] === bookId) ||
+            (query.queryKey[0] === "bd" &&
+              query.queryKey[1] === "ask" &&
+              query.queryKey[2] === "threads" &&
+              query.queryKey[3] === bookId) ||
+            ((query.queryKey[0] === "bd-agentic-usage" ||
+              query.queryKey[0] === "bd-retrieval-index-usage") &&
+              query.queryKey[1] === bookId),
+        });
+      }
       void queryClient.invalidateQueries({ queryKey: getBdIngestionQueryKey() });
       void queryClient.invalidateQueries({ queryKey: getBdIngestionActiveQueryKey() });
     },

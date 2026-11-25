@@ -245,16 +245,16 @@ def index_processed_book(self, book_id: str, agentic_run_id: str) -> dict:
                     await ensure_lease()
                     return await runs.service.cancel_requested(book_id, agentic_run_id)
 
-                graph_transformer = (
-                    ai.bd.agents.rag.neo4j.index.agent.graph_transformer(
-                        _build_graph_transformer_model(),
+                graph_extractor = (
+                    ai.bd.agents.rag.neo4j.index.graph_extractor.agent.graph_extractor(
+                        _build_graph_extractor_model(),
                     )
                     if manifest.get("node_status", {}).get("neo4j") != "done"
                     else None
                 )
                 context = ai.bd.graphs.rag.index.entities.ProcessedBookIndexDependencies(
                     storage = storage,
-                    graph_transformer = graph_transformer,
+                    graph_extractor = graph_extractor,
                     progress_callback = report_progress,
                     cancel_check = cancel_check,
                 )
@@ -364,9 +364,9 @@ def index_processed_book(self, book_id: str, agentic_run_id: str) -> dict:
     return result
 
 
-def _build_graph_transformer_model():
+def _build_graph_extractor_model():
     settings.chat.service.refresh_endpoint(force = True)
     return settings.chat.service.build_chat_model(
-        timeout_s = params.GRAPH_TRANSFORMER_TIMEOUT_S,
+        timeout_s = params.GRAPH_EXTRACTION_TIMEOUT_S,
         rotator_task = params.GRAPH_ROTATOR_TASK,
     )

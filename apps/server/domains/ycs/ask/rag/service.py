@@ -56,7 +56,7 @@ async def capture_llm_usage(response: object, *, duration_s: float | None = None
     — `set_node()` (called by every node before invoking) only tags
     WHICH node is active; nothing was actually bumping the counter, so
     `/agents/usage/{thread_id}` silently stayed empty for the whole
-    Ask graph (only Neo4j extraction's separate `LLMGraphTransformer`
+    Ask graph (only Neo4j extraction's separate Docling Graph pipeline
     callback path worked). `app.state.llm`/`llm_fast` are plain
     `ChatOpenAI` (`domains/settings/chat/service.py`) — LangChain
     populates `AIMessage.usage_metadata` from any OpenAI-compatible

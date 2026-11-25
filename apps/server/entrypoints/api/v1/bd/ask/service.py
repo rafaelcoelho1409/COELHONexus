@@ -165,7 +165,6 @@ async def ask_stream(payload: schemas.AskRequest) -> StreamingResponse:
             status_code = 409,
             detail = "This book has no completed Ingestion retrieval index to ask about",
         )
-    indexed_run_id = index["agentic_run_id"]
     # app.state.llm is built once during server startup. Settings can change
     # after that, so build a per-turn model using the current chat endpoint.
     try:
@@ -176,7 +175,6 @@ async def ask_stream(payload: schemas.AskRequest) -> StreamingResponse:
             status_code = 503,
             detail = "The configured chat endpoint is unavailable",
         ) from error
-    history = await domains.bd.ask.source.conversation.service.history(payload.thread_id)
     import ai
 
     planner = ai.bd.agents.ask.planner.agent.planner(model)
@@ -184,6 +182,45 @@ async def ask_stream(payload: schemas.AskRequest) -> StreamingResponse:
     answerer = ai.bd.agents.ask.answer.agent.answerer(model)
     critic = ai.bd.agents.ask.critic.agent.critic(model)
     graph = ai.bd.graphs.ask.adaptive.graphs.adaptive_ask_graph()
+    history = await domains.bd.ask.source.conversation.service.history(payload.thread_id)
+    turn_token = uuid.uuid4().hex
+    active_turn_key = domains.bd.ask.source.conversation.keys.active_turn_key(payload.book_id, turn_token)
+    try:
+        async with (
+            infra.redis.service.client() as redis,
+            redis.lock(
+                domains.bd.ingestion.ai.progress.keys.book_mutation_lock_key(payload.book_id),
+                timeout = 120,
+                blocking_timeout = 30,
+            ),
+        ):
+            prior_book = await domains.bd.ask.source.conversation.service.thread_book_id(payload.thread_id)
+            if prior_book is not None and prior_book != payload.book_id:
+                raise HTTPException(status_code = 409, detail = "An Ask thread is locked to its original book")
+            index = await domains.bd.rag.ai.runs.service.read_current_index(payload.book_id)
+            if index is None:
+                raise HTTPException(
+                    status_code = 409,
+                    detail = "This book has no completed Ingestion retrieval index to ask about",
+                )
+            indexed_run_id = index["agentic_run_id"]
+            await redis.set(
+                active_turn_key,
+                "1",
+                ex = domains.bd.ask.source.conversation.keys.ACTIVE_TURN_TTL_S,
+            )
+            try:
+                turn_id = await domains.bd.ask.source.conversation.service.insert_turn(
+                    payload.book_id, indexed_run_id, payload.thread_id, payload.question,
+                )
+            except Exception:
+                await redis.delete(active_turn_key)
+                raise
+    except HTTPException:
+        raise
+    except Exception as error:
+        logger.exception("[bd:ask] could not reserve or create conversation turn")
+        raise HTTPException(status_code = 503, detail = "Ask conversation storage is unavailable") from error
     context = ai.bd.graphs.ask.adaptive.entities.AskContext(
         book_id = payload.book_id,
         run_id = indexed_run_id,
@@ -193,13 +230,6 @@ async def ask_stream(payload: schemas.AskRequest) -> StreamingResponse:
         answerer = answerer,
         critic = critic,
     )
-    try:
-        turn_id = await domains.bd.ask.source.conversation.service.insert_turn(
-            payload.book_id, indexed_run_id, payload.thread_id, payload.question,
-        )
-    except Exception as error:
-        logger.exception("[bd:ask] could not create conversation turn")
-        raise HTTPException(status_code = 503, detail = "Ask conversation storage is unavailable") from error
     initial_state = {
         "question": payload.question,
         "thread_id": payload.thread_id,
@@ -250,6 +280,14 @@ async def ask_stream(payload: schemas.AskRequest) -> StreamingResponse:
         async def _heartbeat() -> None:
             while True:
                 await asyncio.sleep(ai.bd.graphs.ask.adaptive.params.HEARTBEAT_INTERVAL_S)
+                try:
+                    async with infra.redis.service.client() as redis:
+                        await redis.expire(
+                            active_turn_key,
+                            domains.bd.ask.source.conversation.keys.ACTIVE_TURN_TTL_S,
+                        )
+                except Exception:
+                    logger.exception("[bd:ask] could not renew active-turn lease")
                 thinking["_seq"] = int(thinking.get("_seq", 0)) + 1
                 thinking["duration_ms"] = int((time.monotonic() - started) * 1000)
                 async with snapshot_lock:
@@ -327,6 +365,11 @@ async def ask_stream(payload: schemas.AskRequest) -> StreamingResponse:
         finally:
             heartbeat_task.cancel()
             await asyncio.gather(heartbeat_task, return_exceptions = True)
+            try:
+                async with infra.redis.service.client() as redis:
+                    await redis.delete(active_turn_key)
+            except Exception:
+                logger.exception("[bd:ask] could not clear active-turn lease")
             _ACTIVE_TASKS.pop(turn_id, None)
             await queue.put(("done", None))
 

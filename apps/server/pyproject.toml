@@ -35,11 +35,12 @@ dependencies = [
     # YCS persistence: Elasticsearch (video metadata/transcripts), Neo4j (entity graph).
     "elasticsearch[async]>=8,<9",
     "neo4j>=5,<6",
-    "langchain_neo4j>=0.11,<1.0",     # Maintained home of LLMGraphTransformer
+    "docling-graph>=1.9.2,<2.0",      # Typed schema extraction, graph construction, and provenance
+    "langchain_neo4j>=0.11,<1.0",     # Neo4jGraph and GraphDocument writer types
     "flashrank>=0.2,<1.0",             # cross-encoder reranker
     "langchain-qdrant>=1.1,<2.0",      # 1.x needed for langchain-core 1.x compat
     "fastembed>=0.9.0,<1.0",             # BM25 sparse encoder behind FastEmbedSparse (CPU build; optional extra, pin explicitly)
-    "json-repair>=0.30,<1.0",           # LLMGraphTransformer's provider-compatibility parser
+    "json-repair>=0.30,<1.0",           # Repairs compatible JSON model responses before schema validation
     "langchain-openai>=1.1,<2.0",      # ChatOpenAI client for the with_fallbacks LLM chain
     # cryptography floor 50.0.0 fixes every advisory open on 46.0.7 (wheel OpenSSL, PKCS#7 Bleichenbacher oracle, path building).
     "cryptography>=50.0.0,<51",
@@ -106,15 +107,13 @@ package = false
 exclude-newer = "7 days"
 exclude-newer-package = { fastmcp-slim = "2026-10-25T00:00:00Z", fastmcp = "2026-10-25T00:00:00Z", certifi = "2026-10-25T00:00:00Z", pypdf = "2026-10-25T00:00:00Z", brotli = "2026-10-25T00:00:00Z", docling = "2026-11-02T00:00:00Z", docling-slim = "2026-11-02T00:00:00Z", docling-core = "2026-11-02T00:00:00Z", docling-ibm-models = "2026-11-02T00:00:00Z", docling-parse = "2026-11-02T00:00:00Z" }
 
-# No litellm in this project. crawl4ai hard-depends on `unclecode-litellm` (a litellm fork, which
-# installs into the `litellm/` namespace) for its LLM-extraction helpers; this app never uses
-# those (crawl4ai imports litellm lazily inside them, and at module level only in cli.py and
-# legacy/llmtxt.py). The override keeps the fork — and with it any litellm — out of the
-# environment: litellm was supply-chain compromised twice in 2026 (1.82.7/.8 on 2026-03-24,
-# 1.107.0 on 2026-10-21). If crawl4ai's LLM features are ever needed, vet and pin a clean
-# `litellm` explicitly and drop this override.
+# No LiteLLM runtime in this project. crawl4ai's `unclecode-litellm` fork and Docling Graph's
+# optional default client are not used: Docling Graph receives the configured ChatOpenAI client.
+# The override keeps both LiteLLM distributions out of the environment; LiteLLM had supply-chain
+# compromises in 2026 (1.82.7/.8 on 2026-03-24, 1.107.0 on 2026-10-21).
 override-dependencies = [
     "unclecode-litellm; python_version >= '99'",
+    "litellm; python_version >= '99'",
 ]
 
 [build-system]

@@ -66,6 +66,17 @@ async def list_threads(book_id: str) -> list[dict]:
     ]
 
 
+async def list_book_thread_ids(book_id: str) -> list[str]:
+    """Return every Ask thread associated with a book, without the UI history limit."""
+    async with await infra.postgres.service.connect() as conn:
+        result = await conn.execute(
+            f"SELECT DISTINCT thread_id FROM {params.TABLE_NAME} WHERE book_id = %s",
+            (book_id,),
+        )
+        rows = await result.fetchall()
+    return [str(row[0]) for row in rows if row[0]]
+
+
 async def list_turns(thread_id: str) -> list[dict]:
     if not thread_id:
         return []
@@ -137,6 +148,17 @@ async def delete_turn(turn_id: int) -> int:
 async def delete_thread(thread_id: str) -> int:
     async with await infra.postgres.service.connect() as conn:
         result = await conn.execute(f"DELETE FROM {params.TABLE_NAME} WHERE thread_id = %s", (thread_id,))
+        await conn.commit()
+    return int(result.rowcount or 0)
+
+
+async def delete_book(book_id: str) -> int:
+    """Delete every persisted Ask turn associated with one book."""
+    async with await infra.postgres.service.connect() as conn:
+        result = await conn.execute(
+            f"DELETE FROM {params.TABLE_NAME} WHERE book_id = %s",
+            (book_id,),
+        )
         await conn.commit()
     return int(result.rowcount or 0)
 

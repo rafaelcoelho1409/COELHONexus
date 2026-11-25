@@ -42,12 +42,12 @@ def neo4j_retriever(model = None):
             general_purpose_subagent = GeneralPurposeSubagentProfile(enabled = False),
         ),
     )
-    retrieval_tool = tools.rag.tools.rag_retrieve_neo4j
+    retrieval_tool = tools.neo4j.tools.retrieve_neo4j
     allowed_tools = frozenset({retrieval_tool.name})
     agent = create_deep_agent(
         model = model,
         tools = [retrieval_tool],
-        context_schema = tools.rag.entities.RetrievalSession,
+        context_schema = tools.retrieval.entities.RetrievalSession,
         system_prompt = prompts.rag.neo4j.prompts.SYSTEM_PROMPT,
         middleware = [
             middlewares.middleware.ToolAllowlistMiddleware(allowed_tools),

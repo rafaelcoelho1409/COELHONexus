@@ -2,8 +2,8 @@
 
 Two factories because they serve different consumers:
   get_driver() → raw `AsyncDriver` for custom Cypher (retriever Wave 3c)
-  get_graph()  → LangChain `Neo4jGraph` wrapper (LLMGraphTransformer
-                 Wave 3b + entity retrieval Wave 3c)
+  get_graph()  → LangChain `Neo4jGraph` wrapper for graph writes and
+                 entity retrieval Wave 3c
 
 PER-LOOP CACHING — load-bearing for Celery prefork:
 
@@ -112,7 +112,7 @@ def new_graph(*, refresh_schema: bool = False) -> Neo4jGraph:
 
 
 def get_graph() -> Neo4jGraph:
-    """LangChain `Neo4jGraph` wrapper for `LLMGraphTransformer` + the
+    """LangChain `Neo4jGraph` wrapper for graph document writes and the
     deprecated entity retriever. `refresh_schema=False` is mandatory
     (see module docstring). SYNC under the hood — process-wide singleton
     is fine."""

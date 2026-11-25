@@ -10,7 +10,7 @@ from . import (
     pin_sources,
     publish_retrieval_index,
     qdrant,
-    search,
+    web_search,
     service,
 )
 
@@ -23,6 +23,6 @@ __all__ = [
     "pin_sources",
     "publish_retrieval_index",
     "qdrant",
-    "search",
+    "web_search",
     "service",
 ]

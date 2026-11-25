@@ -2,13 +2,14 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 from langchain_core.documents import Document
-from langchain_neo4j import LLMGraphTransformer
 from langchain_neo4j.graphs.graph_document import GraphDocument, Node, Relationship
 
-from ai.ycs.agents.rag.graph_transformer import agent
+import ai
+from ai.ycs.agents.rag.graph_extractor import agent, service as graph_extraction
 
 from .. import source
 from . import entities
@@ -16,27 +17,90 @@ from . import entities
 logger = logging.getLogger(__name__)
 
 
-def graph_transformer_runtime(
+def graph_extractor_runtime(
     model: Any,
     *,
     run_id: str | None = None,
-) -> entities.GraphTransformerRuntime:
-    """Create the runtime state shared by one task's transcript transforms."""
-    return entities.GraphTransformerRuntime(model = model, run_id = run_id)
+) -> entities.GraphExtractorRuntime:
+    """Create the runtime state shared by one task's transcript extractions."""
+    return entities.GraphExtractorRuntime(
+        model=agent.graph_model(model, run_id=run_id),
+        run_id=run_id,
+    )
 
 
-def _transformer(
-    runtime: entities.GraphTransformerRuntime,
+def _entity_evidence(name: str, transcript: str) -> str:
+    """Return an exact sentence containing an extracted entity name."""
+    escaped_name = r"\s+".join(re.escape(part) for part in name.split())
+    if not escaped_name:
+        return ""
+    name_pattern = re.compile(rf"(?<!\w){escaped_name}(?!\w)", re.IGNORECASE)
+    for sentence in re.finditer(r"[^.!?\n]+(?:[.!?]+|$)", transcript):
+        excerpt = sentence.group().strip()
+        if name_pattern.search(excerpt) and len(excerpt) <= 800:
+            return excerpt
+    match = name_pattern.search(transcript)
+    if match is None:
+        return ""
+    start = max(0, match.start() - 200)
+    end = min(len(transcript), match.end() + 200)
+    return transcript[start:end].strip()[:800]
+
+
+def _graph_document_from_extraction(extraction: Any, source_document: Document) -> GraphDocument:
+    """Adapt validated Docling Graph facts into the existing Neo4j writer type."""
+    entities_by_id: dict[str, Node] = {}
+
+    def get_node(entity_id: str, entity_type: str) -> Node:
+        key = entity_id.casefold()
+        node = entities_by_id.get(key)
+        if node is None:
+            node = Node(
+                id=entity_id,
+                type=entity_type or "Entity",
+                properties={"evidence": _entity_evidence(entity_id, source_document.page_content or "")},
+            )
+            entities_by_id[key] = node
+        return node
+
+    for entity in extraction.entities:
+        get_node(entity["id"], entity["type"])
+
+    relationships: list[Relationship] = []
+    for fact in extraction.relationships:
+        source_node = get_node(fact["source_id"], fact.get("source_type") or "Entity")
+        target_node = get_node(fact["target_id"], fact.get("target_type") or "Entity")
+        properties = fact.get("properties") or {}
+        relationships.append(Relationship(
+            source=source_node,
+            target=target_node,
+            type=fact["type"],
+            properties={"evidence": str(properties.get("evidence") or "")},
+        ))
+
+    return GraphDocument(
+        nodes=list(entities_by_id.values()),
+        relationships=relationships,
+        source=source_document,
+    )
+
+
+async def _process(
+    runtime: entities.GraphExtractorRuntime,
+    document: Document,
     *,
     additional_instructions: str = "",
-    unstructured: bool = False,
-) -> LLMGraphTransformer:
-    """Create a transformer for the requested provider-compatibility mode."""
-    return agent.graph_transformer(
+) -> Any:
+    """Run Docling Graph and adapt its projection for YCS validation."""
+    instructions = "\n\n".join(filter(None, (
+        ai.ycs.prompts.rag.graph_extractor.prompts.SYSTEM_PROMPT,
+        additional_instructions.strip(),
+    )))
+    return await graph_extraction.aextract_text(
+        document.page_content or "",
         runtime.model,
-        run_id = runtime.run_id,
-        additional_instructions = additional_instructions,
-        unstructured = unstructured,
+        instructions=instructions,
+        source_name="ycs-transcript.md",
     )
 
 
@@ -52,18 +116,42 @@ def _validated_graph_document(
         source_document.page_content or "",
         require_evidence = require_evidence,
     )
-    nodes_by_id = {
-        item["id"].casefold(): Node(id = item["id"], type = item["type"])
-        for item in nodes
+    source_nodes = {
+        str(getattr(item, "id", "")).casefold(): item
+        for item in candidate.nodes or []
     }
-    accepted_relationships = [
-        Relationship(
-            source = nodes_by_id[relation["source_id"].casefold()],
-            target = nodes_by_id[relation["target_id"].casefold()],
-            type = relation["type"],
+    nodes_by_id: dict[str, Node] = {}
+    for item in nodes:
+        original = source_nodes.get(item["id"].casefold())
+        properties = getattr(original, "properties", {}) or {}
+        nodes_by_id[item["id"].casefold()] = Node(
+            id=item["id"],
+            type=item["type"],
+            properties={"evidence": properties.get("evidence", "")},
         )
-        for relation in relations
-    ]
+    source_relationships = {
+        (
+            str(getattr(getattr(item, "source", None), "id", "")).casefold(),
+            str(getattr(item, "type", "")).casefold(),
+            str(getattr(getattr(item, "target", None), "id", "")).casefold(),
+        ): item
+        for item in candidate.relationships or []
+    }
+    accepted_relationships: list[Relationship] = []
+    for relation in relations:
+        key = (
+            relation["source_id"].casefold(),
+            relation["type"].casefold(),
+            relation["target_id"].casefold(),
+        )
+        original = source_relationships.get(key)
+        properties = getattr(original, "properties", {}) or {}
+        accepted_relationships.append(Relationship(
+            source=nodes_by_id[key[0]],
+            target=nodes_by_id[key[2]],
+            type=relation["type"],
+            properties={"evidence": properties.get("evidence", "")},
+        ))
     return GraphDocument(
         nodes = list(nodes_by_id.values()),
         relationships = accepted_relationships,
@@ -71,90 +159,47 @@ def _validated_graph_document(
     ), issues
 
 
-def _is_structured_schema_error(error: Exception) -> bool:
-    message = f"{type(error).__name__}: {error}".casefold()
-    return any(marker in message for marker in (
-        "dynamicgraph",
-        "anyof",
-        "json schema",
-        "structured output",
-        "invalid schema",
-        "schema validation",
-        "function_calling",
-        "function calling",
-        "tool call schema",
-        # Some OpenAI-compatible gateways return this internal 500 while
-        # parsing structured graph output instead of reporting a schema error.
-        "nonetype' object has no attribute 'get'",
-    ))
-
-
-async def _process(
-    runtime: entities.GraphTransformerRuntime,
-    document: Document,
-    *,
-    additional_instructions: str = "",
-) -> tuple[GraphDocument, bool]:
-    """Return a candidate and whether provider compatibility fallback ran."""
-    try:
-        transformer = _transformer(
-            runtime,
-            additional_instructions = additional_instructions,
-        )
-        result = await transformer.aprocess_response(document)
-        return result, False
-    except Exception as error:
-        if not _is_structured_schema_error(error):
-            raise
-        logger.warning(
-            "[ycs:neo4j] provider rejected structured graph output; "
-            "retrying with the compatibility parser (%s)",
-            type(error).__name__,
-        )
-    transformer = _transformer(
-        runtime,
-        additional_instructions = additional_instructions,
-        unstructured = True,
-    )
-    return await transformer.aprocess_response(document), True
-
-
 async def extract_graph_document(
-    runtime: entities.GraphTransformerRuntime,
+    runtime: entities.GraphExtractorRuntime,
     document: Document,
 ) -> GraphDocument:
-    """Transform one transcript, validate facts, and preserve its source tag."""
-    candidate, compatibility_fallback = await _process(runtime, document)
-    if not compatibility_fallback and not (candidate.nodes or candidate.relationships):
-        candidate = await _transformer(runtime, unstructured = True).aprocess_response(document)
-        compatibility_fallback = True
-        logger.warning("[ycs:neo4j] structured graph output was empty; used compatibility parser")
-
+    """Extract one transcript, validate facts, and preserve its source tag."""
+    extraction = await _process(runtime, document)
+    candidate = _graph_document_from_extraction(extraction, document)
     accepted, issues = _validated_graph_document(
         candidate,
         document,
-        require_evidence = not compatibility_fallback,
+        require_evidence = True,
     )
-    if issues and not compatibility_fallback:
+    if issues:
         feedback = (
             f"{len(issues)} candidate(s) were rejected because they lacked "
             "exact source evidence, referenced missing endpoints, had "
             "conflicting types, or exceeded extraction limits."
         )
-        retry_candidate, retry_fallback = await _process(
-            runtime,
-            document,
-            additional_instructions = (
-                "Correct the prior unsupported candidates using only exact "
-                "transcript evidence. Every node and relationship must have "
-                "an evidence property copied verbatim from the transcript. "
-                "Validation feedback:\n" + feedback
-            ),
-        )
+        try:
+            retry_extraction = await _process(
+                runtime,
+                document,
+                additional_instructions = (
+                    "Correct the prior unsupported candidates using only exact "
+                    "transcript evidence. Every fact must include a short excerpt "
+                    "copied verbatim from the transcript; include entities only "
+                    "when they occur in the source. "
+                    "Validation feedback:\n" + feedback
+                ),
+            )
+        except Exception as error:
+            logger.warning(
+                "[ycs:neo4j] Docling Graph evidence retry failed (%s); keeping the validated first pass",
+                type(error).__name__,
+            )
+            return accepted
+        retry_candidate = _graph_document_from_extraction(retry_extraction, document)
         retried, retry_issues = _validated_graph_document(
             retry_candidate,
             document,
-            require_evidence = not retry_fallback,
+            require_evidence = True,
         )
         if (
             len(retried.nodes) + len(retried.relationships)
@@ -163,33 +208,7 @@ async def extract_graph_document(
             accepted = retried
         if retry_issues:
             logger.info(
-                "[ycs:neo4j] transformer retained %d unsupported candidate(s) after evidence retry",
+                "[ycs:neo4j] Docling Graph retained %d unsupported candidate(s) after evidence retry",
                 len(retry_issues),
             )
-        if (
-            not retry_fallback
-            and not retried.nodes
-            and not retried.relationships
-            and (retry_candidate.nodes or retry_candidate.relationships)
-        ):
-            fallback_candidate = await _transformer(
-                runtime,
-                additional_instructions = (
-                    "Return only transcript-supported entities and direct "
-                    "relationships. Omit facts whose named endpoints do not "
-                    "appear together in one sentence."
-                ),
-                unstructured = True,
-            ).aprocess_response(document)
-            fallback_graph, _ = _validated_graph_document(
-                fallback_candidate,
-                document,
-                require_evidence = False,
-            )
-            if fallback_graph.nodes or fallback_graph.relationships:
-                accepted = fallback_graph
-                logger.warning(
-                    "[ycs:neo4j] evidence validation yielded no facts; "
-                    "accepted locally grounded compatibility output",
-                )
     return accepted

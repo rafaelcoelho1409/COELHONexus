@@ -2,12 +2,12 @@ from . import (
     elasticsearch,
     neo4j,
     qdrant,
-    search,
+    web_search,
 )
 
 __all__ = [
     "elasticsearch",
     "neo4j",
     "qdrant",
-    "search",
+    "web_search",
 ]

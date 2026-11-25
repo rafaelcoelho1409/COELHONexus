@@ -332,7 +332,7 @@ def fetch_entity_inventory(graph: infra.neo4j.service.Neo4jGraph) -> list[str]:
     """Distinct `__Entity__` surface forms in this YCS graph, for the
     extraction prompt's prefer-exact-spellings hint (2026-09-16).
 
-    List-valued ids (LLMGraphTransformer stores ~28% that way) resolve
+    Historical list-valued ids resolve
     to their head element; empties dropped; capped at
     `INVENTORY_MAX_IDS`. Any Cypher failure → [] (extraction proceeds
     unhinted — the exact->CONTAINS tiers are the real safety net, this
@@ -397,7 +397,7 @@ def _ensure_entity_text_index(graph: infra.neo4j.service.Neo4jGraph) -> None:
             f"{type(e).__name__}: {str(e)[:150]}"
         )
 
-# LLMGraphTransformer stores ~28% of entity IDs as Cypher LISTs (e.g.
+# Older graph imports can contain list-valued entity IDs (e.g.
 # `['Dubai', 'UAE']`) — the `valueType` check normalizes them to their
 # first element. Neo4j-5+ syntax.
 _NORMALIZE_ID = (
