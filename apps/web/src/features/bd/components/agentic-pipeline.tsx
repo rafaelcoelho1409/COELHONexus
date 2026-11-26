@@ -296,6 +296,8 @@ export function AgenticPipelineOverview({
               : progress.excluded_page_count,
       }
     : EMPTY_AGENTIC_PROGRESS;
+  const contentSelectionReviewPages = run?.content_selection_review_pages ?? [];
+  const contentSelectionReviewCount = run?.content_selection_review_count ?? 0;
   const summary: AgenticRunSummary | null =
     run?.status === "done"
       ? {
@@ -304,6 +306,20 @@ export function AgenticPipelineOverview({
           unverifiedPages: run.unverified_page_count,
         }
       : null;
+  const qualityReviewReasonLabels: Record<string, string> = {
+    unresolved_issues: "unresolved page issues",
+    repair_errors: "repair errors",
+    audit_unverified: "unverified audits",
+    book_metadata: "metadata review",
+    source_text_loss: "source text loss",
+    content_selection_fallback: "conservative page selections",
+    contents_reconciliation: "contents review",
+    visual_extraction_failure: "failed figure transcriptions",
+  };
+  const qualityReviewSummary = Object.entries(run?.quality_review_reasons ?? {})
+    .filter(([, count]) => count > 0)
+    .map(([reason, count]) => `${count} ${qualityReviewReasonLabels[reason] ?? reason}`)
+    .join(" · ");
   const views = agenticNodeViews(graphProgress, runStatus, total, units.plural, summary);
   const caption = agenticBoardCaption(
     graphProgress,
@@ -345,6 +361,26 @@ export function AgenticPipelineOverview({
         {replayError ? (
           <p role="alert" className="mt-3 break-words text-sm text-destructive-text">
             {replayError}
+          </p>
+        ) : null}
+        {run?.status === "done" && contentSelectionReviewPages.length > 0 ? (
+          <p className="mt-3 break-words text-xs text-warning-text">
+            Conservative page selections · {contentSelectionReviewCount} pages retained for review · Pages{" "}
+            {contentSelectionReviewPages.join(", ")}
+          </p>
+        ) : null}
+        {run?.status === "done" && (run.visual_failed_count ?? 0) > 0 ? (
+          <p className="mt-3 break-words text-xs text-warning-text">
+            Visual extraction failures · {run.visual_failed_count} figure transcription{" "}
+            {(run.visual_failed_count ?? 0) === 1 ? " needs" : "s need"} review
+            {(run.visual_failed_pages?.length ?? 0) > 0
+              ? ` · Pages ${run.visual_failed_pages?.join(", ")}`
+              : ""}
+          </p>
+        ) : null}
+        {run?.status === "done" && run.quality_status === "complete_with_review" ? (
+          <p className="mt-2 break-words text-xs text-warning-text">
+            Quality review · {qualityReviewSummary || "Review the quality report for details."}
           </p>
         ) : null}
         <div className="mt-3 grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-[minmax(8rem,1fr)_minmax(0,2fr)]">

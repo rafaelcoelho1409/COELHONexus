@@ -1292,6 +1292,10 @@ async def _checkpoint_before_ingestion_node(
             return snapshot.config, "audit_batch"
         if graph_node == "normalize_metadata" and next_nodes == parallel_content_fork:
             return snapshot.config, "audit_batch"
+        if graph_node == "enrich_visuals" and next_nodes == {graph_node}:
+            # Both parallel branches feed this join, so LangGraph needs an explicit predecessor
+            # when the replay reset is applied at the checkpoint immediately before it.
+            return snapshot.config, "normalize_metadata"
         if next_nodes == {graph_node}:
             return snapshot.config, None
         raise ValueError(
@@ -1985,13 +1989,31 @@ async def run_ingestion_ai(
             json.dumps(final_manifest, ensure_ascii = False, separators = (",", ":"), sort_keys = True),
             content_type = "application/json",
         )
+        retrieval_index_status = "not_started"
+        if final_manifest["status"] == runs.schemas.AgenticRunStatus.DONE.value:
+            try:
+                from ... import rag
+
+                retrieval_index = await rag.ai.runs.service.queue_index(book_id, agentic_run_id)
+                retrieval_index_status = retrieval_index.get("status", "unknown")
+            except Exception as error:
+                retrieval_index_status = "enqueue_failed"
+                logger.exception(
+                    "[bd-agentic] retrieval-index enqueue failed after publication for %s/%s (%s)",
+                    book_id,
+                    agentic_run_id,
+                    type(error).__name__,
+                )
         await progress.service.emit(
             book_id,
             agentic_run_id,
             "run_done",
             status = runs.schemas.AgenticRunStatus.DONE.value,
             progress = progress_state,
+            retrieval_index_status = retrieval_index_status,
         )
+        if isinstance(result, dict):
+            result["retrieval_index_status"] = retrieval_index_status
         return result
     except progress.service.RunExecutionLeaseLostError:
         async with progress_lock:

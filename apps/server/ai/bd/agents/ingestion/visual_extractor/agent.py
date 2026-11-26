@@ -15,6 +15,7 @@ from deepagents import (
 from deepagents.backends import StateBackend
 from deepagents.profiles.harness import harness_profiles
 from langchain.agents.middleware import ModelCallLimitMiddleware
+from langchain.agents.structured_output import ToolStrategy
 from langchain_openai import ChatOpenAI
 
 
@@ -47,10 +48,15 @@ def visual_extractor(model = None):
         tools = [],
         system_prompt = prompts.ingestion.visual_extractor.prompts.SYSTEM_PROMPT,
         middleware = [
-            middlewares.middleware.ToolAllowlistMiddleware(frozenset({"read_file"})),
+            middlewares.middleware.ToolAllowlistMiddleware(
+                frozenset({"read_file", schemas.VisualExtractionResult.__name__}),
+            ),
             ModelCallLimitMiddleware(run_limit = 2, exit_behavior = "end"),
         ],
-        response_format = schemas.VisualExtractionResult,
+        response_format = ToolStrategy(
+            schema = schemas.VisualExtractionResult,
+            handle_errors = True,
+        ),
         skills = [skills.domain.source_for("visual_extractor")],
         permissions = [
             FilesystemPermission(

@@ -89,6 +89,9 @@ class AgenticRunStatus(BaseModel):
     expected_page_count: int
     published_page_count: int
     quality_status: Literal["complete", "complete_with_review"] | None = None
+    quality_review_reasons: dict[str, int] = Field(default_factory = dict)
+    visual_failed_count: int = 0
+    visual_failed_pages: list[int] = Field(default_factory = list)
     delivered_page_count: int = 0
     discarded_blank_page_count: int = 0
     selected_page_count: int = 0
@@ -99,6 +102,8 @@ class AgenticRunStatus(BaseModel):
     contents_status: Literal["complete", "needs_review", "unavailable"] | None = None
     review_page_count: int = 0
     review_pages: list[int] = []
+    content_selection_review_count: int = 0
+    content_selection_review_pages: list[int] = []
     unverified_page_count: int = 0
     unverified_pages: list[int] = []
     discarded_pages: list[int] = []

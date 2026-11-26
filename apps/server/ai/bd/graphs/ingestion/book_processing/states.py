@@ -44,4 +44,5 @@ class IngestionRunState(TypedDict, total = False):
     visual_completed_count: int
     visual_converted_count: int
     visual_failed_count: int
+    visual_failed_figures: list[dict[str, object]]
     status: str

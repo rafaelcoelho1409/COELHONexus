@@ -166,6 +166,7 @@ def run_ingestion_ai(self, book_id: str, extraction_run_id: str, agentic_run_id:
                         "agentic_run_id": agentic_run_id,
                         "status": result.get("status", "complete"),
                         "quality_report": result.get("quality_report"),
+                        "retrieval_index_status": result.get("retrieval_index_status"),
                     }
                 except progress.service.RunExecutionLeaseLostError:
                     logger.warning(

@@ -90,6 +90,7 @@ class IngestionPageResult(TypedDict, total = False):
     visual_artifacts_key: str
     visual_artifacts_sha256: str
     converted_figures: list[str]
+    visual_failed_figures: list[dict[str, object]]
 
 
 class AgentInvoker(Protocol):

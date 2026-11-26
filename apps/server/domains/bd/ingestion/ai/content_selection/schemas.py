@@ -18,13 +18,17 @@ class ContentSelectionPage(BaseModel):
     rationale: Annotated[str, StringConstraints(strip_whitespace = True, max_length = 600)]
     disposition: Literal["include", "exclude"]
     decision_source: Literal["classifier", "content_policy", "conservative_fallback", "user"]
+    classifier_provider: Annotated[str, StringConstraints(strip_whitespace = True, max_length = 120)] | None = None
+    classifier_model: Annotated[str, StringConstraints(strip_whitespace = True, max_length = 120)] | None = None
+    classification_error: Annotated[str, StringConstraints(strip_whitespace = True, max_length = 500)] | None = None
+    classifier_response_shape: Annotated[str, StringConstraints(strip_whitespace = True, max_length = 700)] | None = None
 
 class ContentSelectionManifest(BaseModel):
     """Append-only page-selection revision, independent from canonical source and QA artifacts."""
 
     model_config = ConfigDict(extra = "forbid")
 
-    schema_version: Literal["1.0", "1.1"] = "1.1"
+    schema_version: Literal["1.0", "1.1", "1.2"] = "1.2"
     classifier_version: schemas.NonEmptyText
     book_id: schemas.SafeSegment
     extraction_run_id: schemas.SafeSegment

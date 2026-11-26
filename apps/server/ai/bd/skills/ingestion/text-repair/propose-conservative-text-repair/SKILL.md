@@ -1,5 +1,5 @@
 ---
-name: repair-all-assigned-text-issues
+name: propose-conservative-text-repair
 description: Repairs every assigned Docling text-quality issue with a minimal source-bound patch that is automatically applied.
 metadata:
   version: "1.1"

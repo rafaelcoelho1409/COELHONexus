@@ -14,6 +14,7 @@ from deepagents import (
 from deepagents.backends import StateBackend
 from deepagents.profiles.harness import harness_profiles
 from langchain.agents.middleware import ModelCallLimitMiddleware
+from langchain.agents.structured_output import ToolStrategy
 from langchain_openai import ChatOpenAI
 
 
@@ -46,12 +47,18 @@ def content_classifier(model = None):
         tools = [],
         system_prompt = prompts.ingestion.content_classifier.prompts.SYSTEM_PROMPT,
         middleware = [
-            middlewares.middleware.ToolAllowlistMiddleware(frozenset()),
+            middlewares.middleware.ToolAllowlistMiddleware(
+                frozenset({agents.schemas.ContentPageAssessment.__name__}),
+            ),
             ModelCallLimitMiddleware(
-                run_limit = 2, 
-                exit_behavior = "end"),
+                run_limit = 2,
+                exit_behavior = "end",
+            ),
         ],
-        response_format = agents.schemas.ContentPageAssessment,
+        response_format = ToolStrategy(
+            schema = agents.schemas.ContentPageAssessment,
+            handle_errors = True,
+        ),
         permissions = [
             FilesystemPermission(
                 operations = ["read"],

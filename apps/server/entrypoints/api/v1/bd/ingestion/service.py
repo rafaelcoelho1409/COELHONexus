@@ -675,6 +675,7 @@ async def _agentic_status(manifest: dict) -> dict:
     if type(processed_page_count) is not int or processed_page_count < 0:
         processed_page_count = 0
     selection_revision = manifest.get("content_selection_revision")
+    content_selection_review_pages = []
     if manifest.get("status") == "done":
         try:
             current = await domains.bd.ingestion.ai.service.read_selection(
@@ -685,6 +686,11 @@ async def _agentic_status(manifest: dict) -> dict:
                 selected_page_count = sum(page.disposition == "include" for page in selection.pages)
                 excluded_page_count = sum(page.disposition == "exclude" for page in selection.pages)
                 selection_revision = selection.revision
+                content_selection_review_pages = [
+                    page.page_number
+                    for page in selection.pages
+                    if page.decision_source == "conservative_fallback"
+                ]
         except Exception as error:  # noqa: BLE001 — keep the run-status response available during storage outages.
             logger.warning(
                 "[bd-ingestion] couldn't load reviewed selection for run %s (%s)",
@@ -699,6 +705,9 @@ async def _agentic_status(manifest: dict) -> dict:
         "expected_page_count": manifest["expected_page_count"],
         "published_page_count": len(progress["processed_pages"]),
         "quality_status": manifest.get("quality_status"),
+        "quality_review_reasons": manifest.get("quality_review_reasons", {}),
+        "visual_failed_count": manifest.get("visual_failed_count", 0),
+        "visual_failed_pages": manifest.get("visual_failed_pages", []),
         "delivered_page_count": manifest.get("delivered_page_count", 0),
         "discarded_blank_page_count": manifest.get("discarded_blank_page_count", 0),
         "selected_page_count": selected_page_count,
@@ -709,6 +718,8 @@ async def _agentic_status(manifest: dict) -> dict:
         "contents_status": manifest.get("contents_status"),
         "review_page_count": manifest.get("review_page_count", 0),
         "review_pages": _pages_where(manifest, lambda page: page["status"] == "review_required"),
+        "content_selection_review_count": len(content_selection_review_pages),
+        "content_selection_review_pages": content_selection_review_pages,
         "unverified_page_count": manifest.get("unverified_page_count", 0),
         "unverified_pages": manifest.get("unverified_pages", []),
         "discarded_pages": _pages_where(manifest, lambda page: page["delivery_disposition"] == "discarded_blank"),

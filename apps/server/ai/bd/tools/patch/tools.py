@@ -1,10 +1,14 @@
+import domains
 from . import schemas
 
 from langchain.tools import ToolRuntime, tool
 
 
 @tool
-def check_patches(patches: list[schemas.PatchCheck], runtime: ToolRuntime) -> str:
+def check_patches(
+    patches: list[schemas.PatchCheck],
+    runtime: ToolRuntime[domains.bd.ingestion.ai.entities.SpecialistContext],
+) -> str:
     """Validate all proposed patches together before returning the final batch.
 
     It checks assigned issue scope and exact source text. Every valid patch is automatically applied, regardless of

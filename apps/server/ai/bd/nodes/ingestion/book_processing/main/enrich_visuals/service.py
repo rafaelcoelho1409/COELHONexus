@@ -24,6 +24,36 @@ FigureReader = Callable[[str], bytes | None | Awaitable[bytes | None]]
 ArtifactWriter = Callable[[str, str, str], Any]
 ArtifactExists = Callable[[str], Awaitable[bool]]
 ImageMarker = re.compile(r"<!--\s*image\s*-->", re.IGNORECASE)
+_VISUAL_PAYLOAD_FIELDS = frozenset({
+    "decision",
+    "kind",
+    "confidence",
+    "rationale",
+    "diagram_nodes",
+    "diagram_edges",
+    "table_headers",
+    "table_rows",
+    "chart_rows",
+    "map_features",
+    "equation_latex",
+    "code_text",
+    "transcribed_text",
+    "timeline_events",
+})
+_VISUAL_RESPONSE_WRAPPER_KEYS = (
+    "structured_response",
+    "output",
+    "result",
+    "data",
+    "args",
+    "arguments",
+    "function",
+    "function_call",
+    "tool_calls",
+    "parsed",
+    "json",
+    "text",
+)
 
 
 class VisualExtractor(Protocol):
@@ -124,6 +154,7 @@ async def enrich_visuals(
             "visual_completed_count": 0,
             "visual_converted_count": 0,
             "visual_failed_count": 0,
+            "visual_failed_figures": [],
         }
 
     semaphore = asyncio.Semaphore(domains.bd.ingestion.ai.params.VISUAL_ENRICHMENT_CONCURRENCY)
@@ -131,6 +162,7 @@ async def enrich_visuals(
     completed = 0
     converted = 0
     failed = 0
+    failed_figures: list[dict[str, Any]] = []
     update_by_page: dict[int, dict[str, Any]] = {}
 
     async def transcribe(
@@ -167,6 +199,7 @@ async def enrich_visuals(
                 figure_name,
                 "source figure is unavailable or exceeds the image-size limit",
                 failed = True,
+                failure_type = "source_figure_unavailable_or_oversized",
             )
         else:
             image_digest = _sha256(image)
@@ -244,6 +277,13 @@ async def enrich_visuals(
             if outcome.get("failed"):
                 failed += 1
             completed += 1
+            if outcome.get("failed"):
+                failed_detail = {
+                    "page_number": page_number,
+                    "figure_name": figure_name,
+                    "failure_type": outcome.get("failure_type", "unknown"),
+                }
+                failed_figures.append(failed_detail)
             await graphs.service.report(
                 progress_callback,
                 kind = "visual_figure",
@@ -290,6 +330,7 @@ async def enrich_visuals(
                     "figure_name": item["figure_name"],
                     "converted": bool(item.get("markdown")),
                     "failed": bool(item.get("failed")),
+                    "failure_type": item.get("failure_type"),
                     "kind": item.get("kind"),
                     "decision": item.get("decision"),
                     "reason_code": item.get("reason_code"),
@@ -315,6 +356,14 @@ async def enrich_visuals(
             "visual_artifacts_key": visual_key,
             "visual_artifacts_sha256": _sha256(visual_content),
             "converted_figures": converted_figures,
+            "visual_failed_figures": [
+                {
+                    "figure_name": item["figure_name"],
+                    "failure_type": item.get("failure_type", "unknown"),
+                }
+                for item in outputs
+                if item.get("failed")
+            ],
         }
         await graphs.service.report(
             progress_callback,
@@ -343,6 +392,10 @@ async def enrich_visuals(
         "visual_completed_count": completed,
         "visual_converted_count": converted,
         "visual_failed_count": failed,
+        "visual_failed_figures": sorted(
+            failed_figures,
+            key = lambda item: (item["page_number"], item["figure_name"]),
+        ),
     }
 
 
@@ -410,6 +463,7 @@ async def _call_extractor(
             "vision agent is unavailable",
             cacheable = False,
             failed = True,
+            failure_type = "extractor_unavailable",
         )
     payload = {
         "task": "Transcribe this source figure faithfully into the requested structured response.",
@@ -475,6 +529,7 @@ async def _call_extractor(
             f"vision transcription unavailable ({type(error).__name__}: {details})",
             cacheable = False,
             failed = True,
+            failure_type = type(error).__name__,
         )
 
 
@@ -496,7 +551,7 @@ def _validated_visual_response(response: Any) -> agents.schemas.VisualExtraction
 
 
 def _visual_response_candidates(response: Any) -> list[Any]:
-    """Search nested agent result envelopes, message bodies, and embedded JSON for the schema payload."""
+    """Read structured or assistant-authored payloads without parsing the user prompt as output."""
     queue = [(response, 0)]
     candidates = []
     seen: set[int] = set()
@@ -509,15 +564,43 @@ def _visual_response_candidates(response: Any) -> list[Any]:
             continue
         mapping = _response_mapping(value)
         if mapping is not None:
-            candidates.append(mapping)
-            queue.extend((item, depth + 1) for item in mapping.values())
+            if _looks_like_visual_payload(mapping):
+                candidates.append(mapping)
+            for key in _VISUAL_RESPONSE_WRAPPER_KEYS:
+                nested = mapping.get(key)
+                if nested is not None:
+                    queue.append((nested, depth + 1))
+            messages = mapping.get("messages")
+            if isinstance(messages, list):
+                queue.extend(
+                    (message, depth + 1)
+                    for message in messages
+                    if _is_assistant_message(message)
+                )
+            if _is_assistant_message(mapping):
+                for key in ("content", "additional_kwargs"):
+                    nested = mapping.get(key)
+                    if nested is not None:
+                        queue.append((nested, depth + 1))
         elif isinstance(value, (list, tuple)):
             queue.extend((item, depth + 1) for item in value)
         elif isinstance(value, str):
             parsed = _json_objects(value)
-            candidates.extend(parsed)
             queue.extend((item, depth + 1) for item in parsed)
     return candidates
+
+
+def _looks_like_visual_payload(value: Mapping[str, Any]) -> bool:
+    return bool(_VISUAL_PAYLOAD_FIELDS.intersection(value))
+
+
+def _is_assistant_message(value: Any) -> bool:
+    mapping = _response_mapping(value)
+    if mapping is not None:
+        role = mapping.get("role") or mapping.get("type")
+    else:
+        role = getattr(value, "type", None)
+    return role in {"assistant", "ai", "AIMessage"}
 
 
 def _response_mapping(value: Any) -> dict[str, Any] | None:
@@ -536,9 +619,8 @@ def _response_mapping(value: Any) -> dict[str, Any] | None:
 def _last_assistant_content(response: Any) -> str | None:
     response_mapping = _response_mapping(response)
     messages = response_mapping.get("messages") if response_mapping else None
-    if not isinstance(messages, list):
-        return None
-    for message in reversed(messages):
+    candidates = list(reversed(messages)) if isinstance(messages, list) else [response]
+    for message in candidates:
         message_mapping = _response_mapping(message)
         if message_mapping is not None:
             role = message_mapping.get("role") or message_mapping.get("type")
@@ -552,8 +634,11 @@ def _last_assistant_content(response: Any) -> str | None:
             return content
         if isinstance(content, list):
             text_parts = [
-                mapped["text"] for item in content
-                if (mapped := _response_mapping(item)) is not None and isinstance(mapped.get("text"), str)
+                mapped[key]
+                for item in content
+                if (mapped := _response_mapping(item)) is not None
+                for key in ("text", "json")
+                if isinstance(mapped.get(key), str)
             ]
             if text_parts:
                 return "\n".join(text_parts)
@@ -627,8 +712,15 @@ def _context_fingerprint(
     return _sha256(_json(values))
 
 
-def _retained(name: str, reason: str, *, cacheable: bool = True, failed: bool = False) -> dict[str, Any]:
-    return {
+def _retained(
+    name: str,
+    reason: str,
+    *,
+    cacheable: bool = True,
+    failed: bool = False,
+    failure_type: str | None = None,
+) -> dict[str, Any]:
+    outcome = {
         "figure_name": name,
         "markdown": None,
         "kind": None,
@@ -639,6 +731,9 @@ def _retained(name: str, reason: str, *, cacheable: bool = True, failed: bool = 
         "cacheable": cacheable,
         "failed": failed,
     }
+    if failure_type is not None:
+        outcome["failure_type"] = failure_type
+    return outcome
 
 
 def _conversion_reason_code(

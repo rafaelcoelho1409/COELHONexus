@@ -103,7 +103,7 @@ class IngestionAIRunManifest(BaseModel):
 
     model_config = ConfigDict(extra = "forbid")
 
-    schema_version: Literal["1.0", "1.1", "1.2", "1.3", "1.4", "1.5"] = versions.MANIFEST_SCHEMA_VERSION
+    schema_version: Literal["1.0", "1.1", "1.2", "1.3", "1.4", "1.5", "1.6", "1.7"] = versions.MANIFEST_SCHEMA_VERSION
     workflow_version: schemas.NonEmptyText = versions.WORKFLOW_VERSION
     agentic_run_id: schemas.SafeSegment
     book_id: schemas.SafeSegment
@@ -119,6 +119,9 @@ class IngestionAIRunManifest(BaseModel):
     quality_report_key: schemas.ObjectKey
     quality_report_sha256: schemas.Sha256Hex | None = None
     quality_status: Literal["complete", "complete_with_review"] | None = None
+    quality_review_reasons: dict[str, int] = Field(default_factory = dict)
+    visual_failed_count: int = Field(default = 0, ge = 0, strict = True)
+    visual_failed_pages: list[int] = Field(default_factory = list)
     delivered_page_count: int = Field(default = 0, ge = 0, strict = True)
     discarded_blank_page_count: int = Field(default = 0, ge = 0, strict = True)
     review_page_count: int = Field(default = 0, ge = 0, strict = True)
@@ -179,7 +182,7 @@ class IngestionAIRunManifest(BaseModel):
                 raise ValueError("completed runs may contain only completed or review-required pages")
             if self.book_metadata_sha256 is None or self.quality_report_sha256 is None:
                 raise ValueError("completed runs must include hashes for book metadata and quality report")
-            if self.schema_version in {"1.1", "1.2", "1.3", "1.4", "1.5"}:
+            if self.schema_version in {"1.1", "1.2", "1.3", "1.4", "1.5", "1.6", "1.7"}:
                 if self.quality_status is None:
                     raise ValueError("completed 1.1 runs must include a quality status")
                 if self.delivered_page_count != sum(
@@ -194,14 +197,14 @@ class IngestionAIRunManifest(BaseModel):
                     page.status == AgenticPageStatus.REVIEW_REQUIRED for page in self.pages
                 ):
                     raise ValueError("review_page_count must match page review statuses")
-            if self.schema_version in {"1.2", "1.3", "1.4", "1.5"}:
+            if self.schema_version in {"1.2", "1.3", "1.4", "1.5", "1.6", "1.7"}:
                 if len(self.unverified_pages) != self.unverified_page_count:
                     raise ValueError("unverified_page_count must match unverified_pages")
                 if len(self.unverified_pages) != len(set(self.unverified_pages)):
                     raise ValueError("unverified_pages must contain unique page numbers")
                 if any(page_number < 1 or page_number > self.expected_page_count for page_number in self.unverified_pages):
                     raise ValueError("unverified_pages must be within the expected page range")
-            if self.schema_version in {"1.3", "1.4", "1.5"}:
+            if self.schema_version in {"1.3", "1.4", "1.5", "1.6", "1.7"}:
                 if any(value is None for value in (
                     self.content_selection_key,
                     self.content_selection_sha256,
@@ -212,7 +215,7 @@ class IngestionAIRunManifest(BaseModel):
                     raise ValueError("completed 1.3 runs must pin a complete content-selection revision")
                 if self.selected_page_count + self.excluded_page_count != self.expected_page_count:
                     raise ValueError("content-selection counts must cover every physical page")
-            if self.schema_version in {"1.4", "1.5"} and any(value is None for value in (
+            if self.schema_version in {"1.4", "1.5", "1.6", "1.7"} and any(value is None for value in (
                 self.processed_book_key,
                 self.processed_book_sha256,
                 self.processed_book_revision,
@@ -220,6 +223,15 @@ class IngestionAIRunManifest(BaseModel):
                 self.contents_status,
             )):
                 raise ValueError("completed 1.4+ runs must pin the processed-book manifest")
+            if self.schema_version == "1.7":
+                if self.visual_failed_count != self.quality_review_reasons.get("visual_extraction_failure", 0):
+                    raise ValueError("visual_failed_count must match the visual extraction review reason")
+                if len(self.visual_failed_pages) != len(set(self.visual_failed_pages)):
+                    raise ValueError("visual_failed_pages must contain unique page numbers")
+                if any(page_number < 1 or page_number > self.expected_page_count for page_number in self.visual_failed_pages):
+                    raise ValueError("visual_failed_pages must be within the expected page range")
+                if self.visual_failed_count and self.quality_status != "complete_with_review":
+                    raise ValueError("visual extraction failures must require review")
 
         return self
 

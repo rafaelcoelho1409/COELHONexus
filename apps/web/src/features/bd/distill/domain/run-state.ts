@@ -84,7 +84,7 @@ export function distillReadiness(
       status: qualityReady ? "complete" : qualityAttention ? "attention" : "waiting",
       detail: qualityReady
         ? agentic?.quality_status === "complete_with_review"
-          ? `${agentic.delivered_page_count} pages delivered; ${agentic.review_page_count} ${agentic.review_page_count === 1 ? "page is" : "pages are"} flagged for review.`
+          ? `${agentic.delivered_page_count} pages delivered; ${agentic.review_page_count} ${agentic.review_page_count === 1 ? "page is" : "pages are"} flagged for review; ${agentic.content_selection_review_count ?? 0} conservative page selections; ${agentic.unverified_page_count} unverified audits.`
           : `${agentic?.delivered_page_count ?? 0} pages delivered and quality checks are complete.`
         : qualityAttention
           ? "The quality result needs attention or no longer matches this extraction."

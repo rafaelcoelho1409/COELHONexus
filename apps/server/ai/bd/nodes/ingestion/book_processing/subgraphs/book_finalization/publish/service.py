@@ -147,6 +147,19 @@ async def publish(
         page["page"] for page in page_results
         if page.get("delivery_disposition") == "discarded_blank"
     ]
+    visual_failed_figures = state.get("visual_failed_figures")
+    if not isinstance(visual_failed_figures, list) or not visual_failed_figures:
+        visual_failed_figures = [
+            {
+                "page_number": page["page"],
+                "figure_name": figure["figure_name"],
+                "failure_type": figure.get("failure_type", "unknown"),
+            }
+            for page in page_results
+            for figure in page.get("visual_failed_figures", [])
+        ]
+    visual_failed_pages = sorted({figure["page_number"] for figure in visual_failed_figures})
+    visual_failed_count = max(state.get("visual_failed_count", 0), len(visual_failed_figures))
     audit_fallback_pages = [
         page["page"] for page in state["page_audits"]
         if page.get("structured_output_fallback") is True
@@ -164,8 +177,7 @@ async def publish(
         markdown_chars_by_page.get(page["page"], 0) * page.get("repair_call_count", 0)
         for page in page_results
     )
-    # Audit warnings are informational (a discarded excerpt or label conflict was already handled); only an unverified
-    # page, an unresolved issue or unreviewed metadata keeps the run from being fully accepted.
+    # Audit warnings are informational; unresolved page, metadata, visual, or source checks keep the run under review.
     quality_status = (
         "complete_with_review"
         if (
@@ -174,6 +186,7 @@ async def publish(
             or state["book_metadata"].get("review_required")
             or (verification is not None and verification["text_loss_pages"])
             or content_selection_review_pages
+            or visual_failed_count
             or state.get("contents_status") != "complete"
         )
         else "complete"
@@ -195,6 +208,27 @@ async def publish(
             review_reasons["repair_errors"] += 1
     if content_selection_review_pages:
         review_reasons["content_selection_fallback"] += len(content_selection_review_pages)
+    if unverified_pages:
+        review_reasons["audit_unverified"] += len(unverified_pages)
+    if state["book_metadata"].get("review_required"):
+        review_reasons["book_metadata"] += 1
+    if verification is not None and verification["text_loss_pages"]:
+        review_reasons["source_text_loss"] += len(verification["text_loss_pages"])
+    if state.get("contents_status") != "complete":
+        review_reasons["contents_reconciliation"] += 1
+    if visual_failed_count:
+        review_reasons["visual_extraction_failure"] += visual_failed_count
+    content_selection_review_details = [
+        {
+            "page_number": page["page_number"],
+            "classification_error": page.get("classification_error"),
+            "classifier_provider": page.get("classifier_provider"),
+            "classifier_model": page.get("classifier_model"),
+            "classifier_response_shape": page.get("classifier_response_shape"),
+        }
+        for page in selection
+        if page.get("decision_source") == "conservative_fallback"
+    ]
     quality_report = {
         "book_id": state["book_id"],
         "extraction_run_id": state["extraction_run_id"],
@@ -221,14 +255,18 @@ async def publish(
         "visual_figures_considered": state.get("visual_candidate_count", 0),
         "visual_figures_completed": state.get("visual_completed_count", 0),
         "visual_figures_converted": state.get("visual_converted_count", 0),
-        "visual_figures_failed": state.get("visual_failed_count", 0),
+        "visual_figures_failed": visual_failed_count,
+        "visual_failed_pages": visual_failed_pages,
+        "visual_failed_figures": visual_failed_figures,
         "visual_figures_retained": max(
             0,
             state.get("visual_completed_count", 0)
             - state.get("visual_converted_count", 0)
-            - state.get("visual_failed_count", 0),
+            - visual_failed_count,
         ),
         "content_selection_review_pages": content_selection_review_pages,
+        "content_selection_review_count": len(content_selection_review_pages),
+        "content_selection_review_details": content_selection_review_details,
         "discarded_blank_pages": discarded_blank_pages,
         "discarded_blank_page_count": len(discarded_blank_pages),
         "pages_requiring_review": review_pages,
@@ -319,6 +357,7 @@ async def publish(
         quality_report_key = report_key,
         quality_report_sha256 = report_sha256,
         quality_status = quality_status,
+        quality_review_reasons = dict(sorted(review_reasons.items())),
         content_selection_key = state["content_selection_key"],
         content_selection_sha256 = state["content_selection_sha256"],
         content_selection_revision = state["content_selection_revision"],
@@ -334,6 +373,8 @@ async def publish(
         review_page_count = len(review_pages),
         unverified_page_count = len(unverified_pages),
         unverified_pages = unverified_pages,
+        visual_failed_count = visual_failed_count,
+        visual_failed_pages = visual_failed_pages,
         created_at = state["run_created_at"],
         updated_at = finished_at,
         finished_at = finished_at,
