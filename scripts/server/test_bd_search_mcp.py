@@ -8,7 +8,6 @@ import asyncio
 import os
 import sys
 from pathlib import Path
-from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "server"))
 for name, value in {
@@ -21,23 +20,15 @@ for name, value in {
 
 import domains  # noqa: E402
 import ai  # noqa: E402
-from entrypoints.api.middleware import mcp as api_mcp_middleware  # noqa: E402
 from entrypoints.mcp.components import bd as mcp_bd  # noqa: E402
-from entrypoints.mcp.deployment import params as mcp_params  # noqa: E402
-from entrypoints.mcp.deployment import service as mcp_server_service  # noqa: E402
-from entrypoints.mcp.authentication import params as auth_params, service as auth_service  # noqa: E402
 from fastmcp import Client, FastMCP  # noqa: E402
-from fastmcp.server.auth.providers.jwt import JWTVerifier  # noqa: E402
 from langchain_openai import ChatOpenAI  # noqa: E402
 
 
-def check_scope_domain() -> None:
+def check_search_domain() -> None:
     domain = mcp_bd.tools.search.domain
-    assert domain.safe_segment("book-01")
-    assert not domain.safe_segment("../book-01")
-    assert domain.book_is_allowed("book-01", frozenset({"book-01"}))
-    assert not domain.book_is_allowed("book-02", frozenset({"book-01"}))
-    assert domain.token_book_ids({"bd_book_ids": ["book-01", "../bad", 3]}) == {"book-01"}
+    assert domains.bd.identifiers.domain.is_safe_segment("book-01")
+    assert not domains.bd.identifiers.domain.is_safe_segment("../book-01")
     assert domain.normalize_query("  exact   phrase ", 100) == "exact phrase"
 
 
@@ -123,13 +114,28 @@ async def check_mcp_tool_contract() -> None:
 
     domains.bd.rag.ai.retrieval.service.retrieve_source = fake_retrieve_source
     server = FastMCP("BD Search test")
-    mcp_bd.registry.register_tools(server, trusted_in_process = True)
+    mcp_bd.registry.register_tools(server)
     try:
         async with Client(server) as client:
             tools = await client.list_tools()
             names = {item.name for item in tools}
             assert names == {
-                "bd_search_elasticsearch", "bd_search_qdrant", "bd_search_neo4j", "bd_search_web",
+                "bd_ingestion_get_run",
+                "bd_ingestion_get_quality_summary",
+                "bd_ingestion_start_run",
+                "bd_ingestion_resume_run",
+                "bd_ingestion_cancel_run",
+                "bd_ingestion_replay_from_node",
+                "bd_rag_index_get_run",
+                "bd_rag_index_get_current",
+                "bd_rag_index_start",
+                "bd_rag_index_resume",
+                "bd_rag_index_cancel",
+                "bd_rag_index_replay_from_node",
+                "bd_search_elasticsearch",
+                "bd_search_qdrant",
+                "bd_search_neo4j",
+                "bd_search_web",
             }
             result = await client.call_tool("bd_search_elasticsearch", {
                 "book_id": "book-01",
@@ -203,109 +209,13 @@ async def check_partial_backend_statuses() -> None:
         retriever._retrieve_one_source = original_retrieve
 
 
-async def check_book_authorization() -> None:
-    service = mcp_bd.tools.search.service
-    params = mcp_bd.tools.search.params
-    original_profile = params.MCP_PROFILE
-    original_ids = params.DEMO_BOOK_IDS
-    original_token_reader = service.get_access_token
-    try:
-        params.MCP_PROFILE = "local_demo"
-        params.DEMO_BOOK_IDS = frozenset({"book-01"})
-        await service.authorize_book("book-01", False)
-        try:
-            await service.authorize_book("book-02", False)
-        except PermissionError:
-            pass
-        else:
-            raise AssertionError("local demo accepted a book outside its corpus allowlist")
-
-        params.MCP_PROFILE = "protected"
-        service.get_access_token = lambda: SimpleNamespace(
-            claims = {"bd_book_ids": ["book-01"]},
-            scopes = ["bd.search.read"],
-            subject = "demo-user",
-            client_id = "demo-client",
-        )
-        await service.authorize_book("book-01", False)
-        try:
-            await service.authorize_book("book-02", False)
-        except PermissionError:
-            pass
-        else:
-            raise AssertionError("protected profile accepted a book outside JWT book scope")
-    finally:
-        params.MCP_PROFILE = original_profile
-        params.DEMO_BOOK_IDS = original_ids
-        service.get_access_token = original_token_reader
-
-
-def check_protected_profile_configuration() -> None:
-    params = auth_params
-    names = ("JWT_JWKS_URI", "JWT_ISSUER", "JWT_AUDIENCE", "JWT_REQUIRED_SCOPE")
-    original_profile = mcp_params.MCP_PROFILE
-    original = {name: getattr(params, name) for name in names}
-    try:
-        mcp_params.MCP_PROFILE = "protected"
-        params.JWT_JWKS_URI = "https://identity.example/.well-known/jwks.json"
-        params.JWT_ISSUER = "https://identity.example/"
-        params.JWT_AUDIENCE = "coelho-nexus-mcp"
-        params.JWT_REQUIRED_SCOPE = "bd.search.read"
-        assert isinstance(auth_service.build_auth_provider(mcp_params.MCP_PROFILE), JWTVerifier)
-        assert isinstance(mcp_server_service.build_external_server().auth, JWTVerifier)
-        params.JWT_JWKS_URI = ""
-        try:
-            auth_service.build_auth_provider(mcp_params.MCP_PROFILE)
-        except RuntimeError as error:
-            assert "BD_MCP_JWKS_URI" in str(error)
-        else:
-            raise AssertionError("protected profile accepted missing JWT verification settings")
-    finally:
-        mcp_params.MCP_PROFILE = original_profile
-        for name, value in original.items():
-            setattr(params, name, value)
-
-
-async def check_local_demo_is_loopback_only() -> None:
-    middleware_type = api_mcp_middleware.LocalDemoLoopbackMiddleware
-
-    async def request(peer: str) -> list[dict]:
-        sent = []
-
-        async def inner(scope, receive, send):
-            sent.append({"type": "http.response.start", "status": 200})
-            sent.append({"type": "http.response.body", "body": b"ok"})
-
-        async def receive():
-            return {"type": "http.request", "body": b"", "more_body": False}
-
-        async def send(message):
-            sent.append(message)
-
-        middleware = middleware_type(inner)
-        await middleware({
-            "type": "http", "method": "GET", "path": "/mcp", "scheme": "http",
-            "headers": [], "client": (peer, 1234), "server": ("localhost", 8000),
-            "http_version": "1.1",
-        }, receive, send)
-        return sent
-
-    local_response = await request("127.0.0.1")
-    remote_response = await request("203.0.113.10")
-    assert local_response[0]["status"] == 200
-    assert remote_response[0]["status"] == 403
-
-
 def main() -> None:
-    check_scope_domain()
+    check_search_domain()
     check_ask_book_retrieval_subgraph_compiles()
     check_specialist_agents_build()
     check_graph_fusion_preserves_sources()
     asyncio.run(check_mcp_tool_contract())
     asyncio.run(check_partial_backend_statuses())
-    asyncio.run(check_book_authorization())
-    asyncio.run(check_local_demo_is_loopback_only())
-    check_protected_profile_configuration()
     print("BD Search MCP and retrieval contracts: ok")
 
 

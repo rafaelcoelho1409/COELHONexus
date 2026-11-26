@@ -6,6 +6,7 @@ import json
 import time
 from typing import Any
 
+import domains
 import infra
 
 from ..... import settings
@@ -44,7 +45,7 @@ async def read_index(
     *,
     storage: infra.minio.service.MinIOStorage | None = None,
 ) -> dict[str, Any] | None:
-    if not domain.safe_segment(book_id) or not domain.safe_segment(agentic_run_id):
+    if not domains.bd.identifiers.domain.is_safe_segment(book_id) or not domains.bd.identifiers.domain.is_safe_segment(agentic_run_id):
         raise ValueError("book_id and agentic_run_id must be safe path segments")
     if storage is None:
         storage = infra.minio.service.get_storage()
@@ -94,7 +95,7 @@ async def read_current_index(
     *,
     storage: infra.minio.service.MinIOStorage | None = None,
 ) -> dict[str, Any] | None:
-    if not domain.safe_segment(book_id):
+    if not domains.bd.identifiers.domain.is_safe_segment(book_id):
         raise ValueError("book_id must be a safe path segment")
     storage = storage or infra.minio.service.get_storage()
     pointer_key = ingestion.source.storage.keys.current_retrieval_index_key(book_id)
@@ -104,7 +105,7 @@ async def read_current_index(
     if not isinstance(pointer, dict):
         raise TypeError("the current retrieval-index pointer must be a JSON object")
     run_id = pointer.get("agentic_run_id")
-    if not isinstance(run_id, str) or not domain.safe_segment(run_id):
+    if not isinstance(run_id, str) or not domains.bd.identifiers.domain.is_safe_segment(run_id):
         raise ValueError("the current retrieval-index pointer is malformed")
     manifest = await read_index(book_id, run_id, storage = storage)
     if manifest is None:
@@ -156,7 +157,7 @@ async def has_active_index_run(book_id: str) -> bool:
     run_ids = await storage.list_subfolders(ingestion.source.storage.keys.agentic_runs_prefix(book_id))
     async with infra.redis.service.client() as redis:
         for agentic_run_id in run_ids:
-            if agentic_run_id == "current" or not domain.safe_segment(agentic_run_id):
+            if agentic_run_id == "current" or not domains.bd.identifiers.domain.is_safe_segment(agentic_run_id):
                 continue
             if await redis.exists(keys.lock_key(book_id, agentic_run_id)):
                 return True
@@ -172,21 +173,21 @@ async def list_book_indexes(
     storage: infra.minio.service.MinIOStorage | None = None,
 ) -> list[dict[str, Any]]:
     """Load every valid retrieval-index manifest owned by a book."""
-    if not domain.safe_segment(book_id):
+    if not domains.bd.identifiers.domain.is_safe_segment(book_id):
         raise ValueError("book_id must be a safe path segment")
     storage = storage or infra.minio.service.get_storage()
     run_ids = await storage.list_subfolders(ingestion.source.storage.keys.agentic_runs_prefix(book_id))
     manifests = await asyncio.gather(*(
         read_index(book_id, run_id, storage = storage)
         for run_id in run_ids
-        if run_id != "current" and domain.safe_segment(run_id)
+        if run_id != "current" and domains.bd.identifiers.domain.is_safe_segment(run_id)
     ))
     return [manifest for manifest in manifests if manifest is not None]
 
 
 async def queue_index(book_id: str, agentic_run_id: str) -> dict[str, Any]:
     """Idempotently queue the post-publication retrieval branch for one completed run."""
-    if not domain.safe_segment(book_id) or not domain.safe_segment(agentic_run_id):
+    if not domains.bd.identifiers.domain.is_safe_segment(book_id) or not domains.bd.identifiers.domain.is_safe_segment(agentic_run_id):
         raise ValueError("book_id and agentic_run_id must be safe path segments")
     async with infra.redis.service.client() as redis, redis.lock(
         ingestion.ai.progress.keys.book_mutation_lock_key(book_id),
@@ -267,7 +268,7 @@ async def _queue_index_locked(redis, book_id: str, agentic_run_id: str) -> dict[
             previous_run_id = previous_pointer.get("agentic_run_id")
             previous_revision = previous_pointer.get("processed_book_revision")
             if (
-                domain.safe_segment(previous_run_id)
+                domains.bd.identifiers.domain.is_safe_segment(previous_run_id)
                 and isinstance(previous_revision, int)
                 and not isinstance(previous_revision, bool)
                 and previous_revision > 0
@@ -348,7 +349,7 @@ async def request_cancel(book_id: str, agentic_run_id: str) -> dict[str, Any]:
 
 async def wipe_index(book_id: str, agentic_run_id: str) -> dict[str, Any]:
     """Delete all BD retrieval projections for one book, preserving its processed source."""
-    if not domain.safe_segment(book_id) or not domain.safe_segment(agentic_run_id):
+    if not domains.bd.identifiers.domain.is_safe_segment(book_id) or not domains.bd.identifiers.domain.is_safe_segment(agentic_run_id):
         raise ValueError("book_id and agentic_run_id must be safe path segments")
     storage = infra.minio.service.get_storage()
     async with infra.redis.service.client() as redis, redis.lock(
@@ -369,7 +370,7 @@ async def wipe_index(book_id: str, agentic_run_id: str) -> dict[str, Any]:
         run_ids.add(agentic_run_id)
         manifests: dict[str, dict[str, Any]] = {}
         for run_id in sorted(run_ids):
-            if not domain.safe_segment(run_id):
+            if not domains.bd.identifiers.domain.is_safe_segment(run_id):
                 continue
             if await ingestion.ai.progress.service.run_execution_lock_is_held(redis, book_id, run_id):
                 raise ValueError("wait for all BD Agentic AI workers to stop before wiping this book's indexes")
@@ -435,7 +436,7 @@ async def wipe_index(book_id: str, agentic_run_id: str) -> dict[str, Any]:
 
         objects_deleted = 0
         for run_id in run_ids:
-            if not domain.safe_segment(run_id):
+            if not domains.bd.identifiers.domain.is_safe_segment(run_id):
                 continue
             objects_deleted += await storage.delete_prefix(
                 ingestion.source.storage.keys.agentic_retrieval_index_prefix(book_id, run_id),

@@ -3,20 +3,10 @@ from __future__ import annotations
 
 import os
 
-MCP_PROFILE = os.environ.get("BD_MCP_PROFILE", "disabled").strip().casefold()
 
-
-DEMO_BOOK_IDS = frozenset(
-    value.strip()
-    for value in os.environ.get("BD_MCP_DEMO_BOOK_IDS", "").split(",")
-    if value.strip()
-)
 WEB_SEARCH_ENABLED = os.environ.get("BD_MCP_WEB_SEARCH_ENABLED", "false").strip().casefold() in {
     "1", "true", "yes", "on",
 }
-WEB_SEARCH_SCOPE = os.environ.get("BD_MCP_WEB_SEARCH_SCOPE", "bd.search.web").strip()
-READ_SCOPE = os.environ.get("BD_MCP_SEARCH_READ_SCOPE", "bd.search.read").strip()
-
 MAX_QUERY_CHARS = 1000
 MAX_WEB_QUERY_CHARS = 400
 MAX_TOP_K = 8

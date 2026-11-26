@@ -1,34 +1,20 @@
 """Register feature-owned MCP components on a composed FastMCP server."""
 from __future__ import annotations
+from . import bd
 
 from fastmcp import FastMCP
 
-from . import bd
+
+def register_tools(mcp: FastMCP) -> None:
+    """Attach BD tools to the server."""
+    bd.registry.register_tools(mcp)
 
 
-def register_tools(
-    mcp: FastMCP,
-    *,
-    include_bd: bool = True,
-    trusted_in_process: bool = False,
-) -> None:
-    """Attach enabled feature components to the server."""
-    if include_bd:
-        bd.registry.register_tools(mcp, trusted_in_process = trusted_in_process)
+def register_resources(mcp: FastMCP) -> None:
+    """Attach BD resources to the server."""
+    bd.registry.register_resources(mcp)
 
 
-def register_resources(
-    mcp: FastMCP,
-    *,
-    include_bd: bool = True,
-    trusted_in_process: bool = False,
-) -> None:
-    """Attach enabled resource features to the server."""
-    if include_bd:
-        bd.registry.register_resources(mcp, trusted_in_process = trusted_in_process)
-
-
-def register_prompts(mcp: FastMCP, *, include_bd: bool = True) -> None:
-    """Attach enabled prompt features to the server."""
-    if include_bd:
-        bd.registry.register_prompts(mcp)
+def register_prompts(mcp: FastMCP) -> None:
+    """Attach BD prompts to the server."""
+    bd.registry.register_prompts(mcp)

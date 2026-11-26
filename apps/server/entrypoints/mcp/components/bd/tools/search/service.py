@@ -1,37 +1,13 @@
-"""Retrieval, authorization, and rate-limit orchestration for BD Search MCP."""
+"""Retrieval and rate-limit orchestration for BD Search MCP."""
 from __future__ import annotations
+import ai, domains, infra
+from . import domain, params, schemas
 
 import asyncio
-import hashlib
 import logging
 import time
 
-from fastmcp.server.dependencies import get_access_token
-
-import ai
-import domains
-import infra
-
-from ... import access
-from . import domain, params, schemas
-
 logger = logging.getLogger(__name__)
-
-
-async def authorize_book(book_id: str, trusted_in_process: bool) -> None:
-    await access.service.authorize_book(
-        book_id,
-        trusted_in_process,
-        required_scope = params.READ_SCOPE,
-    )
-
-
-async def authorize_web(trusted_in_process: bool) -> None:
-    if trusted_in_process:
-        return
-    token = get_access_token()
-    if token is None or not {params.READ_SCOPE, params.WEB_SEARCH_SCOPE}.issubset(token.scopes):
-        raise PermissionError("The authenticated principal lacks the required external-search scopes")
 
 
 async def search_store(source: str, book_id: str, run_id: str, query: str) -> schemas.RetrievalResult:
@@ -63,7 +39,7 @@ async def search_store(source: str, book_id: str, run_id: str, query: str) -> sc
     return schemas.RetrievalResult.model_validate(result)
 
 
-async def search_web(query: str, trusted_in_process: bool) -> schemas.RetrievalResult:
+async def search_web(query: str) -> schemas.RetrievalResult:
     normalized_query = domain.normalize_query(query, params.MAX_WEB_QUERY_CHARS)
     if not normalized_query:
         return schemas.RetrievalResult(
@@ -111,7 +87,7 @@ async def search_web(query: str, trusted_in_process: bool) -> schemas.RetrievalR
                 status = "unavailable", source = "external_search", query = normalized_query,
                 evidence = [], error_type = "SearchToolSchemaUnsupported",
             )
-        await claim_web_search(trusted_in_process)
+        await claim_web_search()
         raw = await asyncio.wait_for(
             search_tool.ainvoke(arguments), timeout = params.WEB_SEARCH_TIMEOUT_S,
         )
@@ -140,14 +116,11 @@ async def search_web(query: str, trusted_in_process: bool) -> schemas.RetrievalR
     )
 
 
-async def claim_web_search(trusted_in_process: bool) -> None:
+async def claim_web_search() -> None:
     if not infra.redis.service.is_configured():
         raise RuntimeError("Settings-backed search requires Redis-backed request limits")
-    token = get_access_token() if not trusted_in_process else None
-    principal = (token.subject or token.client_id) if token is not None else "internal-agent"
-    principal_hash = hashlib.sha256(principal.encode("utf-8")).hexdigest()[:32]
     minute = int(time.time() // 60)
-    key = f"mcp:bd-search:web:{principal_hash}:{minute}"
+    key = f"mcp:bd-search:web:shared:{minute}"
     async with infra.redis.service.client(
         connect_timeout_s = params.REDIS_TIMEOUT_S,
         op_timeout_s = params.REDIS_TIMEOUT_S,

@@ -1,14 +1,19 @@
 """Durable status contract for one processed-book retrieval index."""
 from __future__ import annotations
-from .. import params, versions
-from ... import source
 
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
+import domains
 
-SafeSegment = Annotated[str, StringConstraints(pattern = r"^[A-Za-z0-9_-]+$")]
+from ... import source
+from .. import params, versions
+
+SafeSegment = Annotated[
+    str,
+    StringConstraints(pattern=domains.bd.identifiers.patterns.SAFE_SEGMENT_PATTERN),
+]
 ObjectKey = Annotated[str, StringConstraints(min_length = 1)]
 Sha256Hex = Annotated[str, StringConstraints(pattern = r"^[0-9a-f]{64}$")]
 NodeStatus = Literal["pending", "running", "done", "failed", "cancelled"]

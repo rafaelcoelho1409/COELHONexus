@@ -30,9 +30,9 @@ async def call_source_tool(
     tool_name = keys.MCP_TOOL_NAME_BY_SOURCE[source]
     arguments: dict[str, Any] = {"query": normalized_query}
     arguments.update(book_id = session.book_id, run_id = session.run_id)
-    from entrypoints.mcp.server import internal_mcp
+    from entrypoints.mcp.server import mcp
 
-    async with Client(internal_mcp, timeout = 100) as client:
+    async with Client(mcp, timeout = 100) as client:
         result = await client.call_tool(tool_name, arguments)
     data = domain.to_plain_data(result.data)
     if isinstance(data, dict) and set(data) == {"root"} and isinstance(data["root"], dict):

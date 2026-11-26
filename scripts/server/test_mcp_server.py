@@ -18,7 +18,6 @@ for name, value in {"REDIS_HOST": "localhost", "REDIS_PORT": "6379", "REDIS_PASS
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "server"))
 import entrypoints  # noqa: E402
 import main as nexus  # noqa: E402
-from entrypoints.mcp.deployment import params as mcp_params  # noqa: E402
 from entrypoints.mcp.components import bd as mcp_bd  # noqa: E402
 
 import httpx  # noqa: E402
@@ -42,8 +41,6 @@ def check_edge_settings() -> None:
     domain = entrypoints.api.domain
     assert domain.parse_csv(" a, b,,") == ["a", "b"]
     assert domain.parse_csv("") == []
-    assert domain.host_origin_protection([]) == "auto"
-    assert domain.host_origin_protection(["svc"]) is True
     assert entrypoints.api.params.CORS_ORIGINS == ["*"] or "CORS_ORIGINS" in os.environ
     assert hasattr(mcp_bd, "registry")
 
@@ -51,14 +48,24 @@ def check_edge_settings() -> None:
 async def run_checks(base: str) -> None:
     async with Client(f"{base}/mcp") as client:
         tools = await client.list_tools()
-        expected = []
-        if mcp_params.MCP_PROFILE in {"local_demo", "protected"}:
-            expected.extend([
-                "bd_search_elasticsearch",
-                "bd_search_qdrant",
-                "bd_search_neo4j",
-                "bd_search_web",
-            ])
+        expected = [
+            "bd_ingestion_get_run",
+            "bd_ingestion_get_quality_summary",
+            "bd_ingestion_start_run",
+            "bd_ingestion_resume_run",
+            "bd_ingestion_cancel_run",
+            "bd_ingestion_replay_from_node",
+            "bd_rag_index_get_run",
+            "bd_rag_index_get_current",
+            "bd_rag_index_start",
+            "bd_rag_index_resume",
+            "bd_rag_index_cancel",
+            "bd_rag_index_replay_from_node",
+            "bd_search_elasticsearch",
+            "bd_search_qdrant",
+            "bd_search_neo4j",
+            "bd_search_web",
+        ]
         assert {t.name for t in tools} == set(expected), tools
 
     async with httpx.AsyncClient(base_url=base) as http:

@@ -1,6 +1,7 @@
 """Redis keys for active, book-scoped BD Ask turns."""
 from __future__ import annotations
 
+import domains
 
 ACTIVE_TURN_TTL_S = 90
 
@@ -14,9 +15,6 @@ def active_turn_pattern(book_id: str) -> str:
 
 
 def _safe_segment(value: str) -> str:
-    if not value or any(
-        not (character.isascii() and (character.isalnum() or character in "-_"))
-        for character in value
-    ):
+    if not domains.bd.identifiers.domain.is_safe_segment(value):
         raise ValueError("book and turn identifiers must be safe path segments")
     return value

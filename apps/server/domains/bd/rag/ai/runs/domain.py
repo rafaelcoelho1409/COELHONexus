@@ -1,17 +1,11 @@
 """Deterministic helpers for retrieval-index run records."""
 from __future__ import annotations
-from . import schemas
-from ... import source
 
 import time
 from typing import Any
 
-
-def safe_segment(value: object) -> bool:
-    return isinstance(value, str) and bool(value) and all(
-        character.isascii() and (character.isalnum() or character in "-_")
-        for character in value
-    )
+from ... import source
+from . import schemas
 
 
 def initial_manifest(

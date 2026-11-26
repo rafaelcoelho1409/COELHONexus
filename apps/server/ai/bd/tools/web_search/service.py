@@ -84,9 +84,9 @@ async def search_mcp_web(session: entities.SearchSession, query: str) -> str:
 
         session.queries.append(normalized_query)
         try:
-            from entrypoints.mcp.server import internal_mcp
+            from entrypoints.mcp.server import mcp
 
-            async with Client(internal_mcp, timeout = 100) as client:
+            async with Client(mcp, timeout = 100) as client:
                 result = await client.call_tool("bd_search_web", {"query": normalized_query})
         except asyncio.CancelledError:
             raise

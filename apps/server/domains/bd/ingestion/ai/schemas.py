@@ -1,6 +1,5 @@
 """Shared contracts and primitive types for Book Distiller AI ingestion."""
 from __future__ import annotations
-from . import patterns
 
 from typing import Annotated, Literal
 
@@ -13,19 +12,16 @@ from pydantic import (
     model_validator,
 )
 
+from ... import identifiers
+from . import patterns
 
-SafeSegment = Annotated[str, StringConstraints(pattern = patterns.SAFE_SEGMENT_PATTERN)]
+SafeSegment = Annotated[
+    str,
+    StringConstraints(pattern=identifiers.patterns.SAFE_SEGMENT_PATTERN),
+]
 Sha256Hex = Annotated[str, StringConstraints(pattern = patterns.SHA256_HEX_PATTERN)]
 NonEmptyText = Annotated[str, StringConstraints(strip_whitespace = True, min_length = 1)]
 ObjectKey = Annotated[str, StringConstraints(strip_whitespace = True, min_length = 1)]
-
-
-def is_safe_segment(value: object) -> bool:
-    """Return whether a value satisfies the storage-safe identity contract."""
-    return isinstance(value, str) and bool(value) and all(
-        character.isascii() and (character.isalnum() or character in "-_")
-        for character in value
-    )
 
 
 class ExtractionPage(BaseModel):
@@ -68,4 +64,4 @@ class ExtractionRequest(BaseModel):
         """The pages as the plain dicts the graph state keeps."""
         return [page_ref.model_dump() for page_ref in self.page_refs]
 
-__all__ = ["ExtractionPage", "ExtractionRequest", "NonEmptyText", "ObjectKey", "SafeSegment", "Sha256Hex", "is_safe_segment"]
+__all__ = ["ExtractionPage", "ExtractionRequest", "NonEmptyText", "ObjectKey", "SafeSegment", "Sha256Hex"]

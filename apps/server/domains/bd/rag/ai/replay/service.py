@@ -1,14 +1,18 @@
 """Checkpoint replay and external-output cleanup for retrieval-index runs."""
 from __future__ import annotations
-import ai, infra
-from . import domain
-from .. import keys, params, runs, versions
-from ... import source
-from .... import ingestion
-from ..... import settings
 
 import time
 from typing import Any
+
+import ai
+import domains
+import infra
+
+from ..... import settings
+from .... import ingestion
+from ... import source
+from .. import keys, params, runs, versions
+from . import domain
 
 
 async def _checkpoint_for_replay(
@@ -112,7 +116,7 @@ async def _delete_replay_outputs(
 
 async def replay_index_node(book_id: str, agentic_run_id: str, node_id: str) -> dict[str, Any]:
     """Queue a terminal retrieval-index run from one node, clearing only downstream results."""
-    if not runs.domain.safe_segment(book_id) or not runs.domain.safe_segment(agentic_run_id):
+    if not domains.bd.identifiers.domain.is_safe_segment(book_id) or not domains.bd.identifiers.domain.is_safe_segment(agentic_run_id):
         raise ValueError("book_id and agentic_run_id must be safe path segments")
     if node_id not in params.REPLAY_DESCENDANTS:
         raise ValueError(f"unknown retrieval-index graph node {node_id!r}")

@@ -1,6 +1,23 @@
 """Run integration between completed Book Distiller extractions and the AI graph."""
 from __future__ import annotations
-import ai, infra
+
+import asyncio
+import hashlib
+import json
+import logging
+import time
+import uuid
+from collections.abc import Awaitable, Callable
+from typing import Any
+
+from langgraph.errors import NodeCancelledError
+
+import ai
+import domains
+import infra
+
+from .... import settings
+from .. import source
 from . import (
     content_selection,
     params,
@@ -11,19 +28,6 @@ from . import (
     source_pages,
     versions,
 )
-from .. import source
-from .... import settings
-
-import asyncio
-import hashlib
-import json
-import logging
-import time
-import uuid
-from typing import Any, Awaitable, Callable
-
-from langgraph.errors import NodeCancelledError
-
 
 logger = logging.getLogger(__name__)
 
@@ -183,7 +187,7 @@ def _safe_error_message(error: Exception | str) -> str:
 
 
 def automatic_run_id(extraction_run_id: str) -> str:
-    if not schemas.is_safe_segment(extraction_run_id):
+    if not domains.bd.identifiers.domain.is_safe_segment(extraction_run_id):
         raise ValueError("extraction_run_id must be a safe path segment")
     return f"{params.AUTO_RUN_ID_PREFIX}{extraction_run_id}"
 
@@ -195,7 +199,7 @@ async def create_ingestion_ai_run(
     agentic_run_id: str | None = None,
     storage: infra.minio.service.MinIOStorage | None = None,
 ) -> dict[str, Any]:
-    if not schemas.is_safe_segment(book_id):
+    if not domains.bd.identifiers.domain.is_safe_segment(book_id):
         raise ValueError("book_id must be a safe path segment")
     async with (
         infra.redis.service.client() as redis,
@@ -221,13 +225,13 @@ async def _create_ingestion_ai_run_unlocked(
     storage: infra.minio.service.MinIOStorage | None = None,
 ) -> dict[str, Any]:
     """Create a queued candidate manifest before dispatching its Celery task."""
-    if not schemas.is_safe_segment(book_id):
+    if not domains.bd.identifiers.domain.is_safe_segment(book_id):
         raise ValueError("book_id must be a safe path segment")
-    if expected_extraction_id is not None and not schemas.is_safe_segment(expected_extraction_id):
+    if expected_extraction_id is not None and not domains.bd.identifiers.domain.is_safe_segment(expected_extraction_id):
         raise ValueError("expected_extraction_id must be a safe path segment")
     if agentic_run_id is None:
         agentic_run_id = uuid.uuid4().hex
-    if not schemas.is_safe_segment(agentic_run_id):
+    if not domains.bd.identifiers.domain.is_safe_segment(agentic_run_id):
         raise ValueError("agentic_run_id must be a safe path segment")
     if storage is None:
         storage = infra.minio.service.get_storage()
@@ -313,7 +317,7 @@ async def read_current_ingestion_ai_run(
     if source_manifest is None or source_manifest.get("status") != source.storage.params.STATUS_DONE:
         return None
     extraction_run_id = source_manifest.get("extraction_id")
-    if not schemas.is_safe_segment(extraction_run_id):
+    if not domains.bd.identifiers.domain.is_safe_segment(extraction_run_id):
         return None
     pointer_key = source.storage.keys.current_agentic_run_key(book_id)
     if await storage.exists(pointer_key):
@@ -324,7 +328,7 @@ async def read_current_ingestion_ai_run(
         if isinstance(pointer, dict) and pointer.get("agentic_run_id") is None:
             return None
         run_id = pointer.get("agentic_run_id") if isinstance(pointer, dict) else None
-        if schemas.is_safe_segment(run_id):
+        if domains.bd.identifiers.domain.is_safe_segment(run_id):
             current = await read_ingestion_ai_run(book_id, run_id, storage = storage)
             if current is not None and current.get("extraction_run_id") == extraction_run_id:
                 return current
@@ -334,7 +338,7 @@ async def read_current_ingestion_ai_run(
     runs = await asyncio.gather(*(
         read_ingestion_ai_run(book_id, run_id, storage = storage)
         for run_id in run_ids
-        if schemas.is_safe_segment(run_id)
+        if domains.bd.identifiers.domain.is_safe_segment(run_id)
     ))
     current_runs = [
         run for run in runs
@@ -535,7 +539,7 @@ async def read_ingestion_ai_run(
     storage: infra.minio.service.MinIOStorage | None = None,
 ) -> dict[str, Any] | None:
     """Read one persisted candidate manifest for API status polling."""
-    if not schemas.is_safe_segment(book_id) or not schemas.is_safe_segment(agentic_run_id):
+    if not domains.bd.identifiers.domain.is_safe_segment(book_id) or not domains.bd.identifiers.domain.is_safe_segment(agentic_run_id):
         raise ValueError("book_id and agentic_run_id must be safe path segments")
     if storage is None:
         storage = infra.minio.service.get_storage()
@@ -610,7 +614,7 @@ async def read_selection(
     storage: infra.minio.service.MinIOStorage | None = None,
 ) -> tuple[content_selection.schemas.ContentSelectionManifest, str, str] | None:
     """Return the current page-selection revision, key, and exact content hash."""
-    if not schemas.is_safe_segment(book_id) or not schemas.is_safe_segment(agentic_run_id):
+    if not domains.bd.identifiers.domain.is_safe_segment(book_id) or not domains.bd.identifiers.domain.is_safe_segment(agentic_run_id):
         raise ValueError("book_id and agentic_run_id must be safe path segments")
     if storage is None:
         storage = infra.minio.service.get_storage()
@@ -653,7 +657,7 @@ async def ensure_selection(
     retain every other page as unknown so a compatibility migration can never silently drop book
     content. The generated artifact is immutable and reviewed edits continue through revisions.
     """
-    if not schemas.is_safe_segment(book_id) or not schemas.is_safe_segment(agentic_run_id):
+    if not domains.bd.identifiers.domain.is_safe_segment(book_id) or not domains.bd.identifiers.domain.is_safe_segment(agentic_run_id):
         raise ValueError("book_id and agentic_run_id must be safe path segments")
     if storage is None:
         storage = infra.minio.service.get_storage()
@@ -733,7 +737,7 @@ async def apply_overrides(
     storage: infra.minio.service.MinIOStorage | None = None,
 ) -> content_selection.schemas.ContentSelectionManifest:
     """Append a reviewed selection revision and only then move its current pointer."""
-    if not schemas.is_safe_segment(book_id) or not schemas.is_safe_segment(agentic_run_id):
+    if not domains.bd.identifiers.domain.is_safe_segment(book_id) or not domains.bd.identifiers.domain.is_safe_segment(agentic_run_id):
         raise ValueError("book_id and agentic_run_id must be safe path segments")
     if storage is None:
         storage = infra.minio.service.get_storage()
@@ -837,7 +841,7 @@ async def find_active_ingestion_ai_run(
         source.storage.keys.agentic_runs_prefix(book_id),
     )
     for run_id in run_ids:
-        if not schemas.is_safe_segment(run_id) or run_id == exclude_run_id:
+        if not domains.bd.identifiers.domain.is_safe_segment(run_id) or run_id == exclude_run_id:
             continue
         manifest = await read_ingestion_ai_run(book_id, run_id, storage = storage)
         if manifest is not None and manifest["status"] in {
@@ -850,7 +854,7 @@ async def find_active_ingestion_ai_run(
 
 async def cancel_ingestion_ai_run(book_id: str, agentic_run_id: str) -> dict[str, Any]:
     """Request a cooperative stop at a page, node, or cancellable LLM-call boundary."""
-    if not schemas.is_safe_segment(book_id) or not schemas.is_safe_segment(agentic_run_id):
+    if not domains.bd.identifiers.domain.is_safe_segment(book_id) or not domains.bd.identifiers.domain.is_safe_segment(agentic_run_id):
         raise ValueError("book_id and agentic_run_id must be safe path segments")
     async with (
         infra.redis.service.client() as redis,
@@ -921,7 +925,7 @@ async def delete_ingestion_ai_checkpoints(
 
 async def wipe_ingestion_ai_run(book_id: str, agentic_run_id: str) -> dict[str, Any]:
     """Delete one terminal candidate and its AI-only artifacts, counters, replay, and checkpoints."""
-    if not schemas.is_safe_segment(book_id) or not schemas.is_safe_segment(agentic_run_id):
+    if not domains.bd.identifiers.domain.is_safe_segment(book_id) or not domains.bd.identifiers.domain.is_safe_segment(agentic_run_id):
         raise ValueError("book_id and agentic_run_id must be safe path segments")
     storage = infra.minio.service.get_storage()
     async with (
@@ -995,7 +999,7 @@ async def queue_ingestion_ai_resume(
     *,
     storage: infra.minio.service.MinIOStorage | None = None,
 ) -> dict[str, Any]:
-    if not schemas.is_safe_segment(book_id) or not schemas.is_safe_segment(agentic_run_id):
+    if not domains.bd.identifiers.domain.is_safe_segment(book_id) or not domains.bd.identifiers.domain.is_safe_segment(agentic_run_id):
         raise ValueError("book_id and agentic_run_id must be safe path segments")
     async with (
         infra.redis.service.client() as redis,
@@ -1090,7 +1094,7 @@ async def queue_ingestion_ai_node_replay(
     storage: infra.minio.service.MinIOStorage | None = None,
 ) -> dict[str, Any]:
     """Queue a terminal run from a saved checkpoint immediately before one graph node."""
-    if not schemas.is_safe_segment(book_id) or not schemas.is_safe_segment(agentic_run_id):
+    if not domains.bd.identifiers.domain.is_safe_segment(book_id) or not domains.bd.identifiers.domain.is_safe_segment(agentic_run_id):
         raise ValueError("book_id and agentic_run_id must be safe path segments")
     if node_id not in params.GRAPH_NODES:
         raise ValueError(f"unknown ingestion graph node {node_id!r}")
@@ -1364,7 +1368,7 @@ def _extraction_request(
         raise ValueError("the manifest book_id does not match the requested book")
 
     extraction_id = manifest.get("extraction_id")
-    if not schemas.is_safe_segment(extraction_id):
+    if not domains.bd.identifiers.domain.is_safe_segment(extraction_id):
         raise ValueError("the manifest has no safe extraction_id")
     if expected_extraction_id is not None and extraction_id != expected_extraction_id:
         raise ValueError("the requested extraction_id is no longer current")
@@ -1412,9 +1416,9 @@ async def run_page_audit(
 
     It calls the same `audit_page` as the full-book audit, so the auditor evaluation measures the real path. Pass
     `finding_verifier` to include the second reader."""
-    if not schemas.is_safe_segment(book_id):
+    if not domains.bd.identifiers.domain.is_safe_segment(book_id):
         raise ValueError("book_id must be a safe path segment")
-    if expected_extraction_id is not None and not schemas.is_safe_segment(expected_extraction_id):
+    if expected_extraction_id is not None and not domains.bd.identifiers.domain.is_safe_segment(expected_extraction_id):
         raise ValueError("expected_extraction_id must be a safe path segment")
     if type(page_number) is not int or page_number <= 0:
         raise ValueError("page_number must be a positive integer")
@@ -1472,13 +1476,13 @@ async def run_ingestion_ai(
 
     A caller that supplies its own auditor owns the whole agent set, so the second-reader verifier is built only for the
     default agents or when passed in."""
-    if not schemas.is_safe_segment(book_id):
+    if not domains.bd.identifiers.domain.is_safe_segment(book_id):
         raise ValueError("book_id must be a safe path segment")
-    if expected_extraction_id is not None and not schemas.is_safe_segment(expected_extraction_id):
+    if expected_extraction_id is not None and not domains.bd.identifiers.domain.is_safe_segment(expected_extraction_id):
         raise ValueError("expected_extraction_id must be a safe path segment")
     if agentic_run_id is None:
         agentic_run_id = uuid.uuid4().hex
-    if not schemas.is_safe_segment(agentic_run_id):
+    if not domains.bd.identifiers.domain.is_safe_segment(agentic_run_id):
         raise ValueError("agentic_run_id must be a safe path segment")
     if storage is None:
         storage = infra.minio.service.get_storage()

@@ -25,17 +25,8 @@ mcp = entrypoints.mcp.server.mcp
 mcp_app = mcp.http_app(
     path="/mcp",
     stateless_http=True,
-    host_origin_protection=entrypoints.api.domain.host_origin_protection(
-        entrypoints.api.params.ALLOWED_HOSTS,
-    ),
-    allowed_hosts=entrypoints.api.params.ALLOWED_HOSTS or None,
+    host_origin_protection=False,
 )
-entrypoints.api.middleware.mcp.protect_local_demo_http_app(
-    mcp_app,
-    enabled = entrypoints.mcp.server.mcp_profile == "local_demo",
-)
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     try:

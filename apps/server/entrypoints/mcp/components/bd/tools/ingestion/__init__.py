@@ -1,6 +1,7 @@
-"""FastMCP tools for BD Agentic Ingestion lifecycle and quality status."""
+"""BD Ingestion MCP tools grouped by workflow."""
+
 from __future__ import annotations
 
-from . import domain, params, registry, schemas, service, tools
+from . import book_processing, rag_indexing
 
-__all__ = ["domain", "params", "registry", "schemas", "service", "tools"]
+__all__ = ["book_processing", "rag_indexing"]

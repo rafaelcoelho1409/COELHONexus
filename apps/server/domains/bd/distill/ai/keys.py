@@ -1,9 +1,11 @@
 """Object keys for immutable Book Distiller learning-guide runs."""
 from __future__ import annotations
 
+import domains
+
 
 def _safe_segment(value: str, label: str) -> str:
-    if not value or any(not (character.isascii() and (character.isalnum() or character in "-_")) for character in value):
+    if not domains.bd.identifiers.domain.is_safe_segment(value):
         raise ValueError(f"{label} must be a safe path segment")
     return value
 

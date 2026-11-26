@@ -7,13 +7,13 @@ from __future__ import annotations
 import importlib
 from typing import TYPE_CHECKING
 
-from . import ask, distill, ingestion
+from . import ask, distill, identifiers, ingestion
 
 if TYPE_CHECKING:
     from . import query, rag
 
 
-__all__ = ["ask", "distill", "ingestion", "query", "rag"]
+__all__ = ["ask", "distill", "identifiers", "ingestion", "query", "rag"]
 
 
 def __getattr__(name: str):

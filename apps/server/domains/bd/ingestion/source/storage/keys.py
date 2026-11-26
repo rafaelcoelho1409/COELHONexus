@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import hashlib
 
+import domains
+
 ROOT_PREFIX = "bd/"
 PREVIOUS_BOOKS_PREFIX = "bd/ingestion/books/"
 LEGACY_BOOKS_PREFIX = "books/"
@@ -229,13 +231,9 @@ def _safe_id(value: str) -> str:
 
 def _safe_segment(value: str, label: str) -> str:
     segment = str(value)
-    if not _is_safe_segment(segment):
+    if not domains.bd.identifiers.domain.is_safe_segment(segment):
         raise ValueError(f"{label} must contain letters, numbers, '-' or '_'")
     return segment
-
-
-def _is_safe_segment(value: str) -> bool:
-    return bool(value) and all(char.isascii() and (char.isalnum() or char in "-_") for char in value)
 
 
 def _positive_page(page_no: int) -> None:

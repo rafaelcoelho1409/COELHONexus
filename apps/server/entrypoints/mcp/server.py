@@ -1,9 +1,11 @@
-"""FastMCP server instances mounted into the COELHO Nexus ASGI process."""
+"""FastMCP server mounted into the COELHO Nexus ASGI process."""
 from __future__ import annotations
+from . import components
 
-from . import deployment
+from fastmcp import FastMCP
 
 
-mcp_profile = deployment.params.MCP_PROFILE
-mcp = deployment.service.build_external_server()
-internal_mcp = deployment.service.build_internal_server()
+mcp = FastMCP("COELHO Nexus")
+components.registry.register_tools(mcp)
+components.registry.register_resources(mcp)
+components.registry.register_prompts(mcp)

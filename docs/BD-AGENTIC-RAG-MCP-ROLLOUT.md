@@ -19,25 +19,13 @@ Distill's book-retrieval subgraph fans out to four Distill-owned DeepAgents, eac
 
 The processed-book indexing workflow launched from BD Ingestion lives under `ai/bd/graphs/ingestion/rag_indexing`. Ask's query-time retrieval lives under `ai/bd/graphs/ask/adaptive/subgraphs/book_retrieval`; Distill's retrieval lives under `ai/bd/graphs/distill/book_distillation/subgraphs/book_retrieval`.
 
-## Deployment profiles
+## MCP endpoint
 
-`BD_MCP_PROFILE` defaults to `disabled`. In that profile, `/mcp` exposes only `ping`.
+The single FastMCP server registers BD tools, resources, and prompts by default on `/mcp`. Agent-side MCP clients call the same server instance in process.
 
-For a local demonstration, set `BD_MCP_PROFILE=local_demo` and `BD_MCP_DEMO_BOOK_IDS` to a comma-separated list containing only public or synthetic demo books. The app rejects this profile in production and the MCP ASGI app accepts loopback clients only. It permits reads for those books and denies every mutation. Settings-backed Search MCP remains disabled.
+The endpoint has no MCP authentication, per-book allowlist, or read-only mode. All registered BD capabilities, including lifecycle mutations, are available to connected clients.
 
-For a protected deployment, set `BD_MCP_PROFILE=protected` and configure:
-
-```text
-BD_MCP_JWKS_URI=https://identity.example/.well-known/jwks.json
-BD_MCP_ISSUER=https://identity.example/
-BD_MCP_AUDIENCE=coelho-nexus-mcp
-```
-
-The JWT must contain `bd_book_ids: ["..."]` (or `bd: {"book_ids": ["..."]}`); each requested book must be listed. FastMCP validates the JWT signature, issuer, and audience. Each capability then checks its own scope and the requested book claim. `BD_MCP_REQUIRED_SCOPE` can optionally impose an additional endpoint-wide baseline scope; leave it unset when callers should receive only the scope for the capabilities they use. A gateway must preserve the verified bearer token and prevent direct access around the protected endpoint.
-
-The operation scope settings default to `bd.search.read`, `bd.ingestion.read`, `bd.ingestion.write`, `bd.ingestion.replay`, `bd.rag.index.read`, `bd.rag.index.write`, and `bd.rag.index.replay`, respectively. They can be changed with `BD_MCP_SEARCH_READ_SCOPE`, `BD_MCP_INGESTION_READ_SCOPE`, `BD_MCP_INGESTION_WRITE_SCOPE`, `BD_MCP_INGESTION_REPLAY_SCOPE`, `BD_MCP_RAG_INDEX_READ_SCOPE`, `BD_MCP_RAG_INDEX_WRITE_SCOPE`, and `BD_MCP_RAG_INDEX_REPLAY_SCOPE`. The protected deployment should grant replay scopes only to operators allowed to regenerate model-derived or indexed outputs.
-
-Settings-backed web search is off by default. Enabling it requires `BD_MCP_WEB_SEARCH_ENABLED=true`, both `bd.search.read` and the additional token scope `bd.search.web`, and Redis for a per-principal request budget of 10 searches per minute. This path uses the existing selected Settings connection; never enable it for a public demo that has access to private Settings credentials.
+Settings-backed web search is off by default. Enabling it requires `BD_MCP_WEB_SEARCH_ENABLED=true` and Redis for a request budget of 10 searches per minute. This path uses the existing selected Settings connection.
 
 ## Agent rollout
 
@@ -57,9 +45,9 @@ The integration uses FastMCP APIs present in the repository lock; no dependency 
 
 Release in this order:
 
-1. Run offline MCP, scope, and partial-backend tests.
+1. Run offline MCP and partial-backend checks.
 2. Validate each source against a sanitized corpus; measure Recall@k, MRR/nDCG, citation precision, p95 latency, and model/tool-call counts.
-3. Exercise partial outages, invalid book/run pairs, JWT denial, missing web scope, and Redis quota failures.
-4. Start with a loopback local demo, then an internal JWT-protected canary with a small book scope.
+3. Exercise partial outages, invalid book/run pairs, and Redis quota failures.
+4. Expose `/mcp` only to clients intended to receive unrestricted access to the registered capabilities.
 5. Enable agentic Ask only after the evaluation gate passes. Keep hosted demo data synthetic/public and keep Settings web search disabled.
 6. Add Distill cross-book evidence only after per-user corpus authorization and citation validation are implemented.

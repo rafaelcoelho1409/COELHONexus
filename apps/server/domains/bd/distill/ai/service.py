@@ -39,12 +39,6 @@ def _failure_message(error: Exception) -> str:
     return f"Distill failed ({type(error).__name__}). Check worker logs for details."
 
 
-def _safe_segment(value: object) -> bool:
-    return isinstance(value, str) and bool(value) and all(
-        character.isascii() and (character.isalnum() or character in "-_") for character in value
-    )
-
-
 def _canonical_sha256(value: dict) -> str:
     body = json.dumps(value, ensure_ascii = False, separators = (",", ":"), sort_keys = True)
     return hashlib.sha256(body.encode("utf-8")).hexdigest()
@@ -240,7 +234,7 @@ async def read_run(
     *,
     storage: infra.minio.service.MinIOStorage | None = None,
 ) -> dict[str, Any] | None:
-    if not _safe_segment(book_id) or not _safe_segment(run_id):
+    if not domains.bd.identifiers.domain.is_safe_segment(book_id) or not domains.bd.identifiers.domain.is_safe_segment(run_id):
         raise ValueError("book_id and run_id must be safe path segments")
     if storage is None:
         storage = infra.minio.service.get_storage()
@@ -270,7 +264,7 @@ async def read_current_run(
     except json.JSONDecodeError:
         return None
     run_id = pointer.get("run_id") if isinstance(pointer, dict) else None
-    if not _safe_segment(run_id):
+    if not domains.bd.identifiers.domain.is_safe_segment(run_id):
         return None
     run = await read_run(book_id, run_id, storage = storage)
     source = await domains.bd.ingestion.source.storage.service.read_manifest(storage, book_id)
@@ -289,7 +283,7 @@ async def list_runs(
     run_ids = await storage.list_subfolders(keys.runs_prefix(book_id))
     runs = await asyncio.gather(*(
         read_run(book_id, run_id, storage = storage)
-        for run_id in run_ids if _safe_segment(run_id)
+        for run_id in run_ids if domains.bd.identifiers.domain.is_safe_segment(run_id)
     ))
     return sorted((run for run in runs if run is not None), key = lambda run: run["created_at"], reverse = True)
 
@@ -302,12 +296,12 @@ async def create_distill_run(
     storage: infra.minio.service.MinIOStorage | None = None,
 ) -> dict[str, Any]:
     """Create one immutable run pinned to the completed extraction and QA candidate."""
-    if not _safe_segment(book_id):
+    if not domains.bd.identifiers.domain.is_safe_segment(book_id):
         raise ValueError("book_id must be a safe path segment")
-    if expected_ingestion_ai_run_id is not None and not _safe_segment(expected_ingestion_ai_run_id):
+    if expected_ingestion_ai_run_id is not None and not domains.bd.identifiers.domain.is_safe_segment(expected_ingestion_ai_run_id):
         raise ValueError("ingestion_ai_run_id must be a safe path segment")
     run_id = run_id or uuid.uuid4().hex
-    if not _safe_segment(run_id):
+    if not domains.bd.identifiers.domain.is_safe_segment(run_id):
         raise ValueError("run_id must be a safe path segment")
     if storage is None:
         storage = infra.minio.service.get_storage()
@@ -323,7 +317,7 @@ async def create_distill_run(
         if source_manifest is None or source_manifest.get("status") != domains.bd.ingestion.source.storage.params.STATUS_DONE:
             raise ValueError("book extraction must be complete before Distill can start")
         extraction_run_id = source_manifest.get("extraction_id")
-        if not _safe_segment(extraction_run_id):
+        if not domains.bd.identifiers.domain.is_safe_segment(extraction_run_id):
             raise ValueError("the completed extraction has no valid run ID")
         source_manifest_key = domains.bd.ingestion.source.storage.keys.manifest_key(book_id)
         source_manifest_sha256 = _canonical_sha256(source_manifest)
@@ -667,7 +661,7 @@ async def queue_node_replay(book_id: str, run_id: str, node_id: str) -> dict[str
 
 
 async def request_cancel(book_id: str, run_id: str) -> dict[str, Any]:
-    if not _safe_segment(book_id) or not _safe_segment(run_id):
+    if not domains.bd.identifiers.domain.is_safe_segment(book_id) or not domains.bd.identifiers.domain.is_safe_segment(run_id):
         raise ValueError("book_id and run_id must be safe path segments")
     storage = infra.minio.service.get_storage()
     async with (
@@ -736,7 +730,7 @@ async def request_cancel(book_id: str, run_id: str) -> dict[str, Any]:
 
 async def wipe_run(book_id: str, run_id: str) -> dict[str, Any]:
     """Delete a terminal candidate, its checkpoints, usage, and progress without touching source pages."""
-    if not _safe_segment(book_id) or not _safe_segment(run_id):
+    if not domains.bd.identifiers.domain.is_safe_segment(book_id) or not domains.bd.identifiers.domain.is_safe_segment(run_id):
         raise ValueError("book_id and run_id must be safe path segments")
     storage = infra.minio.service.get_storage()
     try:

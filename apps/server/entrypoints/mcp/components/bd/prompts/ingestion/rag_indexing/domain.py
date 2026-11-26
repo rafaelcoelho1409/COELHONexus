@@ -1,0 +1,16 @@
+"""Pure validation and rendering for BD RAG indexing MCP prompts."""
+import domains
+from . import prompts
+
+from __future__ import annotations
+
+
+def build_diagnose_index_run_prompt(book_id: str, agentic_run_id: str) -> str:
+    """Render the safe, read-only diagnosis prompt for one validated index run."""
+    if not domains.bd.identifiers.domain.is_safe_segment(
+        book_id
+    ) or not domains.bd.identifiers.domain.is_safe_segment(agentic_run_id):
+        raise ValueError("book_id and agentic_run_id must be safe path segments")
+    return prompts.PROMPT_TEMPLATE.format(
+        book_id=book_id, agentic_run_id=agentic_run_id
+    )
