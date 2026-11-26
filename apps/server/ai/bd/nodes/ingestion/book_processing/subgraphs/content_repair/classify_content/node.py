@@ -1,0 +1,27 @@
+"""Thin LangGraph wrapper for the full-book content selection pass."""
+from __future__ import annotations
+from . import service
+from ....... import graphs
+
+from langgraph.runtime import Runtime
+
+
+async def classify_content(
+    graph_state: graphs.ingestion.book_processing.states.IngestionRunState,
+    runtime: Runtime[graphs.ingestion.book_processing.entities.IngestionDependencies],
+) -> dict:
+    if "classify_content" in graph_state.get("replay_skip_nodes", []):
+        return {}
+    context = runtime.context
+    return await graphs.service.run_node(
+        context.progress_callback,
+        "classify_content",
+        lambda: service.classify_content(
+            graph_state,
+            context.read_page,
+            context.write_artifact,
+            context.artifact_exists,
+            context.content_classifier,
+            context.progress_callback,
+        ),
+    )

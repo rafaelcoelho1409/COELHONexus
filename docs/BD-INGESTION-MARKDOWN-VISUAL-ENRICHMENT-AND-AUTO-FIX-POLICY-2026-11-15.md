@@ -71,7 +71,7 @@ Do not execute code recovered from a book image. Code blocks are for reading and
 
 The requested product behavior is no per-finding approval for any book. The pipeline already required no user approval to finish or publish a run; the change below also makes validated proposed corrections apply automatically.
 
-Current repair behavior in [`repair_pages/domain.py`](../apps/server/ai/bd/nodes/ingestion/subgraphs/content_repair/repair_pages/domain.py) and [`repair_pages/service.py`](../apps/server/ai/bd/nodes/ingestion/subgraphs/content_repair/repair_pages/service.py):
+Current repair behavior in [`repair_pages/domain.py`](../apps/server/ai/bd/nodes/ingestion/book_processing/subgraphs/content_repair/repair_pages/domain.py) and [`repair_pages/service.py`](../apps/server/ai/bd/nodes/ingestion/book_processing/subgraphs/content_repair/repair_pages/service.py):
 
 - Every validated text and structure proposal is applied automatically without user approval, regardless of the source-image verifier's verdict or the proposal's risk/confidence labels.
 - Exact source span, assigned issue/specialist scope, and no-invented-content validation still apply. They prevent applying a suggestion that does not correspond to the supplied page or adds unsupported links/markers.
@@ -212,9 +212,9 @@ When a figure is converted, show the generated Mermaid/table/math/code/chart/map
 
 ### Implemented code paths
 
-- Graph node and workflow wiring: [`main/graphs.py`](../apps/server/ai/bd/graphs/ingestion/main/graphs.py), [`enrich_visuals/service.py`](../apps/server/ai/bd/nodes/ingestion/main/enrich_visuals/service.py).
+- Graph node and workflow wiring: [`main/graphs.py`](../apps/server/ai/bd/graphs/ingestion/book_processing/main/graphs.py), [`enrich_visuals/service.py`](../apps/server/ai/bd/nodes/ingestion/book_processing/main/enrich_visuals/service.py).
 - Typed vision response and DeepAgent: [`agents/schemas.py`](../apps/server/ai/bd/agents/schemas.py), [`visual_extractor/agent.py`](../apps/server/ai/bd/agents/ingestion/visual_extractor/agent.py), and its [system prompt](../apps/server/ai/bd/prompts/ingestion/visual_extractor/SYSTEM.md).
-- Trusted Markdown serialization: [`enrich_visuals/domain.py`](../apps/server/ai/bd/nodes/ingestion/main/enrich_visuals/domain.py).
+- Trusted Markdown serialization: [`enrich_visuals/domain.py`](../apps/server/ai/bd/nodes/ingestion/book_processing/main/enrich_visuals/domain.py).
 - Versioned figure/page artifacts, source-crop access, replay cleanup, and graph version: [`keys.py`](../apps/server/domains/bd/ingestion/storage/keys.py), [`versions.py`](../apps/server/domains/bd/ingestion/ai/versions.py), and [`ai/service.py`](../apps/server/domains/bd/ingestion/ai/service.py).
 - Enriched content flows into the processed-book candidate and BD Distill through [`processed_book/service.py`](../apps/server/domains/bd/ingestion/ai/processed_book/service.py). The Pages API returns converted figure IDs and renders the same enriched Markdown while keeping source crops in the gallery.
 - Graph progress and LLM usage are wired in [`agentic-progress.ts`](../apps/web/src/features/bd/domain/agentic-progress.ts) and [`agentic-usage.ts`](../apps/web/src/features/bd/domain/agentic-usage.ts).

@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 from types import SimpleNamespace
 
-from ai.bd.nodes.rag.neo4j.index import service
+from ai.bd.nodes.ingestion.rag_indexing.main.neo4j import service
 
 
 class BdDoclingGraphExtractionTests(unittest.IsolatedAsyncioTestCase):

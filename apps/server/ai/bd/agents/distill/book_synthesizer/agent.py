@@ -51,7 +51,7 @@ def _build_agent(model: ChatOpenAI, *, name: str, structured_output: bool, syste
     available_tools = getattr(getattr(tool_node, "bound", None), "_tools_by_name", None)
     error_message = f"DeepAgents exposed an unreviewed tool to {name}"
     if not isinstance(available_tools, dict):
-        raise RuntimeError(error_message)
+        raise TypeError(error_message)
     unreviewed_tools = set(available_tools) - (
         params.DEFAULT_TOOL_NAMES | skills.params.ALLOWED_TOOL_NAMES
     )

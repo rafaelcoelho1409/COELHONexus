@@ -71,10 +71,18 @@ def _thinking_update(thinking: dict, node: str, update: dict) -> None:
         "retrieval_sources": [],
         "status": "running",
     })
-    graph["active_node"] = node
+    subgraph_node = node in {
+        "prepare_retrieval",
+        "elasticsearch",
+        "qdrant",
+        "neo4j",
+        "fuse_evidence",
+    }
+    graph_node = "retrieve_evidence" if subgraph_node else node
+    graph["active_node"] = graph_node
     graph["status"] = "running"
-    if node not in graph["visited_nodes"]:
-        graph["visited_nodes"].append(node)
+    if graph_node not in graph["visited_nodes"]:
+        graph["visited_nodes"].append(graph_node)
     if update.get("intent") == "conversation":
         graph["route"] = "conversation"
     elif update.get("mode") in {"fast", "standard", "deep"}:
@@ -83,7 +91,12 @@ def _thinking_update(thinking: dict, node: str, update: dict) -> None:
         graph["retrieval_sources"] = list(update.get("retrieval_sources") or [])
     node_stage = {
         "plan_research": ("retrieve", "Planning book research"),
-        "run_subagent": ("retrieve", "Searching book passages and evidence graph"),
+        "retrieve_evidence": ("retrieve", "Searching book passages and evidence graph"),
+        "prepare_retrieval": ("retrieve", "Preparing book searches"),
+        "elasticsearch": ("retrieve", "Searching Elasticsearch"),
+        "qdrant": ("retrieve", "Searching Qdrant"),
+        "neo4j": ("retrieve", "Searching Neo4j"),
+        "fuse_evidence": ("retrieve", "Combining book evidence"),
         "search_external": ("retrieve", "Searching the configured external source"),
         "rewrite_query": ("retrieve", "Refining the book search"),
         "direct_answer": ("generate", "Replying to the conversation"),
@@ -181,7 +194,7 @@ async def ask_stream(payload: schemas.AskRequest) -> StreamingResponse:
     grader = ai.bd.agents.ask.grader.agent.grader(model)
     answerer = ai.bd.agents.ask.answer.agent.answerer(model)
     critic = ai.bd.agents.ask.critic.agent.critic(model)
-    graph = ai.bd.graphs.ask.adaptive.graphs.adaptive_ask_graph()
+    graph = ai.bd.graphs.ask.adaptive.service.adaptive_ask_graph()
     history = await domains.bd.ask.source.conversation.service.history(payload.thread_id)
     turn_token = uuid.uuid4().hex
     active_turn_key = domains.bd.ask.source.conversation.keys.active_turn_key(payload.book_id, turn_token)
@@ -229,6 +242,7 @@ async def ask_stream(payload: schemas.AskRequest) -> StreamingResponse:
         grader = grader,
         answerer = answerer,
         critic = critic,
+        counter_run_id = payload.thread_id,
     )
     initial_state = {
         "question": payload.question,
@@ -305,7 +319,7 @@ async def ask_stream(payload: schemas.AskRequest) -> StreamingResponse:
                     stream_kind, values = streamed
                     if stream_kind == "custom":
                         if isinstance(values, dict):
-                            custom_node = str(values.get("node") or "run_subagent")
+                            custom_node = str(values.get("node") or "retrieve_evidence")
                             _thinking_update(thinking, custom_node, values)
                             thinking["duration_ms"] = int((time.monotonic() - started) * 1000)
                             async with snapshot_lock:

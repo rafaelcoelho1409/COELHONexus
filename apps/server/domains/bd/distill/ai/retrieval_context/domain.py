@@ -14,6 +14,8 @@ _RESULT_FIELDS = (
     "neo4j_result",
     "web_search_result",
 )
+_FUSED_FIELDS = ("evidence", "source_status", "source_queries")
+PERSISTED_FIELDS = _RESULT_FIELDS + _FUSED_FIELDS
 
 
 def source_context(
@@ -57,5 +59,5 @@ def persisted_retrieval_record(
 ) -> dict[str, Any]:
     """Build the run-scoped record containing retrieval results and fusion."""
     record = {key: state.get(key) for key in _RESULT_FIELDS}
-    record.update(fused)
+    record.update({key: fused[key] for key in _FUSED_FIELDS if key in fused})
     return record

@@ -17,7 +17,7 @@ from langchain_openai import ChatOpenAI
 
 from ai.bd.agents import schemas
 from ai.bd.agents.ingestion import finding_verifier
-from ai.bd.nodes.ingestion.main.audit_batch import domain, service
+from ai.bd.nodes.ingestion.book_processing.main.audit_batch import domain, service
 
 
 def check(label: str, got, want) -> None:

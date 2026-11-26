@@ -1,6 +1,6 @@
-"""LangGraph nodes for the Book Distiller Distill feature and report publication."""
+"""LangGraph nodes for BD Distill workflows."""
 from __future__ import annotations
 
-from . import main, subgraphs
+from . import book_distillation
 
-__all__ = ["main", "subgraphs"]
+__all__ = ["book_distillation"]

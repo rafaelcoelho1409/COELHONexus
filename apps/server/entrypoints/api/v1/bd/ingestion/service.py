@@ -65,7 +65,7 @@ async def list_active() -> dict:
 async def agentic_graph(response: Response) -> dict:
     """Return the compiled Book Distiller Ingestion graph without running its nodes."""
     response.headers["Cache-Control"] = "no-store"
-    graph = ai.bd.graphs.ingestion.service.ingestion_graph(checkpointer = None)
+    graph = ai.bd.graphs.ingestion.book_processing.service.ingestion_graph(checkpointer = None)
     return {"graph_mermaid": ai.bd.graphs.service.mermaid_source(graph)}
 
 

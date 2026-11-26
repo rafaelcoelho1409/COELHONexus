@@ -78,6 +78,6 @@ def page_auditor(model = None):
     tool_node = agent.nodes.get("tools")
     available_tools = getattr(getattr(tool_node, "bound", None), "_tools_by_name", None)
     if not isinstance(available_tools, dict):
-        raise RuntimeError("DeepAgents exposed an unreviewed tool to the page auditor")
+        raise TypeError("DeepAgents exposed an unreviewed tool to the page auditor")
     domain.validate_tool_names(set(available_tools))
     return agent

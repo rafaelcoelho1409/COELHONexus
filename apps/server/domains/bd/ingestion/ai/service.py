@@ -1140,7 +1140,7 @@ async def queue_ingestion_ai_node_replay(
         if extraction_id != manifest["extraction_run_id"] or source_manifest_sha256 != manifest["source_manifest_sha256"]:
             raise ValueError("the agentic run no longer matches the current extraction")
 
-        graph = ai.bd.graphs.ingestion.service.ingestion_graph(
+        graph = ai.bd.graphs.ingestion.book_processing.service.ingestion_graph(
             checkpointer = infra.postgres.service.get_checkpointer(),
         )
         graph_config = {"configurable": {
@@ -1430,7 +1430,7 @@ async def run_page_audit(
     if auditor is None:
         auditor = ai.bd.agents.ingestion.page_auditor.agent.page_auditor()
 
-    audited = await ai.bd.nodes.ingestion.main.audit_batch.service.audit_page(
+    audited = await ai.bd.nodes.ingestion.book_processing.main.audit_batch.service.audit_page(
         page_ref,
         markdown,
         auditor,
@@ -1804,7 +1804,7 @@ async def run_ingestion_ai(
                     f"[bd-page-evidence] source-page renderer unavailable for {book_id}/{agentic_run_id}: "
                     f"{type(error).__name__}"
                 )
-        graph_state: ai.bd.graphs.ingestion.states.IngestionRunState = {
+        graph_state: ai.bd.graphs.ingestion.book_processing.states.IngestionRunState = {
             "book_id": book_id,
             "extraction_run_id": extraction_id,
             "agentic_run_id": agentic_run_id,
@@ -1821,8 +1821,8 @@ async def run_ingestion_ai(
             "source_metadata": source_metadata,
             "status": "running",
         }
-        graph = ai.bd.graphs.ingestion.service.ingestion_graph(checkpointer = checkpointer)
-        dependencies = ai.bd.graphs.ingestion.entities.IngestionDependencies(
+        graph = ai.bd.graphs.ingestion.book_processing.service.ingestion_graph(checkpointer = checkpointer)
+        dependencies = ai.bd.graphs.ingestion.book_processing.entities.IngestionDependencies(
             read_page = storage.read_text,
             write_artifact = write_artifact,
             artifact_exists = storage.exists,

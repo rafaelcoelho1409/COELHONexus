@@ -71,7 +71,7 @@ def text_patch_verifier(model = None):
     available_tools = getattr(getattr(tool_node, "bound", None), "_tools_by_name", None)
     error_message = "DeepAgents exposed an unreviewed tool to the text-patch verifier"
     if not isinstance(available_tools, dict):
-        raise RuntimeError(error_message)
+        raise TypeError(error_message)
     if set(available_tools) - params.EXCLUDED_TOOLS - params.INERT_TOOLS:
         raise RuntimeError(error_message)
     return agent

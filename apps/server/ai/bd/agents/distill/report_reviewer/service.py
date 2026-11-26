@@ -57,7 +57,7 @@ async def _review_packet(
         start = 1,
     ):
         messages: list[Any] = [{"role": "user", "content": user_content}]
-        async def invoke():
+        async def invoke(agent = agent, messages = messages):
             with domains.settings.llm_counter.service.llm_context(
                 ns = "bd",
                 run_id = run_id,
@@ -74,7 +74,7 @@ async def _review_packet(
 
         try:
             result = await invoke()
-        except Exception as error:  # noqa: BLE001 — try the text-mode agent when structured output is unsupported.
+        except Exception as error:
             logger.warning(
                 "[bd-distill] report reviewer agent failed context=%s mode=%s error_type=%s",
                 context_kind,

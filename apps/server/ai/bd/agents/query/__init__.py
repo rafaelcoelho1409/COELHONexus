@@ -1,3 +1,5 @@
-from . import agent, service
+"""BD Query agent capabilities."""
 
-__all__ = ["agent", "service"]
+from . import drafting
+
+__all__ = ["drafting"]

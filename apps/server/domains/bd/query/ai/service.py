@@ -21,7 +21,7 @@ async def generate_query_stream(
 ) -> AsyncIterator[dict[str, str]]:
     try:
         schema = await source.service.query_schema(backend)
-        response = await ai.bd.agents.query.service.generate_query(
+        response = await ai.bd.agents.query.drafting.service.generate_query(
             backend = backend,
             user_prompt = user_prompt,
             previous = previous,
@@ -34,7 +34,7 @@ async def generate_query_stream(
         valid, error = await source.service.validate_query(backend, candidate, schema = schema)
         if not valid:
             yield {"data": json.dumps({"event": "repair"})}
-            response = await ai.bd.agents.query.service.generate_query(
+            response = await ai.bd.agents.query.drafting.service.generate_query(
                 backend = backend,
                 user_prompt = user_prompt,
                 previous = candidate or previous,

@@ -1,6 +1,6 @@
-"""Nodes owned by the Book Distiller ingestion graph."""
+"""Node packages for BD Ingestion workflows."""
 from __future__ import annotations
 
-from . import main, subgraphs
+from . import book_processing, rag_indexing
 
-__all__ = ["main", "subgraphs"]
+__all__ = ["book_processing", "rag_indexing"]

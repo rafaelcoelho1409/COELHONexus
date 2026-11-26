@@ -6,7 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from ai.bd.agents.rag.neo4j.index.graph_extractor import errors, schemas, service
+from ai.bd.agents.ingestion.graph_extractor import errors, schemas, service
 
 
 class DoclingGraphServiceTests(unittest.TestCase):

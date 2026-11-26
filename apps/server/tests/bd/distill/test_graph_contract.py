@@ -7,7 +7,7 @@ import ai, domains
 
 class DistillGraphContractTests(unittest.TestCase):
     def test_graph_compiles_with_typed_context_and_declared_node_order(self) -> None:
-        graph = ai.bd.graphs.distill.service.distill_graph()
+        graph = ai.bd.graphs.distill.book_distillation.service.distill_graph()
 
         self.assertEqual(
             tuple(node for node in domains.bd.distill.ai.params.LANGGRAPH_NODES if node in graph.get_graph().nodes),

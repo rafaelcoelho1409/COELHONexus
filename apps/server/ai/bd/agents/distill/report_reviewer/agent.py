@@ -60,7 +60,7 @@ def _build_agent(model: ChatOpenAI, *, name: str, structured_output: bool):
     tool_node = agent.nodes.get("tools")
     available_tools = getattr(getattr(tool_node, "bound", None), "_tools_by_name", None)
     if not isinstance(available_tools, dict):
-        raise RuntimeError(f"DeepAgents could not verify tools for {name}")
+        raise TypeError(f"DeepAgents could not verify tools for {name}")
     unreviewed_tools = set(available_tools) - (
         params.DEFAULT_TOOL_NAMES | skills.params.ALLOWED_TOOL_NAMES
     )

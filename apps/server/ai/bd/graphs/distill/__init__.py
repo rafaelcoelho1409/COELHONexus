@@ -1,6 +1,6 @@
-"""LangGraph orchestration for source-grounded Book Distiller reports."""
+"""LangGraph workflows for BD Distill."""
 from __future__ import annotations
 
-from . import entities, service, states, subgraphs, main
+from . import book_distillation
 
-__all__ = ["entities", "main", "service", "states", "subgraphs"]
+__all__ = ["book_distillation"]

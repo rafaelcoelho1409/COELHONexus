@@ -11,9 +11,9 @@
 
 The three internal-store tools use the same current-index pointer and exact run and processed-book revision filters already used by BD Ask. They return evidence IDs, citations, and an explicit per-source status. The graph and MCP tools never accept raw Elasticsearch DSL, Cypher, arbitrary Qdrant filters, or arbitrary URLs.
 
-The source-specialist graph fans out to four DeepAgents, each with only its source's MCP adapter tool. Their evidence is fused deterministically with reciprocal rank fusion; a specialist's prose is never treated as evidence. The Search MCP lane is optional because it uses an external provider and may incur cost.
+Distill's book-retrieval subgraph fans out to four Distill-owned DeepAgents, each with only its source's MCP adapter tool. Ask has a separate Ask-owned subgraph for Elasticsearch, Qdrant, and Neo4j; Ask's parent graph handles optional external search. Each workflow owns its agent and prompt packages, and each fuses evidence deterministically with reciprocal rank fusion. A specialist's prose is never treated as evidence. The Search MCP lane is optional because it uses an external provider and may incur cost.
 
-The BD Agentic RAG graph package groups both workflows: indexing lives under `ai/bd/graphs/rag/index`, and source-specialist retrieval lives under `ai/bd/graphs/rag/retrieval`.
+The processed-book indexing workflow launched from BD Ingestion lives under `ai/bd/graphs/ingestion/rag_indexing`. Ask's query-time retrieval lives under `ai/bd/graphs/ask/adaptive/subgraphs/book_retrieval`; Distill's retrieval lives under `ai/bd/graphs/distill/book_distillation/subgraphs/book_retrieval`.
 
 ## Deployment profiles
 

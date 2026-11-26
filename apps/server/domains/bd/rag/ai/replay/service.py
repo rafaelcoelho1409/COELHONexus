@@ -183,7 +183,7 @@ async def replay_index_node(book_id: str, agentic_run_id: str, node_id: str) -> 
             )
 
 
-        graph = ai.bd.graphs.rag.index.graphs.retrieval_index_graph(
+        graph = ai.bd.graphs.ingestion.rag_indexing.main.graphs.retrieval_index_graph(
             checkpointer = infra.postgres.service.get_checkpointer(),
         )
         config = {"configurable": {"thread_id": keys.thread_id(

@@ -86,7 +86,7 @@ def text_repair(model = None):
     available_tools = getattr(getattr(tool_node, "bound", None), "_tools_by_name", None)
     error_message = "DeepAgents exposed an unreviewed tool to the text-repair specialist"
     if not isinstance(available_tools, dict):
-        raise RuntimeError(error_message)
+        raise TypeError(error_message)
     unreviewed_tools = (
         set(available_tools)
         - params.EXCLUDED_TOOLS

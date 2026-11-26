@@ -41,56 +41,66 @@ def check_scope_domain() -> None:
     assert domain.normalize_query("  exact   phrase ", 100) == "exact phrase"
 
 
-def check_retrieval_graph_compiles() -> None:
-    graph = ai.bd.graphs.rag.retrieval.graphs.retrieval_graph()
+def check_ask_book_retrieval_subgraph_compiles() -> None:
+    graph = ai.bd.graphs.ask.adaptive.subgraphs.book_retrieval.graphs.book_retrieval_graph()
     node_names = set(graph.get_graph().nodes)
-    assert {"elasticsearch", "qdrant", "neo4j", "web_search", "fuse_evidence"} <= node_names
+    assert {"elasticsearch", "qdrant", "neo4j", "fuse_evidence"} <= node_names
 
 
 def check_specialist_agents_build() -> None:
     model = ChatOpenAI(model = "gpt-4o-mini", api_key = "offline-test")
     builders = (
-        ai.bd.agents.rag.elasticsearch.agent.elasticsearch_retriever,
-        ai.bd.agents.rag.qdrant.agent.qdrant_retriever,
-        ai.bd.agents.rag.neo4j.retrieval.agent.neo4j_retriever,
-        ai.bd.agents.rag.web_search.agent.web_search_retriever,
+        ai.bd.agents.ask.elasticsearch_retriever.agent.elasticsearch_retriever,
+        ai.bd.agents.ask.qdrant_retriever.agent.qdrant_retriever,
+        ai.bd.agents.ask.neo4j_retriever.agent.neo4j_retriever,
+        ai.bd.agents.distill.elasticsearch_retriever.agent.elasticsearch_retriever,
+        ai.bd.agents.distill.qdrant_retriever.agent.qdrant_retriever,
+        ai.bd.agents.distill.neo4j_retriever.agent.neo4j_retriever,
+        ai.bd.agents.distill.web_search_retriever.agent.web_search_retriever,
     )
     agents = [builder(model) for builder in builders]
     assert [agent.name for agent in agents] == [
-        "bd_rag_elasticsearch_retriever",
-        "bd_rag_qdrant_retriever",
-        "bd_rag_neo4j_retriever",
-        "bd_rag_web_search_retriever",
+        "bd_ask_elasticsearch_retriever",
+        "bd_ask_qdrant_retriever",
+        "bd_ask_neo4j_retriever",
+        "bd_distill_elasticsearch_retriever",
+        "bd_distill_qdrant_retriever",
+        "bd_distill_neo4j_retriever",
+        "bd_distill_web_search_retriever",
     ]
 
 
 def check_graph_fusion_preserves_sources() -> None:
-    fused = ai.bd.nodes.rag.fuse.node.fuse_evidence({
-        "elasticsearch_result": {
+    fused = ai.bd.nodes.ask.adaptive.subgraphs.book_retrieval.fuse.service.fuse_evidence({
+        "queries": ["exact term"],
+        "mode": "deep",
+        "elasticsearch_results": [{
+            "query": "exact term",
             "status": "complete",
-            "queries": ["exact term"],
             "evidence": [{
                 "id": "es:1", "text": "same passage", "score": 1.0,
                 "source": "elasticsearch_bm25", "citation": {"page": 1},
             }],
-        },
-        "qdrant_result": {
+        }],
+        "qdrant_results": [{
+            "query": "exact term",
             "status": "complete",
-            "queries": ["semantic term"],
             "evidence": [{
                 "id": "qdrant:1", "text": "same passage", "score": 0.8,
                 "source": "qdrant_hybrid", "citation": {"page": 1},
             }],
-        },
-        "neo4j_result": {"status": "timeout", "queries": [], "evidence": []},
-        "web_search_result": {"status": "not_requested", "queries": [], "evidence": []},
+        }],
+        "neo4j_results": [{
+            "query": "exact term", "status": "timeout", "evidence": [],
+        }],
     })
-    assert fused["source_status"] == {
-        "elasticsearch": "complete", "qdrant": "complete", "neo4j": "timeout",
-        "web_search": "not_requested",
+    assert fused["retrieval_source_status"] == {
+        "exact term": {
+            "elasticsearch": "complete", "qdrant": "complete", "neo4j": "timeout",
+        },
     }
-    assert len(fused["evidence"]) == 1
-    assert fused["evidence"][0]["matched_sources"] == ["elasticsearch_bm25", "qdrant_hybrid"]
+    assert len(fused["documents"]) == 1
+    assert fused["documents"][0]["matched_sources"] == ["elasticsearch_bm25", "qdrant_hybrid"]
 
 
 async def check_mcp_tool_contract() -> None:
@@ -288,7 +298,7 @@ async def check_local_demo_is_loopback_only() -> None:
 
 def main() -> None:
     check_scope_domain()
-    check_retrieval_graph_compiles()
+    check_ask_book_retrieval_subgraph_compiles()
     check_specialist_agents_build()
     check_graph_fusion_preserves_sources()
     asyncio.run(check_mcp_tool_contract())

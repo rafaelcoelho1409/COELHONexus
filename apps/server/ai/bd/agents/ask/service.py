@@ -6,12 +6,11 @@ from ... import agents, skills
 import asyncio
 import json
 import logging
-from typing import Any, TypeVar
+from typing import Any
 
 from pydantic import BaseModel, ValidationError
 
 
-Schema = TypeVar("Schema", bound = BaseModel)
 logger = logging.getLogger(__name__)
 
 
@@ -64,7 +63,7 @@ def _compact_payload(payload: dict[str, Any]) -> dict[str, Any]:
     return compacted
 
 
-def _parse_result(result: Any, schema: type[Schema]) -> Schema | None:
+def _parse_result[Schema: BaseModel](result: Any, schema: type[Schema]) -> Schema | None:
     if not isinstance(result, dict):
         return None
     structured = result.get("structured_response")
@@ -149,7 +148,7 @@ def _parse_result(result: Any, schema: type[Schema]) -> Schema | None:
     return None
 
 
-async def invoke(
+async def invoke[Schema: BaseModel](
     agent: Any,
     schema: type[Schema],
     payload: dict[str, Any],

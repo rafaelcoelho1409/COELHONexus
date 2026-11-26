@@ -1,5 +1,5 @@
-"""LangGraph workflow for Book Distiller ingestion processing."""
+"""LangGraph workflows launched from BD Ingestion."""
 
-from . import entities, states, subgraphs, main, service
+from . import book_processing, rag_indexing
 
-__all__ = ["entities", "main", "service", "states", "subgraphs"]
+__all__ = ["book_processing", "rag_indexing"]

@@ -334,9 +334,11 @@ class VisualMapFeature(BaseModel):
             raise ValueError("a point feature requires exactly one coordinate")
         if self.geometry_type == "LineString" and count < 2:
             raise ValueError("a line feature requires at least two coordinates")
-        if self.geometry_type == "Polygon":
-            if count < 4 or self.coordinates[0] != self.coordinates[-1]:
-                raise ValueError("a polygon ring requires four coordinates and must be closed")
+        if (
+            self.geometry_type == "Polygon"
+            and (count < 4 or self.coordinates[0] != self.coordinates[-1])
+        ):
+            raise ValueError("a polygon ring requires four coordinates and must be closed")
         return self
 
 
@@ -585,31 +587,31 @@ class BookMetadataProposal(BaseModel):
 
 __all__ = [
     "ALLOWED_ISSUES_BY_ROLE",
+    "MECHANICAL_ISSUES",
     "AuditIssueCode",
-    "EvidenceRef",
-    "EvidenceSource",
     "BookMetadataProposal",
     "ContentPageAssessment",
     "ContentPageRole",
+    "EvidenceRef",
+    "EvidenceSource",
     "FindingCheck",
     "FindingCheckBatch",
     "FindingVerdict",
     "IssueCode",
     "IssueSeverity",
-    "MECHANICAL_ISSUES",
     "PageAssessment",
     "PageAuditFinding",
     "PageAuditResponse",
     "PageIssue",
     "PageKind",
+    "PatchDraft",
+    "PatchDraftBatch",
+    "PatchProposal",
+    "PatchProposalBatch",
+    "PatchRisk",
     "PatchVerification",
     "PatchVerificationBatch",
     "PatchVerificationVerdict",
-    "PatchProposalBatch",
-    "PatchDraftBatch",
-    "PatchDraft",
-    "PatchProposal",
-    "PatchRisk",
     "SpecialistRole",
     "WorkIssueRef",
     "WorkItem",

@@ -37,7 +37,7 @@ const VIEWS = [
     description: "Answer conversational questions without searching the book or making book claims.",
   },
   {
-    id: "run_subagent",
+    id: "retrieve_evidence",
     label: "Retrieve book evidence",
     description: "Search the full-text index, vector index, and knowledge graph concurrently.",
   },
@@ -109,7 +109,7 @@ const NODE_DETAILS: Record<AskNodeId, AskNodeDetails> = {
     llm: "One configured chat-model call with a bounded retry and timeout.",
     resources: NO_RESOURCES,
   },
-  run_subagent: {
+  retrieve_evidence: {
     reads: ["Book retrieval index manifest", "Planned search queries"],
     writes: ["Ranked evidence", "Evidence source labels"],
     llm: "The baseline runs bounded searches directly. When specialist retrieval is enabled, one constrained DeepAgent works per indexed service.",
@@ -175,16 +175,16 @@ const CONNECTIONS: readonly AgenticFlowConnection[] = [
   },
   {
     source: "plan_research",
-    target: "run_subagent",
+    target: "retrieve_evidence",
     sourceHandle: "source-bottom-right",
   },
   {
-    source: "run_subagent",
+    source: "retrieve_evidence",
     target: "search_external",
     sourceHandle: "source-bottom-left",
     targetHandle: "target-top-right",
   },
-  { source: "run_subagent", target: "grade_documents" },
+  { source: "retrieve_evidence", target: "grade_documents" },
   {
     source: "search_external",
     target: "grade_documents",
@@ -205,7 +205,7 @@ const CONNECTIONS: readonly AgenticFlowConnection[] = [
   },
   {
     source: "rewrite_query",
-    target: "run_subagent",
+    target: "retrieve_evidence",
     sourceHandle: "source-left",
     targetHandle: "target-bottom-left",
     feedback: true,
@@ -223,7 +223,7 @@ const CONNECTIONS: readonly AgenticFlowConnection[] = [
 const POSITIONS: Readonly<Record<string, AgenticFlowPosition>> = {
   plan_research: { x: 284, y: 16 },
   direct_answer: { x: 16, y: 182 },
-  run_subagent: { x: 284, y: 182 },
+  retrieve_evidence: { x: 284, y: 182 },
   search_external: { x: 16, y: 400 },
   grade_documents: { x: 284, y: 566 },
   rewrite_query: { x: 16, y: 566 },
@@ -324,7 +324,7 @@ function makeViews(turn: AskTurn | null): AskView[] {
     if (id === "plan_research") return stepStatus(graph, [id], true);
     if (id === "direct_answer")
       return isConversation ? stepStatus(graph, [id], true) : routeKnown ? "skipped" : "queued";
-    if (id === "run_subagent") return stepStatus(graph, [id], bookRoute);
+    if (id === "retrieve_evidence") return stepStatus(graph, [id], bookRoute);
     if (id === "search_external") return externalStatus;
     if (id === "grade_documents") return stepStatus(graph, [id], bookRoute);
     if (id === "rewrite_query") return rewriteStatus;
@@ -344,7 +344,7 @@ function makeViews(turn: AskTurn | null): AskView[] {
     const status = statusFor(view.id);
     let detail: string | null = null;
     if (view.id === "plan_research") detail = turn?.deep?.planText || null;
-    if (view.id === "run_subagent") {
+    if (view.id === "retrieve_evidence") {
       detail =
         status === "active"
           ? "Searching ElasticSearch, Qdrant, and Neo4j in parallel."
@@ -459,7 +459,7 @@ function AskNodeSheet({
         </section>
         <section>
           <h3 className="text-sm font-medium">
-            {step.id === "run_subagent" ? "Optional specialist resources" : "Agent resources"}
+            {step.id === "retrieve_evidence" ? "Optional specialist resources" : "Agent resources"}
           </h3>
           <AgenticNodeDetailsList resources={details.resources} />
           <div className="mt-3">
@@ -467,7 +467,7 @@ function AskNodeSheet({
             <p className="mt-1 text-xs leading-relaxed">{details.llm}</p>
           </div>
         </section>
-        {step.id === "run_subagent" ? (
+        {step.id === "retrieve_evidence" ? (
           <section>
             <h3 className="text-sm font-medium">Book retrieval specialists</h3>
             <p className="mt-1 text-xs leading-relaxed text-muted-foreground">

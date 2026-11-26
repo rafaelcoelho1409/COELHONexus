@@ -558,7 +558,7 @@ async def queue_node_replay(book_id: str, run_id: str, node_id: str) -> dict[str
             replay_execution_nodes.update(params.SUBGRAPH_NODE_MEMBERS[subgraph])
 
         checkpointer = infra.postgres.service.get_checkpointer()
-        graph = ai.bd.graphs.distill.service.distill_graph(checkpointer = checkpointer)
+        graph = ai.bd.graphs.distill.book_distillation.service.distill_graph(checkpointer = checkpointer)
         graph_config = {"configurable": {
             "thread_id": keys.thread_id(book_id, manifest["extraction_run_id"], run_id),
         }}
@@ -1296,7 +1296,7 @@ async def run_distill(
     try:
         learning_extractor = ai.bd.agents.distill.learning_extractor.agent.learning_extractor()
         research_search_session = ai.bd.tools.web_search.entities.SearchSession(run_id = run_id)
-        dependencies = ai.bd.graphs.distill.entities.DistillDependencies(
+        dependencies = ai.bd.graphs.distill.book_distillation.entities.DistillDependencies(
             book_id = book_id,
             run_id = run_id,
             ingestion_ai_run_id = manifest["ingestion_ai_run_id"],
@@ -1310,7 +1310,7 @@ async def run_distill(
             research_analyst = ai.bd.agents.distill.research_analyst.agent.research_analyst(),
             research_search_session = research_search_session,
             report_reviewer = ai.bd.agents.distill.report_reviewer.agent.report_reviewer(),
-            controls = ai.bd.graphs.distill.entities.DistillRunControls(
+            controls = ai.bd.graphs.distill.book_distillation.entities.DistillRunControls(
                 chapter_synthesis_semaphore = asyncio.Semaphore(
                     params.CHAPTER_SYNTHESIS_CONCURRENCY,
                 ),
@@ -1318,7 +1318,7 @@ async def run_distill(
             progress_callback = report_progress,
             research_enabled = bool(manifest.get("research_enabled", False)),
         )
-        graph = ai.bd.graphs.distill.service.distill_graph(checkpointer = checkpointer)
+        graph = ai.bd.graphs.distill.book_distillation.service.distill_graph(checkpointer = checkpointer)
         initial_state = {
             "book_id": book_id,
             "run_id": run_id,
@@ -1575,7 +1575,8 @@ async def run_distill(
                     resume_from_node,
                 )
         if completed_checkpoint_state is not None:
-            result = await ai.bd.nodes.distill.main.publish_report.node.publish_report_with_dependencies(
+            publish_report_node = ai.bd.nodes.distill.book_distillation.main.publish_report.node
+            result = await publish_report_node.publish_report_with_dependencies(
                 dependencies,
                 completed_checkpoint_state,
             )

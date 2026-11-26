@@ -83,7 +83,7 @@ def research_analyst(model = None):
     available_tools = getattr(getattr(tool_node, "bound", None), "_tools_by_name", None)
     error_message = "DeepAgents exposed an unreviewed tool to the research analyst"
     if not isinstance(available_tools, dict):
-        raise RuntimeError(error_message)
+        raise TypeError(error_message)
     unreviewed_tools = set(available_tools) - (params.DEFAULT_TOOL_NAMES | allowed_tools)
     if unreviewed_tools:
         raise RuntimeError(f"{error_message}: {', '.join(sorted(unreviewed_tools))}")

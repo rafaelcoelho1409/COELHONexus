@@ -60,7 +60,7 @@ Pages 3, 9, 11, 13, 17, 21, 97, and 270 were inspected against their source and 
 
 ## `plan_repairs` makes no LLM calls by design
 
-This is expected. [`plan_repairs/node.py`](../apps/server/ai/bd/nodes/ingestion/subgraphs/content_repair/plan_repairs/node.py) delegates to the domain planner, which deterministically groups audit issue codes into text- and structure-specialist work items. The node does not construct or invoke an agent. The architecture explicitly chose deterministic routing instead of a planner agent. Its graph status should be `done`; a missing LLM counter entry is normal and requires no code change.
+This is expected. [`plan_repairs/node.py`](../apps/server/ai/bd/nodes/ingestion/book_processing/subgraphs/content_repair/plan_repairs/node.py) delegates to the domain planner, which deterministically groups audit issue codes into text- and structure-specialist work items. The node does not construct or invoke an agent. The architecture explicitly chose deterministic routing instead of a planner agent. Its graph status should be `done`; a missing LLM counter entry is normal and requires no code change.
 
 ## Fixes applied after this run
 

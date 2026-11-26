@@ -14,3 +14,5 @@ class AskContext:
     grader: Any
     answerer: Any
     critic: Any
+    counter_run_id: str | None = None
+    counter_node_prefix: str = "ask_book_retrieval"

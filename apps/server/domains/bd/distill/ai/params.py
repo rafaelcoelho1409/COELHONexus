@@ -53,6 +53,12 @@ TRANSIENT_NODE_RETRY_MAX_INTERVAL_S = 30.0
 # Shared graph node ID for compilation, graph metadata, and checkpoint/replay routing.
 PARALLEL_DISPATCH_NODE = "dispatch_parallel_stages"
 RETRIEVAL_SOURCE_NODES = ("elasticsearch", "qdrant", "neo4j", "web_search")
+RETRIEVAL_RESULT_KEY_BY_SOURCE = {
+    "elasticsearch": "elasticsearch_result",
+    "qdrant": "qdrant_result",
+    "neo4j": "neo4j_result",
+    "web_search": "web_search_result",
+}
 RETRIEVAL_QUERY_MAX_CHARS = 1200
 RETRIEVAL_PROMPT_EVIDENCE_MAX_ITEMS = 8
 RETRIEVAL_PROMPT_EVIDENCE_MAX_CHARS = 1200
