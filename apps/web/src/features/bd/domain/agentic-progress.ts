@@ -453,7 +453,9 @@ function agenticNodeProgress(
           ? "pages materialized"
           : nodeId === "reconcile_contents"
             ? "page headings scanned"
-            : "pages verified",
+            : nodeId === "plan_repairs"
+              ? "pages planned"
+              : "pages verified",
       active: pageProgress.active_count,
     };
   }

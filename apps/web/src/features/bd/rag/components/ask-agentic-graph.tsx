@@ -37,9 +37,29 @@ const VIEWS = [
     description: "Answer conversational questions without searching the book or making book claims.",
   },
   {
-    id: "retrieve_evidence",
-    label: "Retrieve book evidence",
-    description: "Search the full-text index, vector index, and knowledge graph concurrently.",
+    id: "prepare_retrieval",
+    label: "Prepare book searches",
+    description: "Prepare the planned searches against the selected book's retrieval index.",
+  },
+  {
+    id: "elasticsearch",
+    label: "Search full-text index",
+    description: "Find passages that match the planned searches in the full-text index.",
+  },
+  {
+    id: "qdrant",
+    label: "Search vector index",
+    description: "Find semantically related passages in the vector index.",
+  },
+  {
+    id: "neo4j",
+    label: "Search knowledge graph",
+    description: "Find source-linked concepts and relationships in the knowledge graph.",
+  },
+  {
+    id: "fuse_evidence",
+    label: "Combine book evidence",
+    description: "Merge the retrieval results while preserving their source references.",
   },
   {
     id: "search_external",
@@ -109,19 +129,47 @@ const NODE_DETAILS: Record<AskNodeId, AskNodeDetails> = {
     llm: "One configured chat-model call with a bounded retry and timeout.",
     resources: NO_RESOURCES,
   },
-  retrieve_evidence: {
+  prepare_retrieval: {
     reads: ["Book retrieval index manifest", "Planned search queries"],
-    writes: ["Ranked evidence", "Evidence source labels"],
-    llm: "The baseline runs bounded searches directly. When specialist retrieval is enabled, one constrained DeepAgent works per indexed service.",
+    writes: ["Prepared book retrieval queries"],
+    llm: "Deterministic query preparation; no model call.",
+    resources: NO_RESOURCES,
+  },
+  elasticsearch: {
+    reads: ["Prepared book retrieval queries", "Full-text index manifest"],
+    writes: ["Ranked full-text passages", "Source status"],
+    llm: "ElasticSearch retrieval specialist searches the selected book index.",
     resources: {
-      agents: [
-        "ElasticSearch retrieval DeepAgent",
-        "Qdrant retrieval DeepAgent",
-        "Neo4j retrieval DeepAgent",
-      ],
+      agents: ["ElasticSearch retrieval DeepAgent"],
       skills: [],
-      tools: ["bd_search_elasticsearch", "bd_search_qdrant", "bd_search_neo4j"],
+      tools: ["bd_search_elasticsearch"],
     },
+  },
+  qdrant: {
+    reads: ["Prepared book retrieval queries", "Vector index manifest"],
+    writes: ["Ranked semantic passages", "Source status"],
+    llm: "Qdrant retrieval specialist searches the selected book index.",
+    resources: {
+      agents: ["Qdrant retrieval DeepAgent"],
+      skills: [],
+      tools: ["bd_search_qdrant"],
+    },
+  },
+  neo4j: {
+    reads: ["Prepared book retrieval queries", "Knowledge graph manifest"],
+    writes: ["Ranked graph evidence", "Source status"],
+    llm: "Neo4j retrieval specialist searches the selected book graph.",
+    resources: {
+      agents: ["Neo4j retrieval DeepAgent"],
+      skills: [],
+      tools: ["bd_search_neo4j"],
+    },
+  },
+  fuse_evidence: {
+    reads: ["Elasticsearch, Qdrant and Neo4j results"],
+    writes: ["Ranked evidence", "Evidence source labels"],
+    llm: "Deterministic result fusion; no model call.",
+    resources: NO_RESOURCES,
   },
   search_external: {
     reads: ["Planned outside-information query", "Ready Search MCP connection from Settings"],
@@ -175,16 +223,34 @@ const CONNECTIONS: readonly AgenticFlowConnection[] = [
   },
   {
     source: "plan_research",
-    target: "retrieve_evidence",
+    target: "prepare_retrieval",
     sourceHandle: "source-bottom-right",
   },
   {
-    source: "retrieve_evidence",
+    source: "prepare_retrieval",
+    target: "elasticsearch",
+    sourceHandle: "source-bottom-left",
+  },
+  {
+    source: "prepare_retrieval",
+    target: "qdrant",
+    sourceHandle: "source-bottom",
+  },
+  {
+    source: "prepare_retrieval",
+    target: "neo4j",
+    sourceHandle: "source-bottom-right",
+  },
+  { source: "elasticsearch", target: "fuse_evidence" },
+  { source: "qdrant", target: "fuse_evidence" },
+  { source: "neo4j", target: "fuse_evidence" },
+  {
+    source: "fuse_evidence",
     target: "search_external",
     sourceHandle: "source-bottom-left",
     targetHandle: "target-top-right",
   },
-  { source: "retrieve_evidence", target: "grade_documents" },
+  { source: "fuse_evidence", target: "grade_documents" },
   {
     source: "search_external",
     target: "grade_documents",
@@ -205,7 +271,7 @@ const CONNECTIONS: readonly AgenticFlowConnection[] = [
   },
   {
     source: "rewrite_query",
-    target: "retrieve_evidence",
+    target: "prepare_retrieval",
     sourceHandle: "source-left",
     targetHandle: "target-bottom-left",
     feedback: true,
@@ -223,15 +289,23 @@ const CONNECTIONS: readonly AgenticFlowConnection[] = [
 const POSITIONS: Readonly<Record<string, AgenticFlowPosition>> = {
   plan_research: { x: 284, y: 16 },
   direct_answer: { x: 16, y: 182 },
-  retrieve_evidence: { x: 284, y: 182 },
-  search_external: { x: 16, y: 400 },
-  grade_documents: { x: 284, y: 566 },
-  rewrite_query: { x: 16, y: 566 },
-  generate: { x: 284, y: 732 },
-  synthesize: { x: 16, y: 732 },
-  critic: { x: 284, y: 898 },
-  format_citations: { x: 284, y: 1064 },
+  prepare_retrieval: { x: 284, y: 182 },
+  elasticsearch: { x: 16, y: 348 },
+  qdrant: { x: 284, y: 348 },
+  neo4j: { x: 552, y: 348 },
+  fuse_evidence: { x: 284, y: 514 },
+  search_external: { x: 16, y: 732 },
+  grade_documents: { x: 284, y: 898 },
+  rewrite_query: { x: 16, y: 898 },
+  generate: { x: 552, y: 1064 },
+  synthesize: { x: 16, y: 1064 },
+  critic: { x: 552, y: 1230 },
+  format_citations: { x: 552, y: 1396 },
 };
+
+const RETRIEVAL_GROUPS = [
+  { id: "book_retrieval", label: "Book retrieval subgraph", x: 0, y: 158, width: 800, height: 530 },
+] as const;
 
 const VIEW_MODES: readonly { id: ViewMode; label: string }[] = [
   { id: "graph", label: "Graph" },
@@ -293,6 +367,7 @@ function hasSource(sources: ReadonlySet<string>, source: "elasticsearch" | "qdra
 
 function makeViews(turn: AskTurn | null): AskView[] {
   const graph = graphState(turn);
+  const sources = new Set(graph.retrieval_sources.map((source) => source.toLowerCase()));
   const route = graph.route || turn?.mode || "";
   const routeKnown = Boolean(route);
   const isConversation = route === "conversation";
@@ -324,7 +399,22 @@ function makeViews(turn: AskTurn | null): AskView[] {
     if (id === "plan_research") return stepStatus(graph, [id], true);
     if (id === "direct_answer")
       return isConversation ? stepStatus(graph, [id], true) : routeKnown ? "skipped" : "queued";
-    if (id === "retrieve_evidence") return stepStatus(graph, [id], bookRoute);
+    if (id === "prepare_retrieval") {
+      if (graph.active_node === "retrieve_evidence") return "active";
+      if (
+        graph.status === "failed" &&
+        graph.visited_nodes.at(-1) === "retrieve_evidence" &&
+        !graph.visited_nodes.some((node) =>
+          ["prepare_retrieval", "elasticsearch", "qdrant", "neo4j", "fuse_evidence"].includes(node),
+        )
+      ) {
+        return "failed";
+      }
+      return stepStatus(graph, [id], bookRoute);
+    }
+    if (id === "elasticsearch" || id === "qdrant" || id === "neo4j" || id === "fuse_evidence") {
+      return stepStatus(graph, [id], bookRoute);
+    }
     if (id === "search_external") return externalStatus;
     if (id === "grade_documents") return stepStatus(graph, [id], bookRoute);
     if (id === "rewrite_query") return rewriteStatus;
@@ -344,15 +434,38 @@ function makeViews(turn: AskTurn | null): AskView[] {
     const status = statusFor(view.id);
     let detail: string | null = null;
     if (view.id === "plan_research") detail = turn?.deep?.planText || null;
-    if (view.id === "retrieve_evidence") {
+    if (view.id === "prepare_retrieval" && status === "active") detail = "Preparing book searches.";
+    if (view.id === "elasticsearch") {
       detail =
         status === "active"
-          ? "Searching ElasticSearch, Qdrant, and Neo4j in parallel."
+          ? "Searching the full-text index."
           : status === "done"
-            ? `${graph.retrieval_sources.length} retrieval source${graph.retrieval_sources.length === 1 ? "" : "s"} returned evidence.`
-            : status === "failed"
-              ? "Book evidence retrieval did not complete."
-              : null;
+            ? externalStatusText(status, hasSource(sources, "elasticsearch"))
+            : null;
+    }
+    if (view.id === "qdrant") {
+      detail =
+        status === "active"
+          ? "Searching the vector index."
+          : status === "done"
+            ? externalStatusText(status, hasSource(sources, "qdrant"))
+            : null;
+    }
+    if (view.id === "neo4j") {
+      detail =
+        status === "active"
+          ? "Searching the knowledge graph."
+          : status === "done"
+            ? externalStatusText(status, hasSource(sources, "neo4j"))
+            : null;
+    }
+    if (view.id === "fuse_evidence") {
+      detail =
+        status === "active"
+          ? "Combining book evidence."
+          : status === "done"
+            ? `${graph.retrieval_sources.length} source${graph.retrieval_sources.length === 1 ? "" : "s"} returned evidence.`
+            : null;
     }
     if (view.id === "search_external") {
       const external = turn?.externalSearchStatus?.toLowerCase();
@@ -395,7 +508,7 @@ function toNodeViews(steps: readonly AskView[]): AgenticNodeView[] {
     statusLabel: STATUS_LABEL[step.status],
     kpi: STATUS_LABEL[step.status],
     liveLine: step.detail,
-    resources: NO_RESOURCES,
+    resources: NODE_DETAILS[step.id].resources,
     progress: null,
   }));
 }
@@ -410,17 +523,7 @@ function externalStatusText(status: AskNodeStatus, included: boolean): string {
     : "No evidence tagged from this index was returned.";
 }
 
-function AskNodeSheet({
-  step,
-  turn,
-  sources,
-  onClose,
-}: {
-  step: AskView;
-  turn: AskTurn | null;
-  sources: ReadonlySet<string>;
-  onClose: () => void;
-}) {
+function AskNodeSheet({ step, turn, onClose }: { step: AskView; turn: AskTurn | null; onClose: () => void }) {
   const details = NODE_DETAILS[step.id];
   return (
     <SideSheet
@@ -459,7 +562,9 @@ function AskNodeSheet({
         </section>
         <section>
           <h3 className="text-sm font-medium">
-            {step.id === "retrieve_evidence" ? "Optional specialist resources" : "Agent resources"}
+            {step.id === "elasticsearch" || step.id === "qdrant" || step.id === "neo4j"
+              ? "Retrieval resources"
+              : "Agent resources"}
           </h3>
           <AgenticNodeDetailsList resources={details.resources} />
           <div className="mt-3">
@@ -467,40 +572,6 @@ function AskNodeSheet({
             <p className="mt-1 text-xs leading-relaxed">{details.llm}</p>
           </div>
         </section>
-        {step.id === "retrieve_evidence" ? (
-          <section>
-            <h3 className="text-sm font-medium">Book retrieval specialists</h3>
-            <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-              Each indexed service has a dedicated agent and one MCP tool. The deployment controls whether
-              this run uses the specialist path or the direct retrieval baseline. These labels show which
-              sources contributed evidence; they do not report backend health.
-            </p>
-            <ul className="mt-3 flex list-none flex-col gap-3 border-l border-border pl-3">
-              {(
-                [
-                  [
-                    "elasticsearch",
-                    "ElasticSearch · full-text",
-                    "ElasticSearch retrieval DeepAgent",
-                    "bd_search_elasticsearch",
-                  ],
-                  ["qdrant", "Qdrant · hybrid vector", "Qdrant retrieval DeepAgent", "bd_search_qdrant"],
-                  ["neo4j", "Neo4j · knowledge graph", "Neo4j retrieval DeepAgent", "bd_search_neo4j"],
-                ] as const
-              ).map(([source, label, specialist, tool]) => (
-                <li key={source} className="flex flex-col gap-1">
-                  <span className="text-sm font-medium">{label}</span>
-                  <span className="text-xs text-muted-foreground">
-                    {specialist} · <code className="font-mono">{tool}</code>
-                  </span>
-                  <span className="text-xs text-muted-foreground">
-                    {externalStatusText(step.status, hasSource(sources, source))}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          </section>
-        ) : null}
         {step.id === "search_external" ? (
           <section className="rounded-sm border border-border bg-muted/30 p-3">
             <h3 className="text-sm font-medium">Optional Search MCP</h3>
@@ -575,7 +646,6 @@ export function BdAskAgenticGraph({
       : `${askRouteLabel(route, turn.mode)} · ${route === "conversation" ? "direct response" : "book evidence"}`;
   const flowNodes = toNodeViews(steps);
   const activeStep = steps.find((step) => step.id === selectedNode);
-  const sourceSet = new Set(graph.retrieval_sources.map((source) => source.toLowerCase()));
   const overallStatus = turn?.error ? "failed" : graph.status;
   const overallStatusLabel =
     overallStatus === "idle"
@@ -655,6 +725,7 @@ export function BdAskAgenticGraph({
             ariaLabel="BD Ask LangGraph execution graph"
             connections={CONNECTIONS}
             positions={POSITIONS}
+            groups={RETRIEVAL_GROUPS}
             fitView
             fitViewOptions={{ padding: 0.12 }}
             className="h-[min(78vh,900px)] min-h-[500px]"
@@ -675,12 +746,7 @@ export function BdAskAgenticGraph({
         </footer>
       ) : null}
       {activeStep ? (
-        <AskNodeSheet
-          step={activeStep}
-          turn={turn}
-          sources={sourceSet}
-          onClose={() => setSelectedNode(null)}
-        />
+        <AskNodeSheet step={activeStep} turn={turn} onClose={() => setSelectedNode(null)} />
       ) : null}
     </section>
   );

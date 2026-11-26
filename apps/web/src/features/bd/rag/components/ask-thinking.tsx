@@ -47,6 +47,10 @@ function Steps({ stages }: { stages: AskTurn["stages"] }): JSX.Element {
 }
 
 function DeepPlan({ deep }: { deep: AskDeep }): JSX.Element {
+  const completed = deep.cards.filter((card) => card.status === "done").length;
+  const total = deep.cards.length;
+  const percent = total > 0 ? Math.round((completed / total) * 100) : 0;
+
   return (
     <div className="mt-3 border-t border-border pt-3">
       {deep.banner ? <p className="text-sm font-medium">{deep.banner}</p> : null}
@@ -54,30 +58,51 @@ function DeepPlan({ deep }: { deep: AskDeep }): JSX.Element {
         <p className="mt-1 text-xs whitespace-pre-wrap text-muted-foreground">{deep.planText}</p>
       ) : null}
       {deep.cards.length ? (
-        <ul className="m-0 mt-2 flex list-none flex-col gap-1.5 p-0">
-          {deep.cards.map((card) => (
-            <li key={card.question}>
-              <details className="rounded-sm border border-border">
-                <summary className="flex min-h-9 cursor-pointer items-center gap-3 px-3 py-1.5 text-sm">
-                  <StatusBadge
-                    tone={card.status === "done" ? "done" : "queued"}
-                    label={card.status === "done" ? "Done" : "Waiting"}
-                  />
-                  <span className="min-w-0 flex-1 break-words">{card.question}</span>
-                </summary>
-                {card.answer ? (
-                  <div className="border-t border-border px-3 py-2 text-sm">
-                    <Markdown text={card.answer} />
-                  </div>
-                ) : (
-                  <p className="border-t border-border px-3 py-2 text-xs text-muted-foreground">
-                    No answer yet.
-                  </p>
-                )}
-              </details>
-            </li>
-          ))}
-        </ul>
+        <>
+          <div className="mt-2">
+            <div className="flex items-center justify-between gap-2 text-xs">
+              <span className="text-muted-foreground">Research questions answered</span>
+              <span className="shrink-0 tabular-nums">
+                {completed} / {total}
+              </span>
+            </div>
+            <div
+              role="progressbar"
+              aria-label="Research questions answered"
+              aria-valuemin={0}
+              aria-valuemax={total}
+              aria-valuenow={completed}
+              aria-valuetext={`${completed} of ${total} research questions answered`}
+              className="mt-1 h-1.5 w-full overflow-hidden rounded-sm bg-muted"
+            >
+              <div className="h-full bg-primary" style={{ width: `${percent}%` }} />
+            </div>
+          </div>
+          <ul className="m-0 mt-2 flex list-none flex-col gap-1.5 p-0">
+            {deep.cards.map((card) => (
+              <li key={card.question}>
+                <details className="rounded-sm border border-border">
+                  <summary className="flex min-h-9 cursor-pointer items-center gap-3 px-3 py-1.5 text-sm">
+                    <StatusBadge
+                      tone={card.status === "done" ? "done" : "queued"}
+                      label={card.status === "done" ? "Done" : "Waiting"}
+                    />
+                    <span className="min-w-0 flex-1 break-words">{card.question}</span>
+                  </summary>
+                  {card.answer ? (
+                    <div className="border-t border-border px-3 py-2 text-sm">
+                      <Markdown text={card.answer} />
+                    </div>
+                  ) : (
+                    <p className="border-t border-border px-3 py-2 text-xs text-muted-foreground">
+                      No answer yet.
+                    </p>
+                  )}
+                </details>
+              </li>
+            ))}
+          </ul>
+        </>
       ) : null}
     </div>
   );

@@ -2,7 +2,7 @@
 from __future__ import annotations
 from . import params
 
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from typing import Any
 
 
@@ -10,8 +10,10 @@ def _value(value: Any) -> Any:
     return value.value if hasattr(value, "value") else value
 
 
-def plan_repairs(state: Mapping[str, Any]) -> dict[str, Any]:
-    """Route supported audit findings, skipping pages excluded from the processed book."""
+def plan_repairs_by_page(
+    state: Mapping[str, Any],
+) -> Iterator[tuple[int, int, list[dict[str, Any]]]]:
+    """Yield page-local specialist assignments in source order."""
     assessments = state.get("page_audits")
     expected_page_count = state.get("expected_page_count")
     if not isinstance(assessments, list) or len(assessments) != expected_page_count:
@@ -24,12 +26,12 @@ def plan_repairs(state: Mapping[str, Any]) -> dict[str, Any]:
         if isinstance(page, dict) and page.get("disposition") == "exclude"
     }
 
-    work_items = []
-    for page in assessments:
+    for completed_count, page in enumerate(assessments, start=1):
         if not isinstance(page, dict) or type(page.get("page")) is not int:
             raise ValueError("repair planning received a malformed page audit")
         page_number = page["page"]
         if page_number in excluded_pages:
+            yield completed_count, expected_page_count, []
             continue
         assessment = page.get("assessment")
         if not isinstance(assessment, dict):
@@ -47,6 +49,7 @@ def plan_repairs(state: Mapping[str, Any]) -> dict[str, Any]:
         ):
             raise ValueError(f"page {page_number} assessment has invalid or duplicate issue identities")
 
+        page_work_items = []
         for role, allowed_codes in params.ISSUES_BY_ROLE.items():
             selected = []
             for issue in issues:
@@ -84,11 +87,22 @@ def plan_repairs(state: Mapping[str, Any]) -> dict[str, Any]:
                         raise ValueError(f"issue {issue_id} contains malformed evidence")
                     evidence.append(ref)
 
-            work_items.append({
+            page_work_items.append({
                 "page": page_number,
                 "role": role,
                 "issue_refs": issue_refs,
                 "evidence": evidence,
                 "rationale": f"Repair assigned {role} issues on page {page_number}.",
             })
-    return {"work_items": work_items}
+        yield completed_count, expected_page_count, page_work_items
+
+
+def plan_repairs(state: Mapping[str, Any]) -> dict[str, Any]:
+    """Route supported audit findings, skipping pages excluded from the processed book."""
+    return {
+        "work_items": [
+            work_item
+            for _, _, page_work_items in plan_repairs_by_page(state)
+            for work_item in page_work_items
+        ],
+    }

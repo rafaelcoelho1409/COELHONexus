@@ -1672,7 +1672,7 @@ async def run_ingestion_ai(
                 active = event.get("active_count")
                 if (
                     isinstance(node, str)
-                    and node in {"materialize_processed_book", "reconcile_contents", "publish"}
+                    and node in {"materialize_processed_book", "plan_repairs", "reconcile_contents", "publish"}
                     and type(completed) is int
                     and completed >= 0
                     and type(total) is int

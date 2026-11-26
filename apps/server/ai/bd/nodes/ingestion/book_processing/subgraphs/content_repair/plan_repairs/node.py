@@ -12,8 +12,24 @@ async def plan_repairs(
 ) -> dict:
     if "plan_repairs" in graph_state.get("replay_skip_nodes", []):
         return {}
+
+    async def execute() -> dict:
+        work_items = []
+        for completed, total, page_work_items in (
+            domains.bd.ingestion.ai.repair_planning.domain.plan_repairs_by_page(graph_state)
+        ):
+            work_items.extend(page_work_items)
+            await graphs.service.report_node_page_progress(
+                runtime.context.progress_callback,
+                "plan_repairs",
+                completed,
+                total,
+                0,
+            )
+        return {"work_items": work_items}
+
     return await graphs.service.run_node(
         runtime.context.progress_callback,
         "plan_repairs",
-        lambda: domains.bd.ingestion.ai.repair_planning.domain.plan_repairs(graph_state),
+        execute,
     )
