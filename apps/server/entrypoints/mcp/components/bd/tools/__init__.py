@@ -1,6 +1,6 @@
 """FastMCP protocol elements owned by the BD domain."""
 from __future__ import annotations
-from . import search
 
+from . import ingestion, rag_indexing, search
 
-__all__ = ["search"]
+__all__ = ["ingestion", "rag_indexing", "search"]

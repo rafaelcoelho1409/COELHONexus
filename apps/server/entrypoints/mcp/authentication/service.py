@@ -1,8 +1,9 @@
 """Authentication provider construction for the external MCP server."""
 from __future__ import annotations
-from . import params
 
 from fastmcp.server.auth.providers.jwt import JWTVerifier
+
+from . import params
 
 
 def build_auth_provider(mcp_profile: str) -> JWTVerifier | None:
@@ -13,7 +14,6 @@ def build_auth_provider(mcp_profile: str) -> JWTVerifier | None:
         "BD_MCP_JWKS_URI": params.JWT_JWKS_URI,
         "BD_MCP_ISSUER": params.JWT_ISSUER,
         "BD_MCP_AUDIENCE": params.JWT_AUDIENCE,
-        "BD_MCP_REQUIRED_SCOPE": params.JWT_REQUIRED_SCOPE,
     }
     missing = [key for key, value in required.items() if not value]
     if missing:
@@ -24,6 +24,6 @@ def build_auth_provider(mcp_profile: str) -> JWTVerifier | None:
         jwks_uri = params.JWT_JWKS_URI,
         issuer = params.JWT_ISSUER,
         audience = params.JWT_AUDIENCE,
-        required_scopes = [params.JWT_REQUIRED_SCOPE],
+        required_scopes = [params.JWT_REQUIRED_SCOPE] if params.JWT_REQUIRED_SCOPE else [],
         ssrf_safe = True,
     )

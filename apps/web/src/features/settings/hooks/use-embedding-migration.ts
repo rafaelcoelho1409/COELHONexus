@@ -52,24 +52,46 @@ export function useEmbeddingMigration() {
     },
   });
 
+  const bookState = status.data?.book_migration?.state;
+  const bookTaskId =
+    bookState?.status === "running" || bookState?.status === "queued" ? bookState.task_id : undefined;
+  const bookTask = useQuery({
+    ...getYcsAdminTaskTaskIdOptions({ path: { task_id: bookTaskId ?? "" } }),
+    enabled: bookTaskId !== undefined && bookTaskId.length > 0,
+    retry: false,
+    select: parseTask,
+    refetchInterval: (current) => {
+      const latest = taskStatusSchema.safeParse(current.state.data);
+      return latest.success && isTerminalTaskState(latest.data.state) ? false : MIGRATION_POLL_MS;
+    },
+  });
+
   const start = useMutation<void, unknown>({
     mutationFn: async () => {
       await postYcsContentEmbeddingMigrationStart({ throwOnError: true });
     },
-    onSuccess: () => {
+    onSettled: () => {
       void queryClient.invalidateQueries({ queryKey: getYcsContentEmbeddingMigrationStatusQueryKey() });
     },
   });
 
   // Once the worker reports a final state, re-read the status shortly after so the banner can go away.
   useEffect(() => {
-    const finished = task.data && isTerminalTaskState(task.data.state);
+    const finished =
+      (task.data && isTerminalTaskState(task.data.state)) ||
+      (bookTask.data && isTerminalTaskState(bookTask.data.state));
     if (!finished) return;
     const timer = setTimeout(() => {
       void queryClient.invalidateQueries({ queryKey: getYcsContentEmbeddingMigrationStatusQueryKey() });
     }, MIGRATION_RECHECK_MS);
     return () => clearTimeout(timer);
-  }, [task.data, queryClient]);
+  }, [task.data, bookTask.data, queryClient]);
 
-  return { status: status.data, view, start, task: task.data ?? undefined };
+  return {
+    status: status.data,
+    view,
+    start,
+    task: task.data ?? undefined,
+    bookTask: bookTask.data ?? undefined,
+  };
 }

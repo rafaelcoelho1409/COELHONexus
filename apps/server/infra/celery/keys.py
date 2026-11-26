@@ -23,6 +23,7 @@ TASK_INCLUDE = [
     "domains.bd.ingestion.source.task",
     "domains.bd.ingestion.ai.task",
     "domains.bd.rag.ai.task",
+    "domains.bd.rag.embedding_migration.task",
     "domains.bd.distill.ai.task",
     "domains.ycs.ingestion.extract.task",
     "domains.ycs.ingestion.qdrant_task.task",
@@ -38,6 +39,7 @@ TASK_ROUTES = {
     "domains.bd.ingestion.task.*": {"queue": Q_BD},
     "domains.bd.ingestion.ai.task.*": {"queue": Q_BD},
     "domains.bd.rag.ai.task.*": {"queue": Q_BD},
+    "domains.bd.rag.embedding_migration.*": {"queue": Q_BD},
     # The independent RAG task retains its existing ID for queued deliveries and manifests.
     "domains.bd.ingestion.ai.retrieval_index.task.*": {"queue": Q_BD},
     "domains.bd.distill.task.*": {"queue": Q_BD},

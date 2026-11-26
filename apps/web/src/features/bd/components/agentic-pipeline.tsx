@@ -77,6 +77,25 @@ const INGESTION_POSITIONS: Readonly<Record<string, AgenticFlowPosition>> = {
   publish: { x: 172, y: 1178 },
 };
 
+const INGESTION_GRAPH_GROUPS = [
+  {
+    id: "content_repair_group",
+    label: "Content repair stages",
+    x: 0,
+    y: 158,
+    width: 248,
+    height: 524,
+  },
+  {
+    id: "book_finalization_group",
+    label: "Book finalization stages",
+    x: 148,
+    y: 822,
+    width: 264,
+    height: 524,
+  },
+] as const;
+
 export function AgenticProgressBar({
   status,
   progress,
@@ -406,6 +425,8 @@ export function AgenticPipelineOverview({
               views={views}
               connections={INGESTION_CONNECTIONS}
               positions={INGESTION_POSITIONS}
+              groups={INGESTION_GRAPH_GROUPS}
+              ariaLabel="BD Ingestion Agentic AI graph"
               onOpenNode={setSelectedNodeId}
               onPlayNode={replayDisabled ? undefined : onPlayNode}
               replayPending={replayPending}

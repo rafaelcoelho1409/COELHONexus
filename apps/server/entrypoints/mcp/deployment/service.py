@@ -1,9 +1,10 @@
 """Compose external and trusted internal FastMCP server profiles."""
 from __future__ import annotations
-from . import domain, params
-from .. import authentication, components
 
 from fastmcp import FastMCP
+
+from .. import authentication, components
+from . import domain, params
 
 
 def build_external_server() -> FastMCP:
@@ -13,18 +14,20 @@ def build_external_server() -> FastMCP:
         "COELHO Nexus",
         auth = authentication.service.build_auth_provider(params.MCP_PROFILE),
     )
-    components.registry.register_tools(
-        mcp,
-        include_bd = params.MCP_PROFILE in {"local_demo", "protected"},
-    )
+    include_bd = params.MCP_PROFILE in {"local_demo", "protected"}
+    components.registry.register_tools(mcp, include_bd = include_bd)
+    components.registry.register_resources(mcp, include_bd = include_bd)
+    components.registry.register_prompts(mcp, include_bd = include_bd)
     return mcp
 
 
 def build_internal_server() -> FastMCP:
     """Build the private in-process MCP server for trusted BD agent clients."""
     _validate_profile()
-    mcp = FastMCP("COELHO Nexus BD Search (internal)")
+    mcp = FastMCP("COELHO Nexus BD (internal)")
     components.registry.register_tools(mcp, trusted_in_process = True)
+    components.registry.register_resources(mcp, trusted_in_process = True)
+    components.registry.register_prompts(mcp)
     return mcp
 
 

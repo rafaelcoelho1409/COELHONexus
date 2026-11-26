@@ -5,10 +5,10 @@ import importlib
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from . import ai, source
+    from . import ai, embedding_migration, source
 
 
-__all__ = ["ai", "source"]
+__all__ = ["ai", "embedding_migration", "source"]
 
 
 def __getattr__(name: str):

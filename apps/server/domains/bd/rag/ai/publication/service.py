@@ -1,13 +1,15 @@
 """Check the processed-book revision and publish its completed index pointer."""
 from __future__ import annotations
-import infra
-from . import domain
-from .. import keys, runs
-from .... import ingestion
 
 import json
 import time
 from typing import Any
+
+import infra
+
+from .... import ingestion
+from .. import keys, runs
+from . import domain
 
 
 async def publish_index(
@@ -36,6 +38,7 @@ async def publish_index(
         state,
         current_processed_book = current,
         manifest_key = keys.manifest_key(book_id, run_id),
+        attempt = manifest["attempt"],
         published_at = time.time(),
     )
     await storage.write(

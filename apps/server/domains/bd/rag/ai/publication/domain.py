@@ -1,8 +1,9 @@
 """Validate retrieval-index state and construct the published pointer."""
 from __future__ import annotations
-from ... import source
 
 from typing import Any
+
+from ... import source
 
 
 def published_pointer(
@@ -10,8 +11,11 @@ def published_pointer(
     *,
     current_processed_book: tuple[Any, str, str],
     manifest_key: str,
+    attempt: int,
     published_at: float,
 ) -> dict[str, Any]:
+    if type(attempt) is not int or attempt < 1:
+        raise ValueError("the retrieval-index publication attempt must be a positive integer")
     if state.get("elasticsearch_document_count") != state.get("processed_page_count"):
         raise ValueError("the full-text index does not contain every processed page")
     if state.get("elasticsearch_passage_count", 0) < 1:
@@ -35,6 +39,7 @@ def published_pointer(
         "book_id": state["book_id"],
         "extraction_run_id": state["extraction_run_id"],
         "agentic_run_id": state["agentic_run_id"],
+        "attempt": attempt,
         "processed_book_revision": state["processed_book_revision"],
         "processed_book_key": processed_key,
         "processed_book_sha256": processed_sha256,

@@ -49,7 +49,7 @@ export function SettingsPage() {
           <ConnectionCard
             kind="embedding"
             title="Embedding"
-            intro="Set a separate OpenAI-compatible embedding connection for transcript search. Its URL, key, and model can differ from the chat connection."
+            intro="Set the embedding connection used by transcript search and Book Distiller indexes. Its URL, key, and model are independent of the chat connection."
           />
         ) : null}
         {selectedTab === "search" ? <SearchConnections /> : null}

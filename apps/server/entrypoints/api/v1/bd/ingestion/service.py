@@ -1,9 +1,4 @@
 """HTTP orchestration for Book Distiller ingestion endpoints."""
-import ai, domains, infra
-import domains.bd.ingestion.ai.task
-import domains.bd.ingestion.source.task
-from . import params, schemas
-
 import asyncio
 import hashlib
 import json
@@ -13,6 +8,13 @@ from typing import Literal
 from fastapi import HTTPException, Response, UploadFile
 from starlette.responses import StreamingResponse
 
+import ai
+import domains
+import domains.bd.ingestion.ai.task
+import domains.bd.ingestion.source.task
+import infra
+
+from . import params, schemas
 
 logger = logging.getLogger(__name__)
 
@@ -93,126 +95,41 @@ async def get_book(book_id: str) -> dict:
 async def start_agentic_run(book_id: str) -> dict:
     """Queue one manual candidate run against the book's current completed extraction."""
     try:
-        manifest = await domains.bd.ingestion.ai.service.create_ingestion_ai_run(book_id)
+        return await domains.bd.ingestion.ai.dispatch.service.start_run(book_id)
     except FileNotFoundError as error:
         raise HTTPException(status_code = 404, detail = str(error)) from error
     except ValueError as error:
         raise HTTPException(status_code = 409, detail = str(error)) from error
-
-    await domains.bd.ingestion.ai.progress.service.emit(
-        book_id,
-        manifest["agentic_run_id"],
-        "run_queued",
-        status = manifest["status"],
-        progress = manifest["progress"],
-    )
-    try:
-        task = domains.bd.ingestion.ai.task.run_ingestion_ai.apply_async(args = (
-            book_id,
-            manifest["extraction_run_id"],
-            manifest["agentic_run_id"],
-        ))
-    except Exception as error:
-        await domains.bd.ingestion.ai.service.mark_ingestion_ai_run_failed(
-            book_id, manifest["agentic_run_id"], error,
-        )
-        logger.exception(f"[bd-agentic] unable to queue run for {book_id}")
-        raise HTTPException(status_code = 503, detail = "Unable to queue the agentic ingestion run") from error
-    infra.opentelemetry.service.tag_celery_task(task.id)
-    return {
-        "status": "queued",
-        "book_id": book_id,
-        "extraction_run_id": manifest["extraction_run_id"],
-        "agentic_run_id": manifest["agentic_run_id"],
-    }
+    except domains.bd.ingestion.ai.dispatch.service.IngestionDispatchError as error:
+        raise HTTPException(status_code = 503, detail = str(error)) from error
 
 
 async def resume_agentic_run(book_id: str, agentic_run_id: str) -> dict:
     """Requeue a failed or cancelled candidate, preserving its source and LangGraph thread identity."""
     try:
-        manifest = await domains.bd.ingestion.ai.service.queue_ingestion_ai_resume(
+        return await domains.bd.ingestion.ai.dispatch.service.resume_run(
             book_id, agentic_run_id,
         )
     except FileNotFoundError as error:
         raise HTTPException(status_code = 404, detail = str(error)) from error
     except ValueError as error:
         raise HTTPException(status_code = 409, detail = str(error)) from error
-
-    await domains.bd.ingestion.ai.progress.service.emit(
-        book_id,
-        agentic_run_id,
-        "run_queued",
-        status = manifest["status"],
-        progress = manifest["progress"],
-    )
-    try:
-        task = domains.bd.ingestion.ai.task.run_ingestion_ai.apply_async(args = (
-            book_id,
-            manifest["extraction_run_id"],
-            manifest["agentic_run_id"],
-        ))
-    except Exception as error:
-        await domains.bd.ingestion.ai.service.mark_ingestion_ai_run_failed(
-            book_id, agentic_run_id, error,
-        )
-        failed = await domains.bd.ingestion.ai.service.read_ingestion_ai_run(book_id, agentic_run_id)
-        if failed is not None:
-            await domains.bd.ingestion.ai.progress.service.emit(
-                book_id,
-                agentic_run_id,
-                "run_failed",
-                status = failed["status"],
-                error = failed["error"],
-                progress = failed["progress"],
-            )
-        logger.exception(f"[bd-agentic] unable to resume run {agentic_run_id}")
-        raise HTTPException(status_code = 503, detail = "Unable to resume the agentic ingestion run") from error
-    infra.opentelemetry.service.tag_celery_task(task.id)
-    return {
-        "status": "queued",
-        "book_id": book_id,
-        "extraction_run_id": manifest["extraction_run_id"],
-        "agentic_run_id": agentic_run_id,
-    }
+    except domains.bd.ingestion.ai.dispatch.service.IngestionDispatchError as error:
+        raise HTTPException(status_code = 503, detail = str(error)) from error
 
 
 async def replay_agentic_run_from_node(book_id: str, agentic_run_id: str, node_id: str) -> dict:
     """Replay one node and its descendants from the persisted pre-node LangGraph checkpoint."""
     try:
-        manifest = await domains.bd.ingestion.ai.service.queue_ingestion_ai_node_replay(
+        return await domains.bd.ingestion.ai.dispatch.service.replay_from_node(
             book_id, agentic_run_id, node_id,
         )
     except FileNotFoundError as error:
         raise HTTPException(status_code = 404, detail = str(error)) from error
     except ValueError as error:
         raise HTTPException(status_code = 409, detail = str(error)) from error
-
-    await domains.bd.ingestion.ai.progress.service.emit(
-        book_id,
-        agentic_run_id,
-        "run_queued",
-        status = manifest["status"],
-        progress = manifest["progress"],
-    )
-    try:
-        task = domains.bd.ingestion.ai.task.run_ingestion_ai.apply_async(args = (
-            book_id,
-            manifest["extraction_run_id"],
-            agentic_run_id,
-        ))
-    except Exception as error:
-        await domains.bd.ingestion.ai.service.mark_ingestion_ai_run_failed(
-            book_id, agentic_run_id, error,
-        )
-        logger.exception("[bd-agentic] unable to replay node %s for run %s", node_id, agentic_run_id)
-        raise HTTPException(status_code = 503, detail = "Unable to queue the Agentic AI node replay") from error
-    infra.opentelemetry.service.tag_celery_task(task.id)
-    return {
-        "status": "queued",
-        "book_id": book_id,
-        "extraction_run_id": manifest["extraction_run_id"],
-        "agentic_run_id": agentic_run_id,
-    }
+    except domains.bd.ingestion.ai.dispatch.service.IngestionDispatchError as error:
+        raise HTTPException(status_code = 503, detail = str(error)) from error
 
 
 async def cancel_agentic_run(book_id: str, agentic_run_id: str) -> dict:

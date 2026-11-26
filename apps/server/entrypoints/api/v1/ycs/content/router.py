@@ -3,6 +3,7 @@ yt-dlp errors translate to 502 (subprocess failure) / 504 (timeout)."""
 from __future__ import annotations
 import domains, infra
 import domains.ycs.ingestion.extract.task
+import domains.bd.rag.embedding_migration.service
 from . import service
 
 import asyncio
@@ -553,16 +554,20 @@ async def embedding_migration_status(request: Request) -> dict:
     qdrant = service._build_qdrant()
     try:
         mismatch = await domains.ycs.ingestion.embedding_migration.service.check_migration_needed(qdrant, domains.settings.embeddings.service.get_configured_model())
-        active_collection = await domains.ycs.ingestion.embedding_migration.service.get_active_collection_name(qdrant)
+        video_active_collection = await domains.ycs.ingestion.embedding_migration.service.get_active_collection_name(qdrant)
     finally:
         await qdrant.close()
     redis = getattr(request.app.state, "redis_aio", None)
     state = await domains.ycs.ingestion.embedding_migration.service.get_migration_state(redis) if redis is not None else None
+    book_migration = await domains.bd.rag.embedding_migration.service.inspect_status(redis)
     return {
         "needed":            mismatch is not None,
         "mismatch":          mismatch,
         "state":             state,
-        "active_collection": active_collection,
+        "active_collection": book_migration["active_collection"],
+        "video_active_collection": video_active_collection,
+        "embedding_connected": book_migration["connected"],
+        "book_migration":    book_migration,
     }
 
 
@@ -575,24 +580,36 @@ async def embedding_migration_start(request: Request) -> dict:
     redis = getattr(request.app.state, "redis_aio", None)
     if redis is None:
         raise HTTPException(status_code = 503, detail = "Redis unavailable")
+    book_migration = await domains.bd.rag.embedding_migration.service.inspect_status(redis)
+    book_state = None
+    if book_migration["needed"]:
+        try:
+            book_state = await domains.bd.rag.embedding_migration.service.start_migration(redis)
+        except ValueError as error:
+            raise HTTPException(status_code = 409, detail = str(error)) from error
+
     qdrant = service._build_qdrant()
+    state = None
     try:
         to_model = domains.settings.embeddings.service.get_configured_model()
         mismatch = await domains.ycs.ingestion.embedding_migration.service.check_migration_needed(qdrant, to_model)
-        if mismatch is None:
-            raise HTTPException(
-                status_code = 404,
-                detail = "No embedding-model mismatch detected — nothing to migrate.",
+        if mismatch is not None:
+            dimensions, _ = await domains.ycs.ingestion.embeddings.service.get_embedding_info()
+            state = await domains.ycs.ingestion.embedding_migration.service.dispatch_migration(
+                redis, qdrant,
+                from_model = mismatch["from_model"], to_model = to_model, dimensions = dimensions,
             )
-        dimensions, _ = await domains.ycs.ingestion.embeddings.service.get_embedding_info()
-        state = await domains.ycs.ingestion.embedding_migration.service.dispatch_migration(
-            redis, qdrant,
-            from_model = mismatch["from_model"], to_model = to_model, dimensions = dimensions,
-        )
     finally:
         await qdrant.close()
+    if state is None and book_state is None:
+        raise HTTPException(
+            status_code = 404,
+            detail = "No embedding migration is needed.",
+        )
+    task_id = (state or {}).get("task_id") or (book_state or {}).get("task_id", "")
     return {
         "status":   "queued",
         "state":    state,
-        "endpoint": f"/api/v1/ycs/admin/task/{state.get('task_id', '')}",
+        "book_state": book_state,
+        "endpoint": f"/api/v1/ycs/admin/task/{task_id}",
     }

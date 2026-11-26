@@ -26,6 +26,38 @@ async def pin_sources(
     run_id = state.get("agentic_run_id")
     if not isinstance(book_id, str) or not isinstance(run_id, str):
         raise TypeError("source pinning requires a book and Agentic Ingestion run")
+    rows, processed_key, processed_sha256, revision = await read_current_rows(
+        book_id,
+        run_id,
+        storage = storage,
+        progress_callback = progress_callback,
+        cancel_check = cancel_check,
+    )
+    artifact_key = source.storage.keys.sources_key(book_id, run_id)
+    payload = "\n".join(
+        json.dumps(row, ensure_ascii = False, separators = (",", ":"), sort_keys = True)
+        for row in rows
+    )
+    await storage.write(artifact_key, payload, content_type = "application/x-ndjson")
+    return {
+        "processed_book_key": processed_key,
+        "processed_book_sha256": processed_sha256,
+        "processed_book_revision": revision,
+        "processed_page_count": len(rows),
+        "pin_sources_pages_completed": len(rows),
+        "source_artifact_key": artifact_key,
+    }
+
+
+async def read_current_rows(
+    book_id: str,
+    run_id: str,
+    storage: infra.minio.service.MinIOStorage,
+    *,
+    progress_callback: Callable[[int, int], Awaitable[None]] | None = None,
+    cancel_check: Callable[[], Awaitable[bool]] | None = None,
+) -> tuple[list[dict[str, Any]], str, str, int]:
+    """Read and integrity-check the exact current processed-book revision without writing a shared artifact."""
     run = await ingestion.ai.service.read_ingestion_ai_run(book_id, run_id, storage = storage)
     if run is None or run.get("status") != "done":
         raise ValueError("retrieval indexing requires a completed Ingestion run")
@@ -69,17 +101,4 @@ async def pin_sources(
     if not rows:
         raise ValueError("the processed book contains no pages to index")
 
-    artifact_key = source.storage.keys.sources_key(book_id, run_id)
-    payload = "\n".join(
-        json.dumps(row, ensure_ascii = False, separators = (",", ":"), sort_keys = True)
-        for row in rows
-    )
-    await storage.write(artifact_key, payload, content_type = "application/x-ndjson")
-    return {
-        "processed_book_key": processed_key,
-        "processed_book_sha256": processed_sha256,
-        "processed_book_revision": processed.selection_revision,
-        "processed_page_count": len(rows),
-        "pin_sources_pages_completed": len(rows),
-        "source_artifact_key": artifact_key,
-    }
+    return rows, processed_key, processed_sha256, processed.selection_revision

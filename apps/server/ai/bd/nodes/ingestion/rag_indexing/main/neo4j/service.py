@@ -19,6 +19,15 @@ def _estimate_graph_tokens(text: str) -> int:
     return max(1, (len(text) + 2) // 3)
 
 
+def _is_no_models_extracted_error(error: Exception) -> bool:
+    """Identify Docling Graph's explicit empty-extraction pipeline failure."""
+    error_text = str(error).casefold()
+    return (
+        "no_models_extracted" in error_text
+        or "extraction produced no models from document" in error_text
+    )
+
+
 def _split_graph_rows(
     rows: list[dict[str, Any]],
     *,
@@ -117,17 +126,27 @@ async def extract_graph_facts(
     except Exception as error:
         source_chars = sum(len(str(row.get("content") or "")) for row in rows)
         split_batches = _split_graph_rows(rows, token_counter=token_counter)
-        if (
-            not domains.settings.chat.domain.is_length_error(error)
-            or not split_batches
-            or _split_depth >= 8
-        ):
+        no_models_extracted = _is_no_models_extracted_error(error)
+        output_limit_hit = domains.settings.chat.domain.is_length_error(error)
+        if not (output_limit_hit or no_models_extracted):
             raise
+        if not split_batches or _split_depth >= 8:
+            if not no_models_extracted:
+                raise
+            logger.warning(
+                "[bd:neo4j] Docling Graph produced no models for the smallest source batch; "
+                "recording an empty extraction for section=%r pages=%s",
+                section_title,
+                sorted({row["processed_page_number"] for row in rows}),
+            )
+            return {"entities": [], "relationships": []}
         logger.info(
-            "[bd:neo4j] Docling Graph response exceeded its output limit; splitting %d source chars",
+            "[bd:neo4j] Docling Graph %s; splitting %d source chars",
+            "returned no models" if no_models_extracted else "response exceeded its output limit",
             source_chars,
         )
-        split_counter[0] += 1
+        if output_limit_hit:
+            split_counter[0] += 1
         split_results = [
             await extract_graph_facts(
                 graph_extractor,

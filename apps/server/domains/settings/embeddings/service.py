@@ -93,7 +93,7 @@ def get_configured_model() -> str:
     """The currently-configured model pin — re-resolves the Settings store
     first (same TTL as every other read here) so a just-saved Settings-page
     change is picked up without waiting for the next embed call. Used by
-    `domains.ycs.ingestion.embedding_migration`'s gate check."""
+    the YCS migration gate and Book Distiller's collection-profile checks."""
     _apply_endpoint()
     return ENDPOINT.model
 

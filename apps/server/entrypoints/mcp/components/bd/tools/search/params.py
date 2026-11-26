@@ -15,6 +15,7 @@ WEB_SEARCH_ENABLED = os.environ.get("BD_MCP_WEB_SEARCH_ENABLED", "false").strip(
     "1", "true", "yes", "on",
 }
 WEB_SEARCH_SCOPE = os.environ.get("BD_MCP_WEB_SEARCH_SCOPE", "bd.search.web").strip()
+READ_SCOPE = os.environ.get("BD_MCP_SEARCH_READ_SCOPE", "bd.search.read").strip()
 
 MAX_QUERY_CHARS = 1000
 MAX_WEB_QUERY_CHARS = 400

@@ -1,15 +1,18 @@
 """Application services for retrieval-index run lifecycle."""
 from __future__ import annotations
-import infra
-from . import domain, schemas
-from .. import keys, params, versions
-from ... import source
-from .... import ingestion
-from ..... import settings
 
+import asyncio
 import json
 import time
 from typing import Any
+
+import infra
+
+from ..... import settings
+from .... import ingestion
+from ... import source
+from .. import keys, params, versions
+from . import domain, schemas
 
 
 def _json(value: Any) -> str:
@@ -98,13 +101,39 @@ async def read_current_index(
     if not await storage.exists(pointer_key):
         return None
     pointer = json.loads(await storage.read_text(pointer_key))
+    if not isinstance(pointer, dict):
+        raise TypeError("the current retrieval-index pointer must be a JSON object")
     run_id = pointer.get("agentic_run_id")
     if not isinstance(run_id, str) or not domain.safe_segment(run_id):
         raise ValueError("the current retrieval-index pointer is malformed")
     manifest = await read_index(book_id, run_id, storage = storage)
-    if manifest is None or manifest.get("status") != "done":
+    if manifest is None:
+        return None
+    pointer_manifest_key = pointer.get("manifest_key")
+    if pointer_manifest_key is not None and pointer_manifest_key != keys.manifest_key(book_id, run_id):
+        return None
+    if manifest.get("book_id") != book_id or manifest.get("extraction_run_id") != pointer.get("extraction_run_id"):
         return None
     if manifest.get("processed_book_revision") != pointer.get("processed_book_revision"):
+        return None
+    pointer_attempt = pointer.get("attempt")
+    manifest_attempt = manifest.get("attempt")
+    if "attempt" in pointer and (
+        type(pointer_attempt) is not int or pointer_attempt != manifest_attempt
+    ):
+        return None
+    publication_committed = manifest.get("status") == "done"
+    if (
+        not publication_committed
+        and type(pointer_attempt) is int
+        and pointer_attempt == manifest_attempt
+        and manifest.get("status") in {"running", "failed", "cancelled"}
+    ):
+        # The pointer is written only after all backend counts and source hashes validate.
+        # Matching attempt IDs let readers serve it even if the worker exits before its
+        # final manifest write, while a later retry/replay invalidates stale pointers.
+        publication_committed = True
+    if not publication_committed:
         return None
     current = await ingestion.ai.processed_book.service.read_current(
         book_id,
@@ -113,7 +142,12 @@ async def read_current_index(
     )
     if current is None or current[2] != pointer.get("processed_book_sha256"):
         return None
-    return {**pointer, "status": manifest["status"], "index": manifest}
+    return {
+        **pointer,
+        "status": "done",
+        "run_status": manifest["status"],
+        "index": manifest,
+    }
 
 
 async def has_active_index_run(book_id: str) -> bool:

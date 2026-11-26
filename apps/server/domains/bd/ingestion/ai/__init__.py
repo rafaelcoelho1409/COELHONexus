@@ -1,6 +1,7 @@
 """Domain contracts and services for Book Distiller's agentic ingestion workflow."""
 from . import (
     content_selection,
+    dispatch,
     entities,
     inventory,
     params,
@@ -18,6 +19,7 @@ from . import (
 
 __all__ = [
     "content_selection",
+    "dispatch",
     "entities",
     "inventory",
     "params",

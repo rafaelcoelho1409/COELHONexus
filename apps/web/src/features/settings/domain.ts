@@ -63,6 +63,17 @@ export function progressText(task: TaskStatus | undefined): string {
   return task.state || "Starting…";
 }
 
+/** Book migration progress comes from the same worker task contract as transcript migration. */
+export function bookProgressText(task: TaskStatus | undefined): string {
+  if (!task) return "Starting…";
+  if (task.state === "PROGRESS" && task.meta?.books_total != null) {
+    const failed = task.meta.failed_books ?? 0;
+    const suffix = failed > 0 ? ` · ${failed} failed` : "";
+    return `${task.meta.books_completed ?? 0}/${task.meta.books_total} books migrated${suffix}`;
+  }
+  return task.state || "Starting…";
+}
+
 const terminalStates: readonly string[] = TERMINAL_TASK_STATES;
 
 export function isTerminalTaskState(state: string | undefined): boolean {

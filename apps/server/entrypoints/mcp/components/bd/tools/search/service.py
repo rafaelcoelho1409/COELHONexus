@@ -6,40 +6,32 @@ import hashlib
 import logging
 import time
 
+from fastmcp.server.dependencies import get_access_token
+
 import ai
 import domains
 import infra
 
-from fastmcp.server.dependencies import get_access_token
-
+from ... import access
 from . import domain, params, schemas
-
 
 logger = logging.getLogger(__name__)
 
 
 async def authorize_book(book_id: str, trusted_in_process: bool) -> None:
-    if not domain.safe_segment(book_id):
-        raise ValueError("book_id must be a safe path segment")
-    if trusted_in_process:
-        return
-    if params.MCP_PROFILE == "local_demo":
-        if not domain.book_is_allowed(book_id, params.DEMO_BOOK_IDS):
-            raise PermissionError("This book is not available in the local demo corpus")
-        return
-    token = get_access_token()
-    if token is None:
-        raise PermissionError("Authentication is required")
-    if book_id not in domain.token_book_ids(token.claims):
-        raise PermissionError("The authenticated principal cannot access this book")
+    await access.service.authorize_book(
+        book_id,
+        trusted_in_process,
+        required_scope = params.READ_SCOPE,
+    )
 
 
 async def authorize_web(trusted_in_process: bool) -> None:
     if trusted_in_process:
         return
     token = get_access_token()
-    if token is None or params.WEB_SEARCH_SCOPE not in token.scopes:
-        raise PermissionError("The authenticated principal lacks the external-search scope")
+    if token is None or not {params.READ_SCOPE, params.WEB_SEARCH_SCOPE}.issubset(token.scopes):
+        raise PermissionError("The authenticated principal lacks the required external-search scopes")
 
 
 async def search_store(source: str, book_id: str, run_id: str, query: str) -> schemas.RetrievalResult:

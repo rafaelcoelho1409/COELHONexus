@@ -32,6 +32,11 @@ export function useConnection(kind: ConnectionKind) {
 
   const test = useMutation({
     mutationFn: async () => api.parseTest(await api.test()),
+    onSettled: () => {
+      if (kind === "embedding") {
+        void queryClient.invalidateQueries({ queryKey: getYcsContentEmbeddingMigrationStatusQueryKey() });
+      }
+    },
   });
 
   return { query, save, test };
