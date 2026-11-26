@@ -24,7 +24,7 @@ of surfacing immediately. Non-transient errors (validation, auth,
 rate_limit, parse) raise on the first attempt with zero extra waiting.
 
 `search_web` connects to Parallel's remote, KEYLESS MCP endpoint
-(https://search.parallel.ai/mcp) via `langchain-mcp-adapters` —
+(https://search.parallel.ai/mcp) via LangChain's first-party MCP adapter —
 deliberately NOT the official `langchain-parallel` pip package, which
 hard-requires a paid `PARALLEL_API_KEY` (verified via /sota-search:
 docs.langchain.com's integration page shows no keyless path). Used
@@ -44,7 +44,6 @@ import time
 from typing import Any
 
 from langchain_core.prompts import ChatPromptTemplate, SystemMessagePromptTemplate
-from langchain_mcp_adapters.client import MultiServerMCPClient
 
 
 logger = logging.getLogger(__name__)
@@ -310,15 +309,19 @@ async def _get_search_tool() -> Any | None:
         _tool = None
         _client_loop = None
     try:
-        _client = MultiServerMCPClient({
-            "parallel": {
-                "url":       params.PARALLEL_MCP_URL,
-                "transport": "streamable_http",
-            },
-        })
-        tools = await asyncio.wait_for(
-            _client.get_tools(), timeout = params.SEARCH_TIMEOUT_S,
+        connection = domains.settings.mcp.entities.MCPConnection(
+            provider_id = "parallel",
+            endpoint = params.PARALLEL_MCP_URL,
+            headers = {},
         )
+        _client = domains.settings.mcp.service.build_langchain_mcp_adapter(
+            connection,
+            timeout_s = params.SEARCH_TIMEOUT_S,
+        )
+        async with _client:
+            tools = await asyncio.wait_for(
+                _client.list_tools(), timeout = params.SEARCH_TIMEOUT_S,
+            )
         # 2026-09-16: live-verified against the real endpoint — it
         # serves TWO tools (`web_search`, `web_fetch`); look up by
         # name rather than trusting list order/position.

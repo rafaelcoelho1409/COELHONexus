@@ -11,9 +11,8 @@ from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 import domains
-from langchain_mcp_adapters.client import MultiServerMCPClient
 
-from . import entities, params
+from . import params
 
 
 def _provider(provider_id: str) -> params.SearchProvider:
@@ -97,7 +96,7 @@ def credential_fingerprint(provider_id: str) -> str | None:
     return hashlib.sha256(f"{provider_id}\0{credential}".encode("utf-8")).hexdigest()
 
 
-def resolve_default_mcp_connection() -> entities.MCPConnection | None:
+def resolve_default_mcp_connection() -> domains.settings.mcp.entities.MCPConnection | None:
     """Return a tested, selected MCP connection for internal search callers only."""
     store = domains.settings.credentials.service.get_store()
     settings = store.read_settings() or {}
@@ -118,7 +117,7 @@ def resolve_default_mcp_connection() -> entities.MCPConnection | None:
     ):
         return None
     headers = {"Authorization": f"Bearer {credential}"} if credential else {}
-    return entities.MCPConnection(
+    return domains.settings.mcp.entities.MCPConnection(
         provider_id = definition.provider_id,
         endpoint = endpoint,
         headers = headers,
@@ -337,14 +336,15 @@ async def _test_mcp_provider(
 ) -> dict[str, Any]:
     headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
     try:
-        client = MultiServerMCPClient({
-            provider_id: {
-                "url": endpoint,
-                "transport": "streamable_http",
-                **({"headers": headers} if headers else {}),
-            },
-        })
-        discovered = await asyncio.wait_for(client.get_tools(), timeout = params.MCP_CONNECT_TIMEOUT_S)
+        connection = domains.settings.mcp.entities.MCPConnection(
+            provider_id = provider_id,
+            endpoint = endpoint,
+            headers = headers,
+        )
+        discovered = await domains.settings.mcp.service.list_tools(
+            connection,
+            timeout_s = domains.settings.mcp.params.CLIENT_TIMEOUT_S,
+        )
         tool_names = sorted({tool.name for tool in discovered if isinstance(tool.name, str)})
         definition = _provider(provider_id)
         if provider_id == "coelho_search":

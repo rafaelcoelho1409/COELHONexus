@@ -7,7 +7,6 @@ from ...... import graphs, tools
 import asyncio
 import time
 
-from langchain_mcp_adapters.client import MultiServerMCPClient
 from langgraph.runtime import Runtime
 
 
@@ -46,17 +45,15 @@ async def search_external_evidence(
     if connection is None:
         return {"external_search_status": "unavailable"}
 
-    client = MultiServerMCPClient({
-        connection.provider_id: {
-            "url": connection.endpoint,
-            "transport": "streamable_http",
-            **({"headers": connection.headers} if connection.headers else {}),
-        },
-    })
+    client = domains.settings.mcp.service.build_langchain_mcp_adapter(
+        connection,
+        timeout_s = params.SEARCH_TIMEOUT_S,
+    )
     try:
-        available_tools = await asyncio.wait_for(
-            client.get_tools(), timeout = params.SEARCH_TIMEOUT_S,
-        )
+        async with client:
+            available_tools = await asyncio.wait_for(
+                client.list_tools(), timeout = params.SEARCH_TIMEOUT_S,
+            )
         search_tools = [item for item in available_tools if "search" in item.name.casefold()]
         read_tool = next((
             item for item in available_tools

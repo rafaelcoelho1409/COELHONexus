@@ -98,7 +98,10 @@ def normalize_source_text(raw: Any, max_chars: int) -> str:
                 visit(item, depth + 1)
             return
         if isinstance(value, dict):
-            for key in ("text", "content", "body", "markdown", "page_content", "result", "structuredContent"):
+            for key in (
+                "text", "content", "body", "markdown", "page_content", "result",
+                "structured_content", "structuredContent",
+            ):
                 if key in value:
                     visit(value[key], depth + 1)
             return
@@ -167,7 +170,10 @@ def normalize_sources(
                 "publisher": value.get("publisher") or value.get("domain") or value.get("site_name"),
                 "published_at": value.get("published_at") or value.get("published_date") or value.get("publish_date") or value.get("date"),
             })
-        for key in ("results", "sources", "items", "data", "content", "structuredContent", "text"):
+        for key in (
+            "results", "sources", "items", "data", "content",
+            "structured_content", "structuredContent", "text",
+        ):
             nested = value.get(key)
             if isinstance(nested, (dict, list)) or (
                 isinstance(nested, str) and nested.lstrip().startswith(("{", "["))

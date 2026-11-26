@@ -6,12 +6,12 @@ from fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 
 
-_READ_ONLY = ToolAnnotations(readOnlyHint = True, destructiveHint = False, idempotentHint = True)
+_READ_ONLY = ToolAnnotations(read_only_hint = True, destructive_hint = False, idempotent_hint = True)
 _OPEN_WORLD = ToolAnnotations(
-    readOnlyHint = True,
-    destructiveHint = False,
-    idempotentHint = True,
-    openWorldHint = True,
+    read_only_hint = True,
+    destructive_hint = False,
+    idempotent_hint = True,
+    open_world_hint = True,
 )
 
 

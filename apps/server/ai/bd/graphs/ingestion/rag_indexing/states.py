@@ -29,6 +29,9 @@ class ProcessedBookIndexState(TypedDict, total = False):
     qdrant_pages_completed: int
     neo4j_node_count: int
     neo4j_relationship_count: int
+    graph_batches_empty_count: int
+    graph_batches_entity_only_count: int
+    graph_extraction_split_count: int
     neo4j_pages_completed: int
     neo4j_stage: str
     neo4j_stage_completed: int

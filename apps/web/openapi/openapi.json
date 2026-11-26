@@ -9636,6 +9636,21 @@
             "title": "Graph Batches Total",
             "default": 0
           },
+          "graph_batches_empty_count": {
+            "type": "integer",
+            "title": "Graph Batches Empty Count",
+            "default": 0
+          },
+          "graph_batches_entity_only_count": {
+            "type": "integer",
+            "title": "Graph Batches Entity Only Count",
+            "default": 0
+          },
+          "graph_extraction_split_count": {
+            "type": "integer",
+            "title": "Graph Extraction Split Count",
+            "default": 0
+          },
           "neo4j_pages_completed": {
             "type": "integer",
             "title": "Neo4J Pages Completed",

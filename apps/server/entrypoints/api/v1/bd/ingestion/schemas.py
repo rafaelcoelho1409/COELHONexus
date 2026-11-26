@@ -142,6 +142,9 @@ class RetrievalIndexStatus(BaseModel):
     neo4j_relationship_count: int = 0
     graph_batches_completed: int = 0
     graph_batches_total: int = 0
+    graph_batches_empty_count: int = 0
+    graph_batches_entity_only_count: int = 0
+    graph_extraction_split_count: int = 0
     neo4j_pages_completed: int = 0
     neo4j_llm_calls_active: int | None = None
     neo4j_stage: Literal[

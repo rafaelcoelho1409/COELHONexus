@@ -184,7 +184,7 @@ export const agenticRunStatusSchema = z.looseObject({
 export type AgenticRunStatus = z.infer<typeof agenticRunStatusSchema>;
 export type AgenticProgress = z.infer<typeof agenticProgressSchema>;
 
-export const RETRIEVAL_INDEX_WORKFLOW_VERSION = "7.0";
+export const RETRIEVAL_INDEX_WORKFLOW_VERSION = "9.0";
 
 export const retrievalIndexStatusSchema = z.looseObject({
   workflow_version: z.string().catch("1.0"),
@@ -214,6 +214,9 @@ export const retrievalIndexStatusSchema = z.looseObject({
   neo4j_relationship_count: z.number().int().nonnegative().catch(0),
   graph_batches_completed: z.number().int().nonnegative().catch(0),
   graph_batches_total: z.number().int().nonnegative().catch(0),
+  graph_batches_empty_count: z.number().int().nonnegative().catch(0),
+  graph_batches_entity_only_count: z.number().int().nonnegative().catch(0),
+  graph_extraction_split_count: z.number().int().nonnegative().catch(0),
   neo4j_pages_completed: z.number().int().nonnegative().catch(0),
   neo4j_llm_calls_active: z.number().int().nonnegative().nullable().catch(null),
   neo4j_stage: z.enum([

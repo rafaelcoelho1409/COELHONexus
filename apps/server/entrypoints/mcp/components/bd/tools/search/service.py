@@ -11,7 +11,6 @@ import domains
 import infra
 
 from fastmcp.server.dependencies import get_access_token
-from langchain_mcp_adapters.client import MultiServerMCPClient
 
 from . import domain, params, schemas
 
@@ -92,14 +91,14 @@ async def search_web(query: str, trusted_in_process: bool) -> schemas.RetrievalR
             evidence = [], error_type = "SearchConnectionUnavailable",
         )
     try:
-        client = MultiServerMCPClient({
-            connection.provider_id: {
-                "url": connection.endpoint,
-                "transport": "streamable_http",
-                **({"headers": connection.headers} if connection.headers else {}),
-            },
-        })
-        available = await asyncio.wait_for(client.get_tools(), timeout = params.WEB_SEARCH_TIMEOUT_S)
+        client = domains.settings.mcp.service.build_langchain_mcp_adapter(
+            connection,
+            timeout_s = params.WEB_SEARCH_TIMEOUT_S,
+        )
+        async with client:
+            available = await asyncio.wait_for(
+                client.list_tools(), timeout = params.WEB_SEARCH_TIMEOUT_S,
+            )
         search_tools = [tool for tool in available if "search" in tool.name.casefold()]
         search_tool = next(
             (tool for tool in search_tools if tool.name.endswith("web_search")),

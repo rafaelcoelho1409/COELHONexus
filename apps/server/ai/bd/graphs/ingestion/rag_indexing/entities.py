@@ -19,3 +19,5 @@ class ProcessedBookIndexDependencies:
     graph_extractor: Any
     progress_callback: ProgressReporter
     cancel_check: CancelCheck
+    embedding_model: str | None = None
+    embedding_dimensions: int | None = None

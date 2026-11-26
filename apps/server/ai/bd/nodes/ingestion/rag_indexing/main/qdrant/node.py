@@ -30,6 +30,11 @@ async def index_pages(
             book_id = state["book_id"],
             agentic_run_id = state["agentic_run_id"],
             revision = state["processed_book_revision"],
+            embedding_profile = (
+                (context.embedding_model, context.embedding_dimensions)
+                if context.embedding_model and context.embedding_dimensions
+                else None
+            ),
             cancel_check = context.cancel_check,
             progress_callback = report_pages,
         )

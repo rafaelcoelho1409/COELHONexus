@@ -135,7 +135,7 @@ async def test_search_provider(provider_id: schemas.SearchProviderId) -> JSONRes
     credential_hash = domains.settings.search.service.credential_fingerprint(provider_id)
     result = await asyncio.wait_for(
         domains.settings.search.service.test_provider(provider_id),
-        timeout = domains.settings.search.params.MCP_CONNECT_TIMEOUT_S + 2,
+        timeout = domains.settings.mcp.params.CLIENT_TIMEOUT_S + 2,
     )
     fingerprint = domains.settings.search.service.endpoint_fingerprint(provider_id)
     await run_in_threadpool(

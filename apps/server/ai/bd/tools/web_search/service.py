@@ -11,7 +11,6 @@ import time
 from typing import Any, cast
 
 from fastmcp import Client
-from langchain_mcp_adapters.client import MultiServerMCPClient
 
 
 async def _resolve_remote_reader(session: entities.SearchSession) -> Any | None:
@@ -33,17 +32,15 @@ async def _resolve_remote_reader(session: entities.SearchSession) -> Any | None:
 
     session.provider_id = connection.provider_id
     try:
-        client = MultiServerMCPClient({
-            connection.provider_id: {
-                "url": connection.endpoint,
-                "transport": "streamable_http",
-                **({"headers": connection.headers} if connection.headers else {}),
-            },
-        })
-        tools = await asyncio.wait_for(
-            client.get_tools(),
-            timeout = params.SEARCH_TIMEOUT_S,
+        client = domains.settings.mcp.service.build_langchain_mcp_adapter(
+            connection,
+            timeout_s = params.SEARCH_TIMEOUT_S,
         )
+        async with client:
+            tools = await asyncio.wait_for(
+                client.list_tools(),
+                timeout = params.SEARCH_TIMEOUT_S,
+            )
     except asyncio.CancelledError:
         raise
     except Exception as error:  # noqa: BLE001 — Search MCP outages do not fail the agent run.

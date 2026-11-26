@@ -2489,6 +2489,18 @@ export type RetrievalIndexStatus = {
      */
     graph_batches_total?: number;
     /**
+     * Graph Batches Empty Count
+     */
+    graph_batches_empty_count?: number;
+    /**
+     * Graph Batches Entity Only Count
+     */
+    graph_batches_entity_only_count?: number;
+    /**
+     * Graph Extraction Split Count
+     */
+    graph_extraction_split_count?: number;
+    /**
      * Neo4J Pages Completed
      */
     neo4j_pages_completed?: number;

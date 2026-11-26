@@ -2,7 +2,7 @@
 from __future__ import annotations
 import ai
 import infra.celery
-from . import keys, params, replay, runs
+from . import errors, keys, params, replay, runs
 from .. import source
 from ... import ingestion
 from .... import settings
@@ -57,6 +57,12 @@ def index_processed_book(self, book_id: str, agentic_run_id: str) -> dict:
                         logger.error("[bd-retrieval-index] execution lease lost for %s", agentic_run_id)
                         return
 
+            def qdrant_will_run(current_manifest: dict) -> bool:
+                replay_from_node = current_manifest.get("replay_from_node")
+                if replay_from_node:
+                    return "qdrant" in params.REPLAY_DESCENDANTS.get(replay_from_node, ())
+                return current_manifest.get("node_status", {}).get("qdrant") != "done"
+
             try:
                 async with redis.lock(
                     ingestion.ai.progress.keys.book_mutation_lock_key(book_id),
@@ -99,6 +105,42 @@ def index_processed_book(self, book_id: str, agentic_run_id: str) -> dict:
                     )
                     manifest = await runs.service.write_manifest(manifest, storage = storage)
                 heartbeat = asyncio.create_task(renew_execution_lease())
+                embedding_profile = None
+                if qdrant_will_run(manifest):
+                    configured_model = settings.embeddings.service.get_configured_model()
+                    try:
+                        probe, metadata = await settings.embeddings.service.embed_probe_async()
+                    except Exception as error:
+                        logger.exception(
+                            "[bd-retrieval-index] embedding preflight failed for model %s",
+                            configured_model,
+                        )
+                        if getattr(error, "status_code", None) == 400:
+                            message = (
+                                f"The embedding provider rejected model {configured_model!r}. "
+                                "Choose a model available on the configured endpoint, then retry."
+                            )
+                        else:
+                            message = (
+                                f"Could not verify embedding model {configured_model!r}. "
+                                "Check the configured endpoint, credentials, and model availability, then retry."
+                            )
+                        raise errors.EmbeddingPreflightError(message) from error
+
+                    dimensions = len(probe)
+                    model = str(metadata.get("model") or "").strip()
+                    if dimensions < 1 or not model:
+                        raise errors.EmbeddingPreflightError(
+                            "The embedding endpoint returned no model or vector dimensions. "
+                            "Check the configured endpoint, then retry."
+                        )
+                    embedding_profile = (model, dimensions)
+                    manifest.update(
+                        embedding_model = model,
+                        embedding_dimensions = dimensions,
+                    )
+                    manifest = await runs.service.write_manifest(manifest, storage = storage)
+
                 await infra.postgres.service.init_checkpointer()
                 checkpointer_initialized = True
                 graph = ai.bd.graphs.ingestion.rag_indexing.main.graphs.retrieval_index_graph(
@@ -135,6 +177,9 @@ def index_processed_book(self, book_id: str, agentic_run_id: str) -> dict:
                     "qdrant_pages_completed": manifest.get("qdrant_pages_completed", 0),
                     "neo4j_node_count": manifest.get("neo4j_node_count", 0),
                     "neo4j_relationship_count": manifest.get("neo4j_relationship_count", 0),
+                    "graph_batches_empty_count": manifest.get("graph_batches_empty_count", 0),
+                    "graph_batches_entity_only_count": manifest.get("graph_batches_entity_only_count", 0),
+                    "graph_extraction_split_count": manifest.get("graph_extraction_split_count", 0),
                     "neo4j_pages_completed": manifest.get("neo4j_pages_completed", 0),
                     "neo4j_stage": manifest.get("neo4j_stage", "idle"),
                     "neo4j_stage_completed": manifest.get("neo4j_stage_completed", 0),
@@ -196,6 +241,9 @@ def index_processed_book(self, book_id: str, agentic_run_id: str) -> dict:
                                     neo4j_stage_completed=0,
                                     neo4j_stage_total=0,
                                     neo4j_llm_calls_active=0,
+                                    graph_batches_empty_count=0,
+                                    graph_batches_entity_only_count=0,
+                                    graph_extraction_split_count=0,
                                     neo4j_node_write_batches_completed=0,
                                     neo4j_node_write_batches_total=0,
                                     neo4j_relationship_write_batches_completed=0,
@@ -226,6 +274,9 @@ def index_processed_book(self, book_id: str, agentic_run_id: str) -> dict:
                                 "neo4j_relationship_count",
                                 "graph_batches_completed",
                                 "graph_batches_total",
+                                "graph_batches_empty_count",
+                                "graph_batches_entity_only_count",
+                                "graph_extraction_split_count",
                                 "neo4j_pages_completed",
                                 "neo4j_llm_calls_active",
                                 "neo4j_stage",
@@ -257,6 +308,8 @@ def index_processed_book(self, book_id: str, agentic_run_id: str) -> dict:
                     graph_extractor = graph_extractor,
                     progress_callback = report_progress,
                     cancel_check = cancel_check,
+                    embedding_model = embedding_profile[0] if embedding_profile else None,
+                    embedding_dimensions = embedding_profile[1] if embedding_profile else None,
                 )
                 graph_input = None if snapshot.next else initial_state
                 await graph.ainvoke(
@@ -331,6 +384,8 @@ def index_processed_book(self, book_id: str, agentic_run_id: str) -> dict:
                 if failed is not None:
                     status = "cancelled" if cancelled else "failed"
                     current_node = failed.get("current_node")
+                    if isinstance(error, errors.EmbeddingPreflightError):
+                        failed["node_status"]["qdrant"] = status
                     if current_node in failed["node_status"]:
                         failed["node_status"][current_node] = status
                     failed.update(
@@ -338,7 +393,11 @@ def index_processed_book(self, book_id: str, agentic_run_id: str) -> dict:
                         cancel_requested = False,
                         current_node = None,
                         finished_at = max(time.time(), failed["created_at"]),
-                        error = None if cancelled else f"Retrieval indexing failed ({type(error).__name__}).",
+                        error = None if cancelled else (
+                            str(error)
+                            if isinstance(error, errors.EmbeddingPreflightError)
+                            else f"Retrieval indexing failed ({type(error).__name__})."
+                        ),
                     )
                     await runs.service.write_manifest(failed, storage = storage)
                     await settings.llm_counter.service.snapshot(

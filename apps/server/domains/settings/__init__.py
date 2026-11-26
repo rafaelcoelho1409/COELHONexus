@@ -5,10 +5,21 @@
 `embedding_endpoint` settings blobs the Settings page persists.
 `chat` / `embeddings` are thin OpenAI-compatible adapters over the
 user-configured external endpoints — the ONLY connections Nexus makes to
-external LLMs / embedding models. No bundled gateway, no provider fan-out.
+external LLMs / embedding models. `search` owns search-provider selection;
+`mcp` owns the shared outbound MCP connection and transport boundary.
+No bundled gateway, no provider fan-out.
 """
 from __future__ import annotations
-from . import chat, credentials, embeddings, llm_counter, observability, search
+
+from . import chat, credentials, embeddings, llm_counter, mcp, observability, search
 
 
-__all__ = ["chat", "credentials", "embeddings", "llm_counter", "observability", "search"]
+__all__ = [
+    "chat",
+    "credentials",
+    "embeddings",
+    "llm_counter",
+    "mcp",
+    "observability",
+    "search",
+]

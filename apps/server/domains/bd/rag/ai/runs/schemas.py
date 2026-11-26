@@ -27,7 +27,7 @@ Neo4jStage = Literal[
 class RetrievalIndexManifest(BaseModel):
     model_config = ConfigDict(extra = "forbid")
 
-    schema_version: Literal["1.0", "1.1", "1.2"] = versions.SCHEMA_VERSION
+    schema_version: Literal["1.0", "1.1", "1.2", "1.3"] = versions.SCHEMA_VERSION
     workflow_version: str = versions.WORKFLOW_VERSION
     book_id: SafeSegment
     extraction_run_id: SafeSegment
@@ -72,6 +72,9 @@ class RetrievalIndexManifest(BaseModel):
     neo4j_relationship_count: int = Field(default = 0, ge = 0, strict = True)
     graph_batches_completed: int = Field(default = 0, ge = 0, strict = True)
     graph_batches_total: int = Field(default = 0, ge = 0, strict = True)
+    graph_batches_empty_count: int = Field(default = 0, ge = 0, strict = True)
+    graph_batches_entity_only_count: int = Field(default = 0, ge = 0, strict = True)
+    graph_extraction_split_count: int = Field(default = 0, ge = 0, strict = True)
     neo4j_pages_completed: int = Field(default = 0, ge = 0, strict = True)
     neo4j_llm_calls_active: int | None = Field(default = None, ge = 0, strict = True)
     neo4j_stage: Neo4jStage = "idle"

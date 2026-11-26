@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from . import (
         domain,
+        errors,
         keys,
         params,
         publication,
@@ -20,6 +21,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "domain",
+    "errors",
     "keys",
     "params",
     "publication",

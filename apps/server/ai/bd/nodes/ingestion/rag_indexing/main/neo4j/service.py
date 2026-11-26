@@ -6,7 +6,7 @@ from ...... import graphs
 import asyncio
 import logging
 import random
-from collections.abc import Coroutine, Iterable
+from collections.abc import Callable, Coroutine, Iterable
 from typing import Any
 
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -14,7 +14,16 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 logger = logging.getLogger(__name__)
 
 
-def _split_graph_rows(rows: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
+def _estimate_graph_tokens(text: str) -> int:
+    """Use a conservative character estimate when the model tokenizer is unavailable."""
+    return max(1, (len(text) + 2) // 3)
+
+
+def _split_graph_rows(
+    rows: list[dict[str, Any]],
+    *,
+    token_counter: Callable[[str], int] | None = None,
+) -> list[list[dict[str, Any]]]:
     """Split a failed graph batch while retaining page and section metadata."""
     if len(rows) > 1:
         midpoint = len(rows) // 2
@@ -24,12 +33,16 @@ def _split_graph_rows(rows: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
 
     row = rows[0]
     content = str(row.get("content") or "")
-    if len(content) <= 1_000:
+    count_tokens = token_counter or _estimate_graph_tokens
+    content_tokens = count_tokens(content)
+    if len(content) <= 1_000 and content_tokens <= 500:
         return []
+    chunk_size = max(1, content_tokens // 2)
     splitter = RecursiveCharacterTextSplitter(
-        chunk_size=max(1_000, len(content) // 2),
-        chunk_overlap=120,
+        chunk_size=chunk_size,
+        chunk_overlap=min(80, max(0, chunk_size - 1)),
         add_start_index=True,
+        length_function=count_tokens,
         separators=["\n\n", "\n", " ", ""],
     )
     parts = splitter.create_documents([content])
@@ -87,12 +100,15 @@ async def extract_graph_facts(
     *,
     section_title: str,
     _split_depth: int = 0,
+    _split_counter: list[int] | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
     """Extract graph facts from one book section for the Neo4j indexing node."""
     text = (
         f"Book section: {section_title}\n\n"
         f"{domains.bd.rag.source.indexes.neo4j_index.domain.source_material(rows)}"
     )
+    split_counter = _split_counter if _split_counter is not None else [0]
+    token_counter = getattr(graph_extractor, "count_input_tokens", None)
     try:
         extraction = await graph_extractor.aextract_text(
             text,
@@ -100,7 +116,7 @@ async def extract_graph_facts(
         )
     except Exception as error:
         source_chars = sum(len(str(row.get("content") or "")) for row in rows)
-        split_batches = _split_graph_rows(rows)
+        split_batches = _split_graph_rows(rows, token_counter=token_counter)
         if (
             not domains.settings.chat.domain.is_length_error(error)
             or not split_batches
@@ -111,12 +127,14 @@ async def extract_graph_facts(
             "[bd:neo4j] Docling Graph response exceeded its output limit; splitting %d source chars",
             source_chars,
         )
+        split_counter[0] += 1
         split_results = [
             await extract_graph_facts(
                 graph_extractor,
                 batch,
                 section_title=section_title,
                 _split_depth=_split_depth + 1,
+                _split_counter=split_counter,
             )
             for batch in split_batches
         ]
@@ -129,7 +147,10 @@ async def index_book_graph(
     context: graphs.ingestion.rag_indexing.entities.ProcessedBookIndexDependencies,
 ) -> dict[str, Any]:
     rows = await domains.bd.rag.source.storage.service.read_sources(graph_state, context.storage)
-    batches = domains.bd.rag.source.indexes.neo4j_index.domain.graph_batches(rows)
+    batches = domains.bd.rag.source.indexes.neo4j_index.domain.graph_batches(
+        rows,
+        token_counter = getattr(context.graph_extractor, "count_input_tokens", None),
+    )
     all_pages = {row["processed_page_number"] for row in rows}
     chunks_remaining_by_page: dict[int, int] = {}
     for _, batch_rows in batches:
@@ -159,13 +180,19 @@ async def index_book_graph(
     progress_lock = asyncio.Lock()
     completed_batches = 0
     active_llm_calls = 0
+    graph_batches_empty_count = 0
+    graph_batches_entity_only_count = 0
+    graph_extraction_split_count = 0
 
     async def extract_batch(
         section_title: str,
         batch_rows: list[dict[str, Any]],
     ) -> dict[str, Any]:
         nonlocal active_llm_calls, completed_batches, pages_completed
+        nonlocal graph_batches_empty_count, graph_batches_entity_only_count
+        nonlocal graph_extraction_split_count
         extraction: dict[str, list[dict[str, Any]]] | None = None
+        split_counter = [0]
         page_numbers = sorted({row["processed_page_number"] for row in batch_rows})
         retry_attempts = domains.bd.rag.ai.params.GRAPH_EXTRACTION_RETRY_ATTEMPTS
         for attempt in range(1, retry_attempts + 1):
@@ -196,6 +223,7 @@ async def index_book_graph(
                             context.graph_extractor,
                             batch_rows,
                             section_title = section_title,
+                            _split_counter = split_counter,
                         )
                 except Exception as error:
                     if (
@@ -242,6 +270,26 @@ async def index_book_graph(
         if extraction is None:
             raise RuntimeError("Neo4j graph extraction completed without a result")
 
+        entity_count = len(extraction["entities"])
+        relationship_count = len(extraction["relationships"])
+        if entity_count == 0 and relationship_count == 0:
+            graph_batches_empty_count += 1
+            logger.warning(
+                "[bd:neo4j] graph extraction batch returned no facts for section=%r pages=%s",
+                section_title,
+                page_numbers,
+            )
+        elif entity_count > 0 and relationship_count == 0:
+            graph_batches_entity_only_count += 1
+            logger.info(
+                "[bd:neo4j] graph extraction batch returned entities without relationships "
+                "for section=%r pages=%s entities=%d",
+                section_title,
+                page_numbers,
+                entity_count,
+            )
+        graph_extraction_split_count += split_counter[0]
+
         async with progress_lock:
             for row in batch_rows:
                 page_number = row["processed_page_number"]
@@ -259,6 +307,9 @@ async def index_book_graph(
                     "neo4j_stage_total": pages_total,
                     "graph_batches_completed": completed_batches,
                     "graph_batches_total": len(batches),
+                    "graph_batches_empty_count": graph_batches_empty_count,
+                    "graph_batches_entity_only_count": graph_batches_entity_only_count,
+                    "graph_extraction_split_count": graph_extraction_split_count,
                     "neo4j_pages_completed": pages_completed,
                     "neo4j_llm_calls_active": active_llm_calls,
                 },
@@ -269,6 +320,15 @@ async def index_book_graph(
         extract_batch(section_title, batch_rows)
         for section_title, batch_rows in batches
     )
+    if graph_batches_empty_count or graph_batches_entity_only_count or graph_extraction_split_count:
+        logger.info(
+            "[bd:neo4j] graph extraction summary: batches=%d empty=%d entity_only=%d "
+            "output_limit_splits=%d",
+            len(batches),
+            graph_batches_empty_count,
+            graph_batches_entity_only_count,
+            graph_extraction_split_count,
+        )
     await context.progress_callback(
         "neo4j",
         "running",
@@ -278,6 +338,9 @@ async def index_book_graph(
             "neo4j_stage_total": 1,
             "graph_batches_completed": len(batches),
             "graph_batches_total": len(batches),
+            "graph_batches_empty_count": graph_batches_empty_count,
+            "graph_batches_entity_only_count": graph_batches_entity_only_count,
+            "graph_extraction_split_count": graph_extraction_split_count,
             "neo4j_pages_completed": pages_completed,
         },
     )
@@ -373,6 +436,9 @@ async def index_book_graph(
         "neo4j_node_count": node_count,
         "neo4j_relationship_count": relationship_count,
         "neo4j_pages_completed": pages_completed,
+        "graph_batches_empty_count": graph_batches_empty_count,
+        "graph_batches_entity_only_count": graph_batches_entity_only_count,
+        "graph_extraction_split_count": graph_extraction_split_count,
         "neo4j_stage": "complete",
         "neo4j_stage_completed": 1,
         "neo4j_stage_total": 1,

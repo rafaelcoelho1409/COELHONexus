@@ -7,6 +7,7 @@ import json
 import logging
 import tempfile
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Iterator, Literal, Mapping
 
@@ -14,9 +15,20 @@ import json_repair
 from docling_graph import PipelineConfig, run_pipeline
 from docling_graph.llm_clients.schema_utils import normalize_schema_for_response_format
 from langchain_core.messages import HumanMessage, SystemMessage
+import tiktoken
 
 
 logger = logging.getLogger(__name__)
+
+
+@lru_cache(maxsize=32)
+def _token_encoding(model_name: str | None):
+    if not model_name:
+        return None
+    try:
+        return tiktoken.encoding_for_model(model_name)
+    except KeyError:
+        return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,6 +37,15 @@ class GraphExtractionAgent:
 
     model: Any
     instructions: str
+
+    def count_input_tokens(self, text: str) -> int:
+        """Use the configured model tokenizer, with a conservative fallback."""
+        model = getattr(self.model, "bound", self.model)
+        model_name = getattr(model, "tiktoken_model_name", None) or getattr(model, "model_name", None)
+        encoding = _token_encoding(model_name if isinstance(model_name, str) else None)
+        if encoding is not None:
+            return max(1, len(encoding.encode_ordinary(text)))
+        return max(1, (len(text) + 2) // 3)
 
     async def aextract_text(
         self,

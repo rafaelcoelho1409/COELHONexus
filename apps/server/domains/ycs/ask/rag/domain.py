@@ -183,7 +183,7 @@ def is_transient(exc: BaseException) -> bool:
 
 
 def extract_result_items(raw: Any) -> list[dict]:
-    """Normalize whatever `langchain-mcp-adapters` hands back into a
+    """Normalize whatever LangChain's MCP adapter hands back into a
     flat list of result dicts. Live-verified shape (2026-09-16,
     against the real `https://search.parallel.ai/mcp` endpoint):
     `tool.ainvoke()` returns `list[{"type": "text", "text": "<JSON

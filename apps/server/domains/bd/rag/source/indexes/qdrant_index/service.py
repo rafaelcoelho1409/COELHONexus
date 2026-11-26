@@ -65,12 +65,16 @@ async def index_pages(
     book_id: str,
     agentic_run_id: str,
     revision: int,
+    embedding_profile: tuple[str, int] | None = None,
     cancel_check: Callable[[], Awaitable[bool]] | None = None,
     progress_callback: Callable[[int, int], Awaitable[None]] | None = None,
 ) -> tuple[str, str, int, int]:
-    probe, metadata = await settings.embeddings.service.embed_probe_async()
-    dimensions = len(probe)
-    model = str(metadata.get("model") or "")
+    if embedding_profile is None:
+        probe, metadata = await settings.embeddings.service.embed_probe_async()
+        dimensions = len(probe)
+        model = str(metadata.get("model") or "")
+    else:
+        model, dimensions = embedding_profile
     if dimensions < 1 or not model:
         raise ValueError("the configured embedding endpoint returned no model or vector dimensions")
     collection = domain.collection_name(model, dimensions)

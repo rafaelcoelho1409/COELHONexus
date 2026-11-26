@@ -285,10 +285,21 @@ export function RetrievalIndexPanel({ bookId, run, index }: Props) {
                 ).toLocaleString()}`}
               />
               {index && index.graph_batches_total > 0 ? (
-                <Metric
-                  label="Graph extraction batches"
-                  value={`${index.graph_batches_completed.toLocaleString()} / ${index.graph_batches_total.toLocaleString()}`}
-                />
+                <>
+                  <Metric
+                    label="Graph extraction batches"
+                    value={`${index.graph_batches_completed.toLocaleString()} / ${index.graph_batches_total.toLocaleString()}`}
+                  />
+                  <Metric label="Batches with no facts" value={index.graph_batches_empty_count.toLocaleString()} />
+                  <Metric
+                    label="Entity-only batches"
+                    value={index.graph_batches_entity_only_count.toLocaleString()}
+                  />
+                  <Metric
+                    label="Recovered output-limit splits"
+                    value={index.graph_extraction_split_count.toLocaleString()}
+                  />
+                </>
               ) : null}
               {indexOutdated ? <Metric label="Workflow" value="Update available" /> : null}
             </div>
@@ -318,10 +329,21 @@ export function RetrievalIndexPanel({ bookId, run, index }: Props) {
                 <AgenticPills items={selectedNode.writes} />
               </div>
               {selectedNodeId === "neo4j" && index && index.graph_batches_total > 0 ? (
-                <Metric
-                  label="Graph extraction batches"
-                  value={`${index.graph_batches_completed.toLocaleString()} / ${index.graph_batches_total.toLocaleString()}`}
-                />
+                <>
+                  <Metric
+                    label="Graph extraction batches"
+                    value={`${index.graph_batches_completed.toLocaleString()} / ${index.graph_batches_total.toLocaleString()}`}
+                  />
+                  <Metric label="Batches with no facts" value={index.graph_batches_empty_count.toLocaleString()} />
+                  <Metric
+                    label="Entity-only batches"
+                    value={index.graph_batches_entity_only_count.toLocaleString()}
+                  />
+                  <Metric
+                    label="Recovered output-limit splits"
+                    value={index.graph_extraction_split_count.toLocaleString()}
+                  />
+                </>
               ) : null}
               {selectedNodeId === "neo4j" && index ? (
                 <>

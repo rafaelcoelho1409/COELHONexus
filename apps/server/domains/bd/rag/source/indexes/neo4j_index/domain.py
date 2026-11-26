@@ -6,19 +6,24 @@ import hashlib
 import json
 import re
 import unicodedata
+from collections.abc import Callable
 from typing import Any
 
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 
-def graph_batches(rows: list[dict[str, Any]]) -> list[tuple[str, list[dict[str, Any]]]]:
-    """Split processed page text into chapter-scoped extraction batches."""
-    splitter = RecursiveCharacterTextSplitter(
-        chunk_size = params.GRAPH_BATCH_CHARS // 2,
-        chunk_overlap = 240,
-        add_start_index = True,
-        separators = ["\n\n", "\n", " ", ""],
-    )
+def _estimate_tokens(text: str) -> int:
+    """Conservative fallback when the configured model has no known tokenizer."""
+    return max(1, (len(text) + 2) // 3)
+
+
+def graph_batches(
+    rows: list[dict[str, Any]],
+    *,
+    token_counter: Callable[[str], int] | None = None,
+) -> list[tuple[str, list[dict[str, Any]]]]:
+    """Split processed pages into section batches within token and character budgets."""
+    count_tokens = token_counter or _estimate_tokens
     sections: dict[str, list[dict[str, Any]]] = {}
     for row in rows:
         section_path = row.get("section_path")
@@ -26,22 +31,45 @@ def graph_batches(rows: list[dict[str, Any]]) -> list[tuple[str, list[dict[str, 
             item for item in section_path if isinstance(item, str) and item.strip()
         ) if isinstance(section_path, list) else "Book contents"
         title = title or "Book contents"
-        for chunk in splitter.create_documents([row["content"]]):
-            content = chunk.page_content.strip()
-            if content:
-                sections.setdefault(title, []).append({
-                    **row,
-                    "content": content,
-                    "source_char_start": chunk.metadata.get("start_index", 0),
-                })
+        sections.setdefault(title, []).append(row)
 
     batches: list[tuple[str, list[dict[str, Any]]]] = []
-    for title, section_rows in sections.items():
+    for title, source_rows in sections.items():
+        section_header = f"Book section: {title}\n\n"
+        chunk_size = max(
+            1,
+            params.GRAPH_BATCH_INPUT_TOKEN_BUDGET
+            - count_tokens(section_header)
+            - 256,
+        )
+        splitter = RecursiveCharacterTextSplitter(
+            chunk_size = chunk_size,
+            chunk_overlap = min(params.GRAPH_BATCH_TOKEN_OVERLAP, max(0, chunk_size - 1)),
+            add_start_index = True,
+            length_function = count_tokens,
+            separators = ["\n\n", "\n", " ", ""],
+        )
+        section_rows: list[dict[str, Any]] = []
+        for row in source_rows:
+            for chunk in splitter.create_documents([row["content"]]):
+                content = chunk.page_content.strip()
+                if content:
+                    section_rows.append({
+                        **row,
+                        "content": content,
+                        "source_char_start": int(row.get("source_char_start") or 0)
+                        + int(chunk.metadata.get("start_index") or 0),
+                    })
+
         batch: list[dict[str, Any]] = []
         batch_chars = 0
         for row in section_rows:
             row_chars = len(row["content"])
-            if batch and batch_chars + row_chars > params.GRAPH_BATCH_CHARS:
+            candidate = [*batch, row]
+            candidate_text = section_header + source_material(candidate)
+            exceeds_token_budget = count_tokens(candidate_text) > params.GRAPH_BATCH_INPUT_TOKEN_BUDGET
+            exceeds_character_budget = batch_chars + row_chars > params.GRAPH_BATCH_CHARS
+            if batch and (exceeds_token_budget or exceeds_character_budget):
                 batches.append((title, batch))
                 batch = []
                 batch_chars = 0
