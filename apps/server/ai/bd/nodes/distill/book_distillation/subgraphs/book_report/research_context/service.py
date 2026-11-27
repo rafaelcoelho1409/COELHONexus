@@ -1,7 +1,7 @@
 """Gather optional external research and persist its attributed context."""
 from __future__ import annotations
 import domains
-from ...... import graphs, skills
+from ....... import graphs, skills
 
 import json
 import logging

@@ -1,8 +1,7 @@
 """Pure validation and rendering for BD RAG indexing MCP prompts."""
+from __future__ import annotations
 import domains
 from . import prompts
-
-from __future__ import annotations
 
 
 def build_diagnose_index_run_prompt(book_id: str, agentic_run_id: str) -> str:

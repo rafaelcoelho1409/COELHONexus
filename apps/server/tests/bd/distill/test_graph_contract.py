@@ -16,6 +16,7 @@ class DistillGraphContractTests(unittest.TestCase):
         self.assertIn("unit_extraction", graph.get_graph().nodes)
         self.assertIn("chapter_guides", graph.get_graph().nodes)
         self.assertIn("book_retrieval", graph.get_graph().nodes)
+        self.assertIn("book_report", graph.get_graph().nodes)
         self.assertIn("dispatch_parallel_stages", graph.get_graph().nodes)
         self.assertNotIn("report_pipeline", graph.get_graph().nodes)
         for node in (
@@ -23,7 +24,7 @@ class DistillGraphContractTests(unittest.TestCase):
             "research_context",
             "write_decision_brief",
         ):
-            self.assertIn(node, graph.get_graph().nodes)
+            self.assertNotIn(node, graph.get_graph().nodes)
         self.assertIn("publish_report", graph.get_graph().nodes)
 
 

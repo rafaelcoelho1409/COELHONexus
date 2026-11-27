@@ -1,4 +1,4 @@
-"""BD search MCP tool feature."""
+"""BD Distill whole-run lifecycle tools."""
 from __future__ import annotations
 
 from . import domain, params, registry, schemas, service, tools

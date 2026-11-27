@@ -4,6 +4,7 @@ from __future__ import annotations
 from . import (
     book_synthesizer,
     chapter_synthesizer,
+    domain,
     decision_brief_writer,
     elasticsearch_retriever,
     evidence_verifier,
@@ -19,6 +20,7 @@ from . import (
 __all__ = [
     "book_synthesizer",
     "chapter_synthesizer",
+    "domain",
     "decision_brief_writer",
     "elasticsearch_retriever",
     "evidence_verifier",

@@ -1,16 +1,86 @@
-"""Retrieval and rate-limit orchestration for BD Search MCP."""
+"""Distill workflow and retrieval orchestration at the MCP boundary."""
 from __future__ import annotations
-import ai, domains, infra
+import ai, asyncio, domains, infra
 from . import domain, params, schemas
 
-import asyncio
 import logging
 import time
+
 
 logger = logging.getLogger(__name__)
 
 
-async def search_store(source: str, book_id: str, run_id: str, query: str) -> schemas.RetrievalResult:
+async def read_run(book_id: str, run_id: str) -> dict:
+    manifest = await domains.bd.distill.ai.service.read_run(book_id, run_id)
+    if manifest is None:
+        raise FileNotFoundError("Distill run not found")
+    return domain.run_summary(manifest).model_dump(mode = "json")
+
+
+async def read_current_run(book_id: str) -> dict:
+    manifest = await domains.bd.distill.ai.service.read_current_run(book_id)
+    if manifest is None:
+        raise FileNotFoundError("No Distill run exists for this book")
+    return domain.run_summary(manifest).model_dump(mode = "json")
+
+
+async def read_report(book_id: str, run_id: str) -> dict:
+    report, _ = await domains.bd.distill.ai.service.read_report(book_id, run_id)
+    return report
+
+
+async def read_retrieval_context(book_id: str, run_id: str) -> dict:
+    storage = infra.minio.service.get_storage()
+    context = await domains.bd.distill.ai.retrieval_context.service.read_persisted_retrieval_context(
+        storage,
+        book_id,
+        run_id,
+    )
+    if context is None:
+        raise FileNotFoundError("Distill retrieval evidence is not available for this run")
+    return context
+
+
+async def start_run(
+    book_id: str,
+    idempotency_key: str,
+    ingestion_ai_run_id: str | None = None,
+) -> dict:
+    result = await domains.bd.distill.ai.dispatch.service.start_run(
+        book_id,
+        idempotency_key = idempotency_key,
+        ingestion_ai_run_id = ingestion_ai_run_id,
+    )
+    return domain.command_result(result).model_dump(mode = "json")
+
+
+async def resume_run(book_id: str, run_id: str) -> dict:
+    result = await domains.bd.distill.ai.dispatch.service.resume_run(book_id, run_id)
+    return domain.command_result(result).model_dump(mode = "json")
+
+
+async def cancel_run(book_id: str, run_id: str) -> dict:
+    result = await domains.bd.distill.ai.dispatch.service.cancel_run(book_id, run_id)
+    return domain.command_result(result).model_dump(mode = "json")
+
+
+async def replay_from_node(book_id: str, run_id: str, node_id: str) -> dict:
+    result = await domains.bd.distill.ai.dispatch.service.replay_from_node(
+        book_id,
+        run_id,
+        node_id,
+    )
+    return domain.command_result(result).model_dump(mode = "json")
+
+
+async def search_store(
+    source: str,
+    book_id: str,
+    run_id: str,
+    query: str,
+    *,
+    neo4j_intent: domains.bd.rag.source.retrieval.schemas.Neo4jQueryIntent | None = None,
+) -> schemas.RetrievalResult:
     normalized_query = domain.normalize_query(query, params.MAX_QUERY_CHARS)
     if not normalized_query:
         return schemas.RetrievalResult(
@@ -23,6 +93,7 @@ async def search_store(source: str, book_id: str, run_id: str, query: str) -> sc
             normalized_query,
             source,
             top_k = params.MAX_TOP_K,
+            neo4j_intent = neo4j_intent,
         )
     except asyncio.CancelledError:
         raise

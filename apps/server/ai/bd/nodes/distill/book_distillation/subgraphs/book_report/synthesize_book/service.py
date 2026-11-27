@@ -1,7 +1,7 @@
 """Synthesize the whole-book guide from completed chapter guides."""
 from __future__ import annotations
 import domains
-from ...... import graphs, prompts
+from ....... import graphs, prompts
 
 import json
 import logging

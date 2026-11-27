@@ -1,7 +1,7 @@
 """Write a separate, source-cited decision brief from the whole-book synthesis."""
 from __future__ import annotations
 import domains
-from ...... import graphs, skills
+from ....... import graphs, skills
 
 import json
 import logging

@@ -57,3 +57,4 @@
 !ai/bd/skills/distill/**/*.md
 !ai/bd/skills/ask/**/*.md
 !ai/**/prompts/**/SYSTEM.md
+!entrypoints/mcp/components/bd/prompts/**/*.md

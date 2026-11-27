@@ -1,9 +1,9 @@
-"""Configuration and resource limits for BD Search MCP."""
+"""Bounded execution settings for BD Distill MCP tools."""
 from __future__ import annotations
-
 import os
 
-
+TOOL_TIMEOUT_S = 120.0
+READ_TIMEOUT_S = 20.0
 WEB_SEARCH_ENABLED = os.environ.get("BD_MCP_WEB_SEARCH_ENABLED", "false").strip().casefold() in {
     "1", "true", "yes", "on",
 }

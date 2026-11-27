@@ -229,7 +229,7 @@ export const DISTILL_REPORT_STAGE_NODE_IDS = [
   "write_decision_brief",
 ] as const;
 
-/** Distill stages as compiled directly in the main LangGraph. */
+/** Distill leaf stages shown in the graph UI, including stages inside subgraphs. */
 export const DISTILL_LANGGRAPH_NODES = [
   { id: "prepare_units", kind: "stage" },
   { id: "extract_unit", kind: "stage" },
@@ -352,7 +352,7 @@ export const DISTILL_GRAPH_GROUPS = [
     height: 508,
   },
   {
-    id: "report_stages_group",
+    id: "book_report_group",
     label: "Book report stages",
     x: 888,
     y: 1790,

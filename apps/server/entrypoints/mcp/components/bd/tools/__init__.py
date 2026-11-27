@@ -2,6 +2,6 @@
 
 from __future__ import annotations
 
-from . import ingestion, registry, search
+from . import distill, ingestion, registry
 
-__all__ = ["ingestion", "registry", "search"]
+__all__ = ["distill", "ingestion", "registry"]

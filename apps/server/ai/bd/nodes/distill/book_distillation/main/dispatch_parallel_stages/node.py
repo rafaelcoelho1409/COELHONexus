@@ -26,10 +26,13 @@ def dispatch_parallel_stages(
     replay_target_node = configurable.get("distill_replay_target")
     if replay_target_node not in domains.bd.distill.ai.params.GRAPH_NODES:
         replay_target_node = None
-    if replay_target_node == "build_chapter_visuals":
-        report_entry_node = "write_decision_brief"
-    elif replay_target_node in {"synthesize_book", "research_context", "write_decision_brief"}:
-        report_entry_node = replay_target_node
+    if replay_target_node in {
+        "build_chapter_visuals",
+        "synthesize_book",
+        "research_context",
+        "write_decision_brief",
+    }:
+        report_entry_node = "book_report"
     else:
         report_entry_node = "book_retrieval"
     report_payload = {

@@ -17,7 +17,7 @@ from langchain.agents.middleware import ModelCallLimitMiddleware
 from langchain_openai import ChatOpenAI
 
 
-def neo4j_retriever(model = None):
+def neo4j_retriever(model = None, *, schema_context: str):
     """Build the configured source-limited Neo4j retrieval DeepAgent."""
     if model is None:
         model = domains.settings.chat.service.build_chat_model(
@@ -48,7 +48,10 @@ def neo4j_retriever(model = None):
         model = model,
         tools = [retrieval_tool],
         context_schema = tools.retrieval.entities.RetrievalSession,
-        system_prompt = prompts.distill.neo4j_retriever.prompts.SYSTEM_PROMPT,
+        system_prompt = prompts.distill.domain.build_retrieval_system_prompt(
+            prompts.distill.neo4j_retriever.prompts.SYSTEM_PROMPT,
+            schema_context,
+        ),
         middleware = [
             middlewares.middleware.ToolAllowlistMiddleware(allowed_tools),
             ModelCallLimitMiddleware(

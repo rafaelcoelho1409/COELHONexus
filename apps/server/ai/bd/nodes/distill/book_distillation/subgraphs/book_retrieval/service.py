@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 async def execute_retrieval_agent(
     source: str,
-    agent_builder: Callable[[Any], Any],
+    agent_builder: Callable[..., Any],
     state: Any,
     context: Any,
 ) -> dict[str, Any]:
@@ -34,7 +34,8 @@ async def execute_retrieval_agent(
 
     query = str(state.get("query") or "")[:params.MAX_QUERY_CHARS]
     try:
-        agent = agent_builder(context.model)
+        schema_context = await tools.retrieval.service.read_source_schema(source)
+        agent = agent_builder(context.model, schema_context = schema_context)
         with domains.settings.llm_counter.service.llm_context(
             ns = "bd",
             run_id = context.counter_run_id or context.run_id,

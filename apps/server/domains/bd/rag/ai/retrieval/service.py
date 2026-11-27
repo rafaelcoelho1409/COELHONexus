@@ -18,10 +18,12 @@ async def _retrieve_one_source(
     query: str,
     index: dict[str, Any],
     top_k: int,
+    neo4j_intent: domains.bd.rag.source.retrieval.schemas.Neo4jQueryIntent | None = None,
 ) -> list[dict[str, Any]]:
     return await asyncio.wait_for(
         domains.bd.rag.source.retrieval.service.retrieve_source(
             source, book_id, query, index, top_k,
+            neo4j_intent = neo4j_intent,
         ),
         timeout = params.RETRIEVAL_TIMEOUT_S,
     )
@@ -45,6 +47,7 @@ async def retrieve_source(
     source: str,
     *,
     top_k: int | None = None,
+    neo4j_intent: domains.bd.rag.source.retrieval.schemas.Neo4jQueryIntent | None = None,
 ) -> dict[str, Any]:
     """Retrieve bounded, revision-pinned evidence from one BD RAG source.
 
@@ -57,12 +60,21 @@ async def retrieve_source(
         return {"status": "invalid_query", "source": source, "query": "", "evidence": []}
     if source not in {"elasticsearch", "qdrant", "neo4j"}:
         return {"status": "invalid_source", "source": source, "query": query, "evidence": []}
+    if neo4j_intent is not None and source != "neo4j":
+        return {"status": "invalid_query", "source": source, "query": query, "evidence": []}
     if top_k is None:
         top_k = domains.bd.rag.source.retrieval.params.TOP_K
     top_k = max(1, min(int(top_k), domains.bd.rag.source.retrieval.params.TOP_K))
     try:
         index = await _read_index(book_id, run_id)
-        evidence = await _retrieve_one_source(source, book_id, query, index, top_k)
+        evidence = await _retrieve_one_source(
+            source,
+            book_id,
+            query,
+            index,
+            top_k,
+            neo4j_intent = neo4j_intent,
+        )
     except asyncio.CancelledError:
         raise
     except TimeoutError:

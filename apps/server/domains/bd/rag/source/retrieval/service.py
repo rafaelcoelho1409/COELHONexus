@@ -7,7 +7,7 @@ from typing import Any
 import domains
 import infra
 
-from . import params
+from . import params, schemas
 
 _WORD_RE = re.compile(r"[\w'-]{2,}", re.UNICODE)
 
@@ -152,16 +152,23 @@ async def _retrieve_ingestion_graph(
     query: str,
     index: dict[str, Any],
     top_k: int = params.GRAPH_TOP_K,
+    intent: schemas.Neo4jQueryIntent | None = None,
 ) -> list[dict[str, Any]]:
-    terms = list(dict.fromkeys(word.casefold() for word in _WORD_RE.findall(query)))[:params.MAX_GRAPH_TERMS]
+    intent = intent or schemas.Neo4jQueryIntent()
+    explicit_terms = [term.casefold() for term in intent.entity_terms]
+    query_terms = [word.casefold() for word in _WORD_RE.findall(query)]
+    terms = list(dict.fromkeys([*explicit_terms, *query_terms]))[:params.MAX_GRAPH_TERMS]
     if not terms:
         return []
+    entity_types = list(dict.fromkeys(value.casefold() for value in intent.entity_types))
+    relationship_terms = list(dict.fromkeys(value.casefold() for value in intent.relationship_terms))
     cypher = """
         MATCH (node:COELHONexus:BD)
         WHERE node.book_id = $book_id
           AND node.agentic_run_id = $agentic_run_id
           AND node.processed_book_revision = $revision
           AND node:Entity
+          AND (size($entity_types) = 0 OR toLower(coalesce(node.entity_type, '')) IN $entity_types)
           AND any(term IN $terms WHERE toLower(coalesce(node.name, '')) CONTAINS term)
         OPTIONAL MATCH (node)-[relationship]-(related:COELHONexus:BD:Entity {
             book_id: $book_id, agentic_run_id: $agentic_run_id,
@@ -172,12 +179,25 @@ async def _retrieve_ingestion_graph(
                AND relationship.agentic_run_id = $agentic_run_id
                AND relationship.processed_book_revision = $revision)
         WITH node,
-             collect(DISTINCT CASE WHEN relationship IS NULL THEN null ELSE {
-                 type: type(relationship), kind: relationship.kind,
-                 source: startNode(relationship).name, target: endNode(relationship).name,
-                 citations: relationship.citations, evidence: relationship.evidence,
-                 page_numbers: relationship.processed_page_numbers
-             } END)[..4] AS relationships
+             collect(DISTINCT CASE
+                 WHEN relationship IS NULL THEN null
+                 WHEN (
+                     size($relationship_terms) = 0
+                     OR any(term IN $relationship_terms WHERE
+                         toLower(coalesce(relationship.kind, '')) CONTAINS term
+                         OR toLower(type(relationship)) CONTAINS term
+                     )
+                 ) AND (
+                     $relationship_direction = 'either'
+                     OR ($relationship_direction = 'outgoing' AND startNode(relationship).id = node.id)
+                     OR ($relationship_direction = 'incoming' AND endNode(relationship).id = node.id)
+                 ) THEN {
+                     type: type(relationship), kind: relationship.kind,
+                     source: startNode(relationship).name, target: endNode(relationship).name,
+                     citations: relationship.citations, evidence: relationship.evidence,
+                     page_numbers: relationship.processed_page_numbers
+                 }
+             ELSE null END)[..4] AS relationships
         OPTIONAL MATCH (evidence_source:COELHONexus:BD:Entity)-[:BD_HAS_EVIDENCE]->
                        (graph_evidence:COELHONexus:BD:GraphEvidence)-[:BD_EVIDENCE_TARGET]->
                        (evidence_target:COELHONexus:BD:Entity)
@@ -218,6 +238,9 @@ async def _retrieve_ingestion_graph(
             agentic_run_id = index["agentic_run_id"],
             revision = index["processed_book_revision"],
             terms = terms,
+            entity_types = entity_types,
+            relationship_terms = relationship_terms,
+            relationship_direction = intent.relationship_direction,
             limit = top_k,
         )
         rows = await result.data()
@@ -316,6 +339,7 @@ async def retrieve_source(
     query: str,
     index: dict[str, Any],
     top_k: int = params.TOP_K,
+    neo4j_intent: schemas.Neo4jQueryIntent | None = None,
 ) -> list[dict[str, Any]]:
     """Query one local store using the supplied immutable index snapshot."""
     if source == "elasticsearch":
@@ -324,6 +348,10 @@ async def retrieve_source(
         return await _retrieve_ingestion_vectors(book_id, query, index, top_k)
     if source == "neo4j":
         return await _retrieve_ingestion_graph(
-            book_id, query, index, min(top_k, params.GRAPH_TOP_K),
+            book_id,
+            query,
+            index,
+            min(top_k, params.GRAPH_TOP_K),
+            neo4j_intent,
         )
     raise ValueError(f"Unsupported BD retrieval source: {source}")

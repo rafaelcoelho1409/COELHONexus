@@ -41,21 +41,8 @@ def distill_graph(checkpointer: Any | None = None):
     )
     # Subgraph
     workflow.add_node("book_retrieval", subgraphs.book_retrieval.graphs.book_retrieval_graph())
-    workflow.add_node(
-        "synthesize_book",
-        nodes.distill.book_distillation.main.synthesize_book.node.synthesize_book,
-        retry_policy = provider_retry_policy,
-    )
-    workflow.add_node(
-        "research_context",
-        nodes.distill.book_distillation.main.research_context.node.research_context,
-        retry_policy = provider_retry_policy,
-    )
-    workflow.add_node(
-        "write_decision_brief",
-        nodes.distill.book_distillation.main.write_decision_brief.node.write_decision_brief,
-        retry_policy = provider_retry_policy,
-    )
+    # Subgraph
+    workflow.add_node("book_report", subgraphs.book_report.graphs.book_report_graph())
     workflow.add_node(
         "publish_report",
         nodes.distill.book_distillation.main.publish_report.node.publish_report,
@@ -74,16 +61,12 @@ def distill_graph(checkpointer: Any | None = None):
         [
             "build_chapter_visuals",
             "book_retrieval",
-            "synthesize_book",
-            "research_context",
-            "write_decision_brief",
+            "book_report",
         ],
     )
-    workflow.add_edge("book_retrieval", "synthesize_book")
-    workflow.add_edge("synthesize_book", "research_context")
-    workflow.add_edge("research_context", "write_decision_brief")
+    workflow.add_edge("book_retrieval", "book_report")
     workflow.add_edge(
-        ["build_chapter_visuals", "write_decision_brief"],
+        ["build_chapter_visuals", "book_report"],
         "publish_report",
     )
     workflow.add_edge("publish_report", END)

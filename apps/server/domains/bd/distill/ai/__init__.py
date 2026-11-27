@@ -13,6 +13,7 @@ from . import (
     service,
     synthesize,
     task,
+    dispatch,
     versions,
 )
 
@@ -30,5 +31,6 @@ __all__ = [
     "service",
     "synthesize",
     "task",
+    "dispatch",
     "versions",
 ]

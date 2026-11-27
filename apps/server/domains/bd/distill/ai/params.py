@@ -86,9 +86,7 @@ LANGGRAPH_NODES = (
     PARALLEL_DISPATCH_NODE,
     "build_chapter_visuals",
     "book_retrieval",
-    "synthesize_book",
-    "research_context",
-    "write_decision_brief",
+    "book_report",
     "publish_report",
 )
 LANGGRAPH_EDGES = (
@@ -96,19 +94,16 @@ LANGGRAPH_EDGES = (
     ("chapter_guides", PARALLEL_DISPATCH_NODE),
     (PARALLEL_DISPATCH_NODE, "build_chapter_visuals"),
     (PARALLEL_DISPATCH_NODE, "book_retrieval"),
-    (PARALLEL_DISPATCH_NODE, "synthesize_book"),
-    (PARALLEL_DISPATCH_NODE, "research_context"),
-    (PARALLEL_DISPATCH_NODE, "write_decision_brief"),
-    ("book_retrieval", "synthesize_book"),
-    ("synthesize_book", "research_context"),
-    ("research_context", "write_decision_brief"),
+    (PARALLEL_DISPATCH_NODE, "book_report"),
+    ("book_retrieval", "book_report"),
+    ("book_report", "publish_report"),
     ("build_chapter_visuals", "publish_report"),
-    ("write_decision_brief", "publish_report"),
 )
 SUBGRAPH_NODE_MEMBERS = {
     "unit_extraction": ("prepare_units", "extract_unit", "verify_unit"),
     "chapter_guides": ("prepare_chapters", "synthesize_chapter", "review_chapter_coverage"),
     "book_retrieval": ("prepare_retrieval", *RETRIEVAL_SOURCE_NODES, "fuse_evidence"),
+    "book_report": ("synthesize_book", "research_context", "write_decision_brief"),
 }
 SUBGRAPH_BY_GRAPH_NODE = {
     graph_node: subgraph

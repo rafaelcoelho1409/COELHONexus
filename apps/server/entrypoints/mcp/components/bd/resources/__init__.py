@@ -1,7 +1,7 @@
-"""FastMCP resources exposing bounded BD run and index snapshots."""
+"""FastMCP resources exposing bounded BD workflow and retrieval context."""
 
 from __future__ import annotations
 
-from . import ingestion, registry
+from . import distill, ingestion, registry
 
-__all__ = ["ingestion", "registry"]
+__all__ = ["distill", "ingestion", "registry"]
