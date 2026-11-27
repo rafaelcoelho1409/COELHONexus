@@ -31,6 +31,7 @@ def run_summary(manifest: dict) -> schemas.DistillRunSummary:
         updated_at = manifest["updated_at"],
         finished_at = manifest.get("finished_at"),
         error = manifest.get("error"),
+        failure = manifest.get("failure"),
     )
 
 

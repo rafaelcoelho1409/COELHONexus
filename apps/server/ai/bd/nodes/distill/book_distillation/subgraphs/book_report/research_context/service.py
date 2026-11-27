@@ -83,7 +83,7 @@ async def _write_research_context(
                     }, config = {
                         "callbacks": [domains.settings.llm_counter.service.LLMCounterCallback()],
                     }, context = search_session),
-                    attempts = domains.bd.distill.ai.params.AGENT_CALL_ATTEMPTS,
+                    attempts = domains.bd.distill.ai.params.OPTIONAL_RESEARCH_PROVIDER_ATTEMPTS,
                     wait_base_s = domains.bd.distill.ai.params.AGENT_CALL_RETRY_WAIT_BASE_S,
                 )
             analysis = domains.bd.distill.ai.domain.structured_model_from_agent_result(

@@ -536,6 +536,37 @@ def graph_identity(state: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def failure_context(
+    error: Exception,
+    progress: Mapping[str, Any],
+    *,
+    provider_kind: str,
+    failed_at: float,
+) -> dict[str, Any]:
+    """Capture safe node/provider diagnostics without persisting exception bodies."""
+    node_status = progress.get("node_status")
+    node_status = node_status if isinstance(node_status, Mapping) else {}
+    node = progress.get("current_node")
+    failed_nodes = [name for name, status in node_status.items() if status == "failed"]
+    if failed_nodes:
+        node = node if node in failed_nodes else failed_nodes[-1]
+    task = progress.get("current_task") if progress.get("current_node") == node else None
+    active_tasks = progress.get("active_tasks")
+    if not isinstance(task, str) and isinstance(active_tasks, Mapping) and isinstance(node, str):
+        task = active_tasks.get(node)
+    status_code = getattr(error, "status_code", None)
+    if type(status_code) is not int or not 100 <= status_code <= 599:
+        status_code = None
+    return {
+        "node": node[:100] if isinstance(node, str) else None,
+        "task": task[:240] if isinstance(task, str) else None,
+        "error_type": type(error).__name__[:120],
+        "provider_kind": provider_kind,
+        "status_code": status_code,
+        "failed_at": failed_at,
+    }
+
+
 def stable_id(*parts: str) -> str:
     return hashlib.sha256("\0".join(parts).encode("utf-8")).hexdigest()[:24]
 

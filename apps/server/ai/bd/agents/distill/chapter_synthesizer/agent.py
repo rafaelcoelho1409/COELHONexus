@@ -18,7 +18,7 @@ from langchain_openai import ChatOpenAI
 
 
 def chapter_synthesizer(model = None):
-    """Build the configured DeepAgent for a concise chapter learning guide."""
+    """Build the configured DeepAgent for a source-grounded chapter learning guide."""
     if model is None:
         model = domains.settings.chat.service.build_chat_model(
             timeout_s = config.MODEL.timeout_s,
@@ -58,17 +58,20 @@ def chapter_synthesizer(model = None):
         skills = [skills.domain.source_for("distill_chapter_synthesizer")],
         permissions = [
             FilesystemPermission(
-                operations = ["read"], 
-            paths = ["/skills/**"], 
-            mode = "allow"),
+                operations = ["read"],
+                paths = ["/skills/**"],
+                mode = "allow",
+            ),
             FilesystemPermission(
-                operations = ["read"], 
-                paths = ["/**"], 
-                mode = "deny"),
+                operations = ["read"],
+                paths = ["/**"],
+                mode = "deny",
+            ),
             FilesystemPermission(
-                operations = ["write"], 
-                paths = ["/**"], 
-                mode = "deny"),
+                operations = ["write"],
+                paths = ["/**"],
+                mode = "deny",
+            ),
         ],
         backend = StateBackend(),
         name = "bd_chapter_synthesizer",

@@ -66,13 +66,27 @@ async def query_schema() -> dict[str, Any]:
         infra.elasticsearch.keys.INDEX_BD_RAG_PASSAGES: infra.elasticsearch.schemas.BD_RAG_PASSAGES_MAPPING["mappings"],
     }
     indices: dict[str, Any] = {}
-    client = infra.elasticsearch.service.get_es()
+    live_mapping_count = 0
+    try:
+        client = infra.elasticsearch.service.get_es()
+    except Exception as error:  # noqa: BLE001 - return declared mappings when the client is unavailable.
+        logger.debug(f"[bd:query:schema:elasticsearch] client lookup failed: {error}")
+        return {
+            "indices": {
+                name: {"mappings": mapping, "doc_count": None}
+                for name, mapping in mappings.items()
+            },
+            "live_schema_available": False,
+            "live_data_available": False,
+            "live_mapping_count": 0,
+        }
     for name in params.ELASTICSEARCH_INDEX_NAMES:
         mapping = mappings[name]
         doc_count = None
         try:
             live = await client.indices.get_mapping(index = name)
             mapping = (live.get(name) or {}).get("mappings") or mapping
+            live_mapping_count += 1
         except Exception as error:  # noqa: BLE001 - keep the declared mapping if ES is unavailable.
             logger.debug(f"[bd:query:schema:elasticsearch] mapping lookup failed for {name}: {error}")
         try:
@@ -81,7 +95,15 @@ async def query_schema() -> dict[str, Any]:
         except Exception as error:  # noqa: BLE001 - schema remains useful when counts are unavailable.
             logger.debug(f"[bd:query:schema:elasticsearch] count lookup failed for {name}: {error}")
         indices[name] = {"mappings": mapping, "doc_count": doc_count}
-    return {"indices": indices}
+    return {
+        "indices": indices,
+        "live_schema_available": live_mapping_count > 0,
+        "live_data_available": any(
+            isinstance(index.get("doc_count"), int) and index["doc_count"] > 0
+            for index in indices.values()
+        ),
+        "live_mapping_count": live_mapping_count,
+    }
 
 
 async def validate_query(body_text: str) -> tuple[bool, str | None]:

@@ -2,7 +2,7 @@
 from __future__ import annotations
 import domains
 from . import params
-from ...... import graphs, tools
+from ....... import graphs, tools
 
 import asyncio
 import time
@@ -14,20 +14,19 @@ async def search_external_evidence(
     state: dict,
     runtime: Runtime[graphs.ask.adaptive.entities.AskContext],
 ) -> dict:
-    """Search one explicit query and convert valid results to cited evidence records."""
-    documents = list(state.get("documents") or [])
-    sources = list(state.get("retrieval_sources") or [])
+    """Search one explicit query and return source-owned, cited evidence records."""
     if not state.get("use_external_search"):
         return {"external_search_status": "not_requested"}
 
     prior_status = state.get("external_search_status")
     cached_external = list(state.get("external_documents") or [])
     if prior_status and prior_status != "not_requested":
-        combined = _combine_documents(documents, cached_external)
         return {
-            "documents": combined,
-            "document_count": len(combined),
-            "retrieval_sources": sorted(set(sources) | ({"external_search"} if cached_external else set())),
+            "external_search_status": prior_status,
+            "external_search_provider": state.get("external_search_provider"),
+            "external_search_query": state.get("external_search_query"),
+            "external_search_error": state.get("external_search_error"),
+            "external_documents": cached_external,
         }
 
     query = " ".join(str(state.get("external_search_query") or state.get("question") or "").split())
@@ -43,7 +42,10 @@ async def search_external_evidence(
             "external_search_error": type(error).__name__,
         }
     if connection is None:
-        return {"external_search_status": "unavailable"}
+        return {
+            "external_search_status": "unavailable",
+            "external_search_error": "SearchConnectionUnavailable",
+        }
 
     client = domains.settings.mcp.service.build_langchain_mcp_adapter(
         connection,
@@ -148,23 +150,9 @@ async def search_external_evidence(
             "citation": citation,
         })
 
-    combined = _combine_documents(documents, external_documents)
     return {
-        "documents": combined,
-        "document_count": len(combined),
-        "retrieval_sources": sorted(set(sources) | ({"external_search"} if external_documents else set())),
         "external_search_status": "complete" if external_documents else "no_results",
         "external_search_provider": connection.provider_id,
         "external_search_query": query,
         "external_documents": external_documents,
     }
-
-
-def _combine_documents(documents: list[dict], external_documents: list[dict]) -> list[dict]:
-    """Keep a bounded mixed evidence set while reserving room for external sources."""
-    book_documents = documents[:12] if external_documents else documents[:20]
-    unique = {str(item.get("id")): item for item in book_documents if item.get("id")}
-    for item in external_documents:
-        if item.get("id"):
-            unique.setdefault(str(item["id"]), item)
-    return list(unique.values())[:20]

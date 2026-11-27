@@ -1,6 +1,7 @@
 """Pure query response and read-safety helpers for BD retrieval stores."""
 from __future__ import annotations
 
+import hashlib
 import json
 from typing import Any
 
@@ -29,6 +30,160 @@ def raw_response(
         "total": total,
         "hits": list(hits or []),
     }
+
+
+def schema_fingerprint(schema: dict[str, Any]) -> str:
+    """Return a stable identifier for a backend schema snapshot."""
+    encoded = json.dumps(
+        schema,
+        ensure_ascii = False,
+        sort_keys = True,
+        separators = (",", ":"),
+        default = str,
+    )
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def bound_raw_response(response: dict[str, Any]) -> dict[str, Any]:
+    """Bound query output size while preserving the HTTP response contract."""
+    bounded = dict(response)
+    bounded["backend"] = str(bounded.get("backend") or "")[:64]
+    bounded["app"] = params.APP_BD
+    bounded["ok"] = bool(bounded.get("ok"))
+    bounded["error"] = (
+        str(bounded["error"])[:500]
+        if bounded.get("error") is not None
+        else None
+    )
+    try:
+        bounded["took_ms"] = max(0, int(bounded.get("took_ms") or 0))
+    except (TypeError, ValueError):
+        bounded["took_ms"] = 0
+    total = bounded.get("total")
+    bounded["total"] = max(0, total) if isinstance(total, int) else None
+    source_hits = bounded.get("hits")
+    if not isinstance(source_hits, list):
+        source_hits = []
+    truncated = len(source_hits) > params.MAX_QUERY_RESULT_HITS
+    safe_hits = []
+    for hit in source_hits[:params.MAX_QUERY_RESULT_HITS]:
+        safe_hit, hit_truncated = _bound_json_value(hit)
+        truncated = truncated or hit_truncated
+        safe_hits.append(safe_hit)
+    bounded["hits"] = safe_hits
+
+    notes = bounded.get("notes")
+    if not isinstance(notes, list):
+        notes = []
+    bounded["notes"] = [str(note)[:500] for note in notes[:20]]
+    if truncated:
+        bounded["notes"].append(
+            "Some query output was truncated to keep the response within safe limits."
+        )
+
+    while _serialized_size(bounded) > params.MAX_QUERY_RESULT_BYTES and bounded["hits"]:
+        bounded["hits"].pop()
+        truncated = True
+    if truncated and not any("truncated" in note.lower() for note in bounded["notes"]):
+        bounded["notes"].append(
+            "Some query output was truncated to keep the response within safe limits."
+        )
+
+    if _serialized_size(bounded) > params.MAX_QUERY_RESULT_BYTES:
+        bounded = {
+            "backend": bounded["backend"],
+            "app": params.APP_BD,
+            "ok": bounded["ok"],
+            "error": str(bounded.get("error") or "Query output exceeded the response limit.")[:500],
+            "notes": ["Query output was truncated to keep the response within safe limits."],
+            "took_ms": bounded["took_ms"],
+            "total": bounded["total"],
+            "hits": [],
+        }
+    return bounded
+
+
+def _bound_json_value(
+    value: Any,
+    *,
+    depth: int = 0,
+    remaining_nodes: list[int] | None = None,
+) -> tuple[Any, bool]:
+    """Limit deeply nested or exceptionally large values from indexed data."""
+    if remaining_nodes is None:
+        remaining_nodes = [params.MAX_QUERY_OUTPUT_NODES_PER_HIT]
+    if remaining_nodes[0] <= 0:
+        return "[truncated]", True
+    remaining_nodes[0] -= 1
+    if isinstance(value, str):
+        if len(value) > params.MAX_QUERY_OUTPUT_STRING_CHARS:
+            return value[:params.MAX_QUERY_OUTPUT_STRING_CHARS] + "…", True
+        return value, False
+    if depth >= params.MAX_QUERY_OUTPUT_DEPTH:
+        return str(value)[:500], True
+    if isinstance(value, dict):
+        bounded: dict[str, Any] = {}
+        truncated = len(value) > 100
+        for index, (key, item) in enumerate(value.items()):
+            if index >= 100:
+                break
+            bounded_item, item_truncated = _bound_json_value(
+                item,
+                depth = depth + 1,
+                remaining_nodes = remaining_nodes,
+            )
+            bounded[str(key)[:160]] = bounded_item
+            truncated = truncated or item_truncated
+            if remaining_nodes[0] <= 0:
+                truncated = True
+                break
+        return bounded, truncated
+    if isinstance(value, (list, tuple, set)):
+        bounded_items = []
+        truncated = len(value) > 100
+        for index, item in enumerate(value):
+            if index >= 100:
+                break
+            bounded_item, item_truncated = _bound_json_value(
+                item,
+                depth = depth + 1,
+                remaining_nodes = remaining_nodes,
+            )
+            bounded_items.append(bounded_item)
+            truncated = truncated or item_truncated
+            if remaining_nodes[0] <= 0:
+                truncated = True
+                break
+        return bounded_items, truncated
+    if hasattr(value, "model_dump"):
+        return _bound_json_value(
+            value.model_dump(mode = "json"),
+            depth = depth + 1,
+            remaining_nodes = remaining_nodes,
+        )
+    if hasattr(value, "dict"):
+        return _bound_json_value(
+            value.dict(),
+            depth = depth + 1,
+            remaining_nodes = remaining_nodes,
+        )
+    if hasattr(value, "value"):
+        return _bound_json_value(
+            value.value,
+            depth = depth + 1,
+            remaining_nodes = remaining_nodes,
+        )
+    safe_value = json_safe(value)
+    if isinstance(safe_value, str) and len(safe_value) > params.MAX_QUERY_OUTPUT_STRING_CHARS:
+        return safe_value[:params.MAX_QUERY_OUTPUT_STRING_CHARS] + "…", True
+    return safe_value, False
+
+
+def _serialized_size(value: dict[str, Any]) -> int:
+    return len(
+        json.dumps(value, ensure_ascii = False, separators = (",", ":"), default = str)
+        .encode("utf-8")
+    )
 
 
 def check_query_body(backend: str, body: str) -> tuple[bool, str | None]:
@@ -84,6 +239,10 @@ def assert_cypher_readonly(statement: str) -> None:
     limit_values = patterns.CYPHER_LIMIT_VALUE.findall(scan)
     if not limit_values:
         raise errors.QueryNotAllowed("Neo4j queries must include an explicit LIMIT.")
+    if any(int(value) > params.NEO4J_MAX_LIMIT for value in limit_values):
+        raise errors.QueryNotAllowed(
+            f"Neo4j `LIMIT` must be <= {params.NEO4J_MAX_LIMIT}.",
+        )
 
     tokens = patterns.CYPHER_IDENTIFIER.findall(scan)
     bad = sorted({token for token in tokens if token in params.CYPHER_WRITE_KEYWORDS})
@@ -132,6 +291,8 @@ def parse_elasticsearch_body(text: str) -> entities.ParsedElasticsearchBody:
             raise errors.QueryNotAllowed(f"`size` must be an integer, got {body['size']!r}.") from error
         if size < 0:
             raise errors.QueryNotAllowed("`size` must be >= 0.")
+        if size > params.ES_MAX_SIZE:
+            raise errors.QueryNotAllowed(f"`size` must be <= {params.ES_MAX_SIZE}.")
 
     return entities.ParsedElasticsearchBody(body = body, synth_size = synth_size)
 
@@ -177,6 +338,8 @@ def parse_qdrant_body(text: str) -> entities.ParsedQdrantOperation:
             raise errors.QueryNotAllowed(f"`limit` must be an integer, got {limit!r}.") from error
         if limit < 1:
             raise errors.QueryNotAllowed("`limit` must be >= 1.")
+        if limit > params.QDRANT_MAX_LIMIT:
+            raise errors.QueryNotAllowed(f"`limit` must be <= {params.QDRANT_MAX_LIMIT}.")
         body["limit"] = limit
 
     return entities.ParsedQdrantOperation(operation = operation, body = body)
@@ -271,6 +434,6 @@ def qdrant_hit(point: Any) -> dict[str, Any]:
         "raw": {
             "id": str(point_id),
             "score": score,
-            "payload": json_safe(payload),
+            "payload": payload,
         },
     }

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+
 ROTATOR_TASK = "bd_distill_chapter_synthesizer"
 MAX_MODEL_CALLS = 3
 DEFAULT_TOOL_NAMES = frozenset({

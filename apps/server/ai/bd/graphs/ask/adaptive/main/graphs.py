@@ -26,10 +26,6 @@ def adaptive_ask_graph():
         subgraphs.book_retrieval.graphs.book_retrieval_graph(),
     )
     workflow.add_node(
-        "search_external",
-        nodes.ask.adaptive.main.search_external.node.search_external_evidence,
-    )
-    workflow.add_node(
         "grade_documents",
         nodes.ask.adaptive.main.grade_documents.node.grade_evidence,
     )
@@ -64,15 +60,7 @@ def adaptive_ask_graph():
         },
     )
     workflow.add_edge("direct_answer", END)
-    workflow.add_conditional_edges(
-        "retrieve_evidence",
-        nodes.ask.adaptive.main.search_external.node.route_after_book_retrieval,
-        {
-            "search": "search_external",
-            "skip": "grade_documents",
-        },
-    )
-    workflow.add_edge("search_external", "grade_documents")
+    workflow.add_edge("retrieve_evidence", "grade_documents")
     workflow.add_conditional_edges(
         "grade_documents",
         nodes.ask.adaptive.main.grade_documents.node.after_grade,

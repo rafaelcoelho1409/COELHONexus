@@ -9,7 +9,6 @@ from . import (
     grade_documents,
     plan_research,
     rewrite_query,
-    search_external,
 )
 
 __all__ = [
@@ -20,5 +19,4 @@ __all__ = [
     "grade_documents",
     "plan_research",
     "rewrite_query",
-    "search_external",
 ]

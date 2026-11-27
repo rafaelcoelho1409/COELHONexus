@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import re
+import time
+from email.utils import parsedate_to_datetime
 from urllib.parse import urlsplit
 
 import httpx
@@ -64,9 +66,36 @@ def pool_recovered(cooling: int, pool: int, max_frac: float) -> bool:
     return pool > 0 and cooling <= max_frac * pool
 
 
+def unsettled_pool_error(settled: dict, *, max_cooling_frac: float) -> errors.ChatPoolUnsettledError | None:
+    """Return a typed failure when the health probe hit its cap with a degraded pool."""
+    cooling = settled.get("cooling")
+    pool = settled.get("pool")
+    if (
+        settled.get("reason") != "cap_reached"
+        or type(cooling) is not int
+        or type(pool) is not int
+        or pool_recovered(cooling, pool, max_cooling_frac)
+    ):
+        return None
+    return errors.ChatPoolUnsettledError(
+        waited_s = float(settled.get("waited_s") or 0.0),
+        cooling = cooling,
+        pool = pool,
+    )
+
+
 def classify_error(exc: Exception) -> str:
     if not is_provider_error(exc):
         return "unknown"
+    status_code = getattr(exc, "status_code", None)
+    if status_code == 429:
+        return "rate_limit"
+    if status_code == 408:
+        return "timeout"
+    if status_code in (401, 403):
+        return "auth_error"
+    if isinstance(status_code, int) and 500 <= status_code <= 599:
+        return "server_error"
     name = type(exc).__name__.lower()
     msg = str(exc).lower()
     if "ratelimit" in name or "429" in msg or "rate limit" in msg:
@@ -80,6 +109,26 @@ def classify_error(exc: Exception) -> str:
     if "5" in msg and ("server" in msg or "internal" in msg or "bad gateway" in msg):
         return "server_error"
     return "unknown"
+
+
+def retry_after_s(exc: BaseException, *, now_s: float | None = None) -> float | None:
+    """Read an HTTP Retry-After delta or date from a provider response, if present."""
+    headers = getattr(getattr(exc, "response", None), "headers", None)
+    if headers is None:
+        return None
+    value = headers.get("retry-after")
+    if value is None:
+        return None
+    try:
+        return max(0.0, float(value))
+    except (TypeError, ValueError):
+        try:
+            retry_at = parsedate_to_datetime(str(value))
+            if retry_at.tzinfo is None:
+                return None
+            return max(0.0, retry_at.timestamp() - (time.time() if now_s is None else now_s))
+        except (TypeError, ValueError, OverflowError):
+            return None
 
 
 def is_provider_error(exc: Exception) -> bool:

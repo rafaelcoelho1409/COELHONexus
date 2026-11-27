@@ -12,8 +12,8 @@ SOTA Sept 2026 optimizations (kept from the previous adapter):
   shared by `ChatOpenAI` instances created on the same event loop. Celery
   starts a fresh event loop per task, so pools are isolated per loop and
   explicitly closed at task completion rather than reused across loops.
-- MinIO I/O decoupled from the LLM semaphore (see doc_distill service)
-  — the semaphore gates only the network-bound LLM hop.
+- A Redis-backed admission gate shared by server and Celery workers bounds
+  concurrent provider requests without holding a slot during object-storage I/O.
 
 Every text/structured LLM call in this module goes through real
 LangChain `ChatOpenAI.ainvoke()` — never a raw provider SDK — so every
@@ -22,19 +22,24 @@ caller gets a genuine `AIMessage` (`.content`, `.usage_metadata`,
 """
 from __future__ import annotations
 import domains
+import infra
 from . import domain, entities, errors, keys, params
 
 import asyncio
 import logging
 import os
+import random
 import re
+import threading
 import time
 from collections.abc import Awaitable, Callable
 from typing import TypeVar
 import weakref
+from uuid import uuid4
 
 import httpx
-from langchain_core.messages import HumanMessage
+from langchain_core.callbacks import AsyncCallbackHandler
+from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, ValidationError
 
@@ -43,6 +48,218 @@ logger = logging.getLogger(__name__)
 
 _SchemaT = TypeVar("_SchemaT", bound=BaseModel)
 _ResultT = TypeVar("_ResultT")
+
+
+def _chat_error(error: Exception) -> errors.ChatError:
+    """Wrap provider failures without discarding response headers or status."""
+    status_code = getattr(error, "status_code", None)
+    if type(status_code) is not int:
+        status_code = None
+    return errors.ChatError(
+        f"{type(error).__name__}: {error}",
+        status_code = status_code,
+        response = getattr(error, "response", None),
+    )
+
+
+_LOCAL_ADMISSION_SEMAPHORES: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+_LOCAL_ADMISSION_LOCK = threading.Lock()
+
+
+def _local_admission_semaphore() -> asyncio.Semaphore:
+    """Per-event-loop fallback used only when Redis admission is not configured."""
+    loop = asyncio.get_running_loop()
+    with _LOCAL_ADMISSION_LOCK:
+        semaphore = _LOCAL_ADMISSION_SEMAPHORES.get(loop)
+        if semaphore is None:
+            semaphore = asyncio.Semaphore(params.LLM_ADMISSION_MAX_INFLIGHT)
+            _LOCAL_ADMISSION_SEMAPHORES[loop] = semaphore
+        return semaphore
+
+
+class LLMAdmissionCallback(AsyncCallbackHandler):
+    """Bound concurrent provider requests across processes with Redis leases."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.raise_error = True
+        self._leases: dict[Any, dict[str, Any]] = {}
+
+    async def on_chat_model_start(self, serialized: dict, messages: list, *, run_id: Any, **kwargs: Any) -> None:
+        await self._acquire(run_id)
+
+    async def on_llm_start(self, serialized: dict, prompts: list, *, run_id: Any, **kwargs: Any) -> None:
+        await self._acquire(run_id)
+
+    async def _acquire(self, run_id: Any) -> None:
+        if run_id in self._leases:
+            return
+        started_at = time.monotonic()
+        if not infra.redis.service.is_configured():
+            semaphore = _local_admission_semaphore()
+            try:
+                await asyncio.wait_for(
+                    semaphore.acquire(),
+                    timeout = params.LLM_ADMISSION_QUEUE_TIMEOUT_S,
+                )
+            except asyncio.TimeoutError as error:
+                raise errors.ChatAdmissionTimeoutError(
+                    f"LLM admission queue remained full for {params.LLM_ADMISSION_QUEUE_TIMEOUT_S:.0f}s"
+                ) from error
+            self._leases[run_id] = {
+                "kind": "local",
+                "semaphore": semaphore,
+                "started_at": started_at,
+                "admitted_at": time.monotonic(),
+                "wait_s": time.monotonic() - started_at,
+            }
+            return
+
+        redis = infra.redis.service.new_redis()
+        owner = f"{os.getpid()}:{uuid4()}"
+        deadline = started_at + params.LLM_ADMISSION_QUEUE_TIMEOUT_S
+        try:
+            while True:
+                for slot in range(params.LLM_ADMISSION_MAX_INFLIGHT):
+                    key = keys.admission_slot(slot)
+                    acquired, _ = await infra.redis.service.try_lock(
+                        redis,
+                        key,
+                        owner,
+                        params.LLM_ADMISSION_LEASE_S,
+                    )
+                    if acquired:
+                        admitted_at = time.monotonic()
+                        renewal = asyncio.create_task(self._renew(redis, key, owner, slot))
+                        self._leases[run_id] = {
+                            "kind": "redis",
+                            "redis": redis,
+                            "key": key,
+                            "owner": owner,
+                            "renewal": renewal,
+                            "slot": slot,
+                            "started_at": started_at,
+                            "admitted_at": admitted_at,
+                            "wait_s": admitted_at - started_at,
+                        }
+                        return
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    logger.warning(
+                        "[llm-admission] queue timeout max_inflight=%s waited_s=%.1f",
+                        params.LLM_ADMISSION_MAX_INFLIGHT,
+                        time.monotonic() - started_at,
+                    )
+                    raise errors.ChatAdmissionTimeoutError(
+                        f"LLM admission queue remained full for {params.LLM_ADMISSION_QUEUE_TIMEOUT_S:.0f}s"
+                    )
+                poll_cap = min(params.LLM_ADMISSION_POLL_S, remaining)
+                await asyncio.sleep(random.uniform(poll_cap / 2, poll_cap))
+        except BaseException:
+            await redis.aclose()
+            raise
+
+    async def _renew(self, redis: Any, key: str, owner: str, slot: int) -> None:
+        try:
+            while True:
+                await asyncio.sleep(params.LLM_ADMISSION_LEASE_RENEW_S)
+                if not await infra.redis.service.extend_if_owner(
+                    redis, key, owner, params.LLM_ADMISSION_LEASE_S,
+                ):
+                    logger.error("[llm-admission] lost provider request lease slot=%s", slot)
+                    return
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            logger.error(
+                "[llm-admission] lease renewal failed slot=%s error_type=%s",
+                slot,
+                type(error).__name__,
+            )
+
+    async def on_llm_end(self, response: Any, *, run_id: Any, **kwargs: Any) -> None:
+        lease = self._leases.get(run_id)
+        try:
+            if lease is not None:
+                usage = domains.settings.llm_counter.domain.extract_usage(response)
+                metadata = _response_metadata(response)
+                headers = metadata.get("headers") or metadata.get("response_headers") or {}
+                request_id = headers.get("x-rotator-request-id") or metadata.get("request_id")
+                model = usage.model or metadata.get("model_name") or metadata.get("model")
+                logger.info(
+                    "[llm-call] completed run_id=%s rotator_request_id=%s configured_model=%s "
+                    "serving_model=%s admission_wait_s=%.3f latency_s=%.3f input_tokens=%s output_tokens=%s",
+                    run_id,
+                    request_id,
+                    ENDPOINT.model,
+                    model,
+                    lease["wait_s"],
+                    time.monotonic() - lease["admitted_at"],
+                    usage.tokens_in,
+                    usage.tokens_out,
+                )
+        except Exception as error:
+            logger.warning("[llm-call] completion telemetry failed error_type=%s", type(error).__name__)
+        finally:
+            await self._release(run_id)
+
+    async def on_llm_error(self, error: BaseException, *, run_id: Any, **kwargs: Any) -> None:
+        lease = self._leases.get(run_id)
+        try:
+            if lease is not None:
+                response = getattr(error, "response", None)
+                headers = getattr(response, "headers", {}) or {}
+                request_id = headers.get("x-rotator-request-id") or headers.get("x-request-id")
+                status = getattr(error, "status_code", None) or getattr(response, "status_code", None)
+                logger.warning(
+                    "[llm-call] failed run_id=%s rotator_request_id=%s configured_model=%s "
+                    "status=%s error_type=%s admission_wait_s=%.3f latency_s=%.3f",
+                    run_id,
+                    request_id,
+                    ENDPOINT.model,
+                    status,
+                    type(error).__name__,
+                    lease["wait_s"],
+                    time.monotonic() - lease["admitted_at"],
+                )
+        except Exception as telemetry_error:
+            logger.warning("[llm-call] failure telemetry failed error_type=%s", type(telemetry_error).__name__)
+        finally:
+            await self._release(run_id)
+
+    async def _release(self, run_id: Any) -> None:
+        lease = self._leases.pop(run_id, None)
+        if lease is None:
+            return
+        if lease["kind"] == "local":
+            lease["semaphore"].release()
+            return
+        renewal = lease["renewal"]
+        renewal.cancel()
+        await asyncio.gather(renewal, return_exceptions = True)
+        redis = lease["redis"]
+        try:
+            await infra.redis.service.release_if_owner(redis, lease["key"], lease["owner"])
+        except Exception as error:
+            logger.warning(
+                "[llm-admission] release failed slot=%s error_type=%s",
+                lease["slot"],
+                type(error).__name__,
+            )
+        finally:
+            try:
+                await redis.aclose()
+            except Exception as error:
+                logger.debug("[llm-admission] Redis close failed error_type=%s", type(error).__name__)
+
+
+def _response_metadata(response: Any) -> dict[str, Any]:
+    generations = getattr(response, "generations", None) or []
+    if not generations or not generations[0]:
+        return {}
+    message = getattr(generations[0][0], "message", None)
+    metadata = getattr(message, "response_metadata", None)
+    return metadata if isinstance(metadata, dict) else {}
 
 
 # ---------------------------------------------------------------------------
@@ -292,6 +509,7 @@ def build_chat_model(
         "model":             ENDPOINT.model,
         "temperature":       temperature if temperature is not None else params.DEFAULT_TEMPERATURE,
         "max_retries":       max_retries,
+        "callbacks":         [LLMAdmissionCallback()],
         "http_async_client": _get_shared_http_client(),
         "include_response_headers": True,   # response_metadata["headers"]: x-rotator-request-id for quality feedback
     }
@@ -328,11 +546,14 @@ async def resilient_ainvoke(
     *,
     attempts: int,
     wait_base_s: float,
+    max_wait_s: float = params.PROVIDER_RETRY_MAX_WAIT_S,
     accept: Callable[[_ResultT], bool] | None = None,
 ) -> _ResultT:
-    """Retry transient provider failures with linear backoff and optionally re-ask unusable answers."""
+    """Retry transient provider failures with bounded exponential jitter and Retry-After support."""
     if attempts < 1:
         raise ValueError("attempts must be at least one")
+    if wait_base_s < 0 or max_wait_s < 0:
+        raise ValueError("retry wait values must be non-negative")
 
     for attempt in range(1, attempts + 1):
         try:
@@ -340,7 +561,10 @@ async def resilient_ainvoke(
         except Exception as error:
             if attempt >= attempts or not _is_transient_provider_error(error):
                 raise
-            await asyncio.sleep(wait_base_s * attempt)
+            backoff_cap = min(max_wait_s, wait_base_s * (2 ** (attempt - 1)))
+            retry_after = domain.retry_after_s(error)
+            delay = max(random.uniform(0.0, backoff_cap), retry_after or 0.0)
+            await asyncio.sleep(min(max_wait_s, delay))
             continue
 
         if accept is None or accept(result) or attempt >= attempts:
@@ -429,9 +653,11 @@ async def chat_text_async(
                     f"chat_text_async hard backstop fired after "
                     f"{backstop_s:.0f}s (requested timeout_s={timeout_s})"
                 ) from e
+            except errors.ChatAdmissionTimeoutError:
+                raise
             except Exception as e:
                 # Preserve message for upstream domain.classify_error
-                raise errors.ChatError(f"{type(e).__name__}: {e}") from e
+                raise _chat_error(e) from e
 
             latency_s = float(time.monotonic() - t0)
             content = ai_message.content
@@ -498,16 +724,19 @@ async def chat_structured_async(
     prompt: str,
     schema: type[_SchemaT],
     *,
+    system_prompt: str | None = None,
     max_tokens: int = params.DEFAULT_MAX_TOKENS,
     temperature: float = params.DEFAULT_TEMPERATURE,
     timeout_s: float = params.DEFAULT_TIMEOUT_S,
     strict: bool = True,
+    method: str = "json_schema",
     rotator_task: str | None = None,
 ) -> tuple[_SchemaT, dict]:
     """Structured-output counterpart to `chat_text_async` — same endpoint
     resolution/pooling/backstop/spans/counter, decoded via LangChain's
     native `.with_structured_output()` instead of a hand-rolled
-    response_format dict + json_repair + manual `model_validate`.
+    response_format dict + json_repair + manual `model_validate`. Callers may
+    select a provider-compatible strategy and supply a separate system prompt.
 
     `strict=False` for schemas with a field carrying a Python default
     (e.g. checklist's `LLMVerdict.feedback: str = ""`) — OpenAI strict
@@ -524,11 +753,9 @@ async def chat_structured_async(
     (timeout, provider outage) propagates as `errors.ChatTimeoutError`/
     `errors.ChatError`, same as `chat_text_async`.
 
-    NOT a drop-in for every `response_format` call site: this assumes
-    the model honors `json_schema` mode and that no normalization step
-    must run on the raw dict first. Call sites that need normalization
-    or provider-compatibility repair should continue using
-    `chat_text_async` until verified safe for their schema."""
+    This is not a drop-in for every `response_format` call site: the selected
+    structured-output method must be supported by the configured endpoint, and
+    some callers need normalization on the raw response before validation."""
     _apply_endpoint()
 
     structured_model = build_chat_model(
@@ -536,13 +763,16 @@ async def chat_structured_async(
         max_tokens   = max_tokens,
         temperature  = temperature,
         rotator_task = rotator_task,
-    ).with_structured_output(schema, method="json_schema", strict=strict, include_raw=True)
+    ).with_structured_output(schema, method=method, strict=strict, include_raw=True)
 
     t0 = time.monotonic()
     backstop_s = (timeout_s or params.DEFAULT_TIMEOUT_S) + params.BACKSTOP_MARGIN_S
 
     async def _do_call():
-        return await structured_model.ainvoke([HumanMessage(content=prompt)])
+        messages = [HumanMessage(content=prompt)]
+        if system_prompt:
+            messages.insert(0, SystemMessage(content=system_prompt))
+        return await structured_model.ainvoke(messages)
 
     ai_message = None
     resp_model = ENDPOINT.model
@@ -567,8 +797,10 @@ async def chat_structured_async(
                 # it in ChatError sent it down the "provider outage" branch, so the
                 # repair never ran (deepagents lost 2 of 5 proposer samples that way).
                 raise
+            except errors.ChatAdmissionTimeoutError:
+                raise
             except Exception as e:
-                raise errors.ChatError(f"{type(e).__name__}: {e}") from e
+                raise _chat_error(e) from e
 
             ai_message    = result["raw"]
             parsed        = result["parsed"]

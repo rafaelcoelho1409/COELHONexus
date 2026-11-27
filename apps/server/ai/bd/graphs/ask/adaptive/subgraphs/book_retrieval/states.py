@@ -5,8 +5,18 @@ from typing import TypedDict
 
 
 class BookRetrievalState(TypedDict, total = False):
+    question: str
+    thread_id: str
+    turn_id: str
     queries: list[str]
     mode: str
+    use_external_search: bool
+    external_search_query: str
+    external_search_status: str
+    external_search_provider: str
+    external_search_error: str
+    external_documents: list[dict]
+    web_search_result: dict
     elasticsearch_results: list[dict]
     qdrant_results: list[dict]
     neo4j_results: list[dict]

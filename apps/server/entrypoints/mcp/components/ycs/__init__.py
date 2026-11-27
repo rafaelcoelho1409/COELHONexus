@@ -1,1 +1,4 @@
-"""Namespace reserved for MCP capabilities owned by the YCS domain."""
+"""FastMCP capabilities owned by the YCS domain."""
+from . import registry
+
+__all__ = ["registry"]

@@ -21,7 +21,7 @@ async def generate_query_stream(
     backend: str,
     user_prompt: str,
     previous: str,
-    request: Request,
+    request: Request | None = None,
 ) -> AsyncIterator[dict[str, str]]:
     """Draft a query from live schema and self-repair one rejected attempt."""
     yield {"data": json.dumps({"event": "start", "phase": "generate"})}
@@ -42,8 +42,10 @@ async def generate_query_stream(
 
             candidate = _response_text(backend, response)
             valid, error = await source.service.validate_query(backend, candidate, schema = schema)
+            attempts = 1
             if not valid:
                 yield {"data": json.dumps({"event": "repair", "error": error})}
+                attempts = 2
                 response = await ai.ycs.agents.query.service.generate_query(
                     backend = backend,
                     user_prompt = user_prompt,
@@ -56,7 +58,13 @@ async def generate_query_stream(
                 valid, error = await source.service.validate_query(backend, candidate, schema = schema)
 
             yield {"data": json.dumps({"event": "chunk", "data": candidate})}
-            yield {"data": json.dumps({"event": "done", "ok": valid, "final": candidate, "error": error})}
+            yield {"data": json.dumps({
+                "event": "done",
+                "ok": valid,
+                "final": candidate,
+                "error": error,
+                "attempts": attempts,
+            })}
         except Exception as error:  # noqa: BLE001 - provider failures are reported to the SSE client.
             logger.warning(f"[ycs:query:ai] generation failed: {type(error).__name__}: {error}")
             yield {"data": json.dumps({"event": "error", "error": f"{type(error).__name__}: {error}"})}

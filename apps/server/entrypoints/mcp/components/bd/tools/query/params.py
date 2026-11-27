@@ -1,0 +1,10 @@
+"""Bounds for BD Query MCP operations."""
+from __future__ import annotations
+
+MAX_PROMPT_CHARS = 4_000
+MAX_QUERY_CHARS = 100_000
+MAX_VALIDATION_ERROR_CHARS = 2_000
+SCHEMA_TIMEOUT_S = 60.0
+DRAFT_TIMEOUT_S = 110.0
+VALIDATE_TIMEOUT_S = 40.0
+RUN_TIMEOUT_S = 60.0

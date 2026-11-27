@@ -27,6 +27,12 @@ class DistillWorkerVersionMismatch(RuntimeError):
 def _failure_message(error: Exception) -> str:
     if isinstance(error, DistillWorkerVersionMismatch):
         return str(error)
+    if isinstance(error, domains.settings.chat.errors.ChatPoolUnsettledError):
+        return (
+            "Distill failed before chapter synthesis because the LLM routing pool remained degraded "
+            f"after {error.waited_s:.0f}s ({error.cooling}/{error.pool} deployments cooling down). "
+            "Completed work is saved; resume this run when the pool is healthy."
+        )
     provider_kind = domains.settings.chat.domain.classify_error(error)
     provider_reasons = {
         "timeout": "repeated LLM provider timeouts",
@@ -35,7 +41,12 @@ def _failure_message(error: Exception) -> str:
     }
     reason = provider_reasons.get(provider_kind)
     if reason:
-        return f"Distill failed after {reason}. Completed work is saved; resume this run to continue."
+        status_code = getattr(error, "status_code", None)
+        status_detail = f" (HTTP {status_code})" if type(status_code) is int else ""
+        return (
+            f"Distill failed after {reason}{status_detail}. "
+            "Completed work is saved; resume this run to continue."
+        )
     return f"Distill failed ({type(error).__name__}). Check worker logs for details."
 
 
@@ -108,6 +119,7 @@ def _mark_cancelled(manifest: dict[str, Any]) -> None:
     manifest["status"] = "cancelled"
     manifest["finished_at"] = max(time.time(), manifest["created_at"])
     manifest["error"] = None
+    manifest["failure"] = None
     manifest["progress"]["current_node"] = None
     manifest["progress"]["current_task"] = None
     manifest["progress"]["active_tasks"] = {}
@@ -491,6 +503,7 @@ async def queue_resume(book_id: str, run_id: str) -> dict[str, Any]:
         manifest["schema_version"] = versions.MANIFEST_SCHEMA_VERSION
         manifest["finished_at"] = None
         manifest["error"] = None
+        manifest["failure"] = None
         manifest["updated_at"] = time.time()
         manifest["progress"]["current_node"] = None
         manifest["progress"]["current_task"] = None
@@ -798,6 +811,12 @@ async def mark_failed(book_id: str, run_id: str, error: Exception) -> dict[str, 
     manifest["status"] = "failed"
     manifest["finished_at"] = max(time.time(), manifest["created_at"])
     manifest["error"] = _failure_message(error)
+    manifest["failure"] = domains.bd.distill.ai.domain.failure_context(
+        error,
+        manifest["progress"],
+        provider_kind = domains.settings.chat.domain.classify_error(error),
+        failed_at = manifest["finished_at"],
+    )
     manifest["progress"]["current_node"] = None
     manifest["progress"]["current_task"] = None
     manifest["progress"]["active_tasks"] = {}
@@ -885,7 +904,7 @@ async def mark_run_started(
         manifest = await read_run(book_id, run_id, storage = storage)
         if manifest is None:
             raise FileNotFoundError(f"Distill run {run_id} was not found")
-        if manifest["status"] in {"done", "cancelled"}:
+        if manifest["status"] in {"done", "failed", "cancelled"}:
             return manifest
         if manifest["status"] not in {"queued", "running"}:
             raise ValueError("only queued or running Distill runs can start")
@@ -896,6 +915,7 @@ async def mark_run_started(
         if was_queued:
             manifest["status"] = "running"
             manifest["error"] = None
+            manifest["failure"] = None
             manifest["finished_at"] = None
         if task_id_changed or was_queued:
             manifest = await _write_manifest(storage, manifest)
@@ -1054,7 +1074,7 @@ async def run_distill(
     qa_content = await storage.read_text(manifest["ingestion_ai_manifest_key"])
     if hashlib.sha256(qa_content.encode("utf-8")).hexdigest() != manifest["ingestion_ai_manifest_sha256"]:
         raise ValueError("the ingestion QA manifest changed after this Distill run was created")
-    if manifest.get("schema_version") in {"1.1", "1.2", "1.3", "1.4", "1.5", "1.6"}:
+    if manifest.get("schema_version") in {"1.1", "1.2", "1.3", "1.4", "1.5", "1.6", "1.7"}:
         selection_content = await storage.read_text(manifest["content_selection_key"])
         if hashlib.sha256(selection_content.encode("utf-8")).hexdigest() != manifest["content_selection_sha256"]:
             raise ValueError("the content-selection revision changed after this Distill run was created")
@@ -1070,7 +1090,7 @@ async def run_distill(
             )
         ):
             raise ValueError("the pinned content-selection revision does not match this Distill run")
-    if manifest.get("schema_version") in {"1.2", "1.3", "1.4", "1.5", "1.6"}:
+    if manifest.get("schema_version") in {"1.2", "1.3", "1.4", "1.5", "1.6", "1.7"}:
         processed_content = await storage.read_text(manifest["processed_book_key"])
         if hashlib.sha256(processed_content.encode("utf-8")).hexdigest() != manifest["processed_book_sha256"]:
             raise ValueError("the pinned processed-book manifest failed its integrity check")
@@ -1180,6 +1200,10 @@ async def run_distill(
                 node = event.get("node")
                 if isinstance(node, str) and node in current["node_status"] and status in {"running", "done", "failed"}:
                     current["node_status"][node] = status
+                    active_tasks = current.setdefault("active_tasks", {})
+                    failed_task = active_tasks.get(node)
+                    if failed_task is None and current.get("current_node") == node:
+                        failed_task = current.get("current_task")
                     if status == "failed":
                         manifest["resume_from_node"] = node
                     elif status == "done" and manifest.get("resume_from_node") == node:
@@ -1191,9 +1215,11 @@ async def run_distill(
                     else:
                         node_work_active.setdefault(node, set()).clear()
                         update_node_progress(node)
-                        active_tasks = current.setdefault("active_tasks", {})
                         active_tasks.pop(node, None)
-                        if current.get("current_node") == node:
+                        if status == "failed":
+                            current["current_node"] = node
+                            current["current_task"] = failed_task
+                        elif current.get("current_node") == node:
                             focus_node = next(reversed(active_tasks), None) if active_tasks else None
                             current["current_node"] = focus_node
                             current["current_task"] = active_tasks.get(focus_node) if focus_node else None
@@ -1597,6 +1623,7 @@ async def run_distill(
             replay_target_node = None,
             finished_at = max(time.time(), manifest["created_at"]),
             error = None,
+            failure = None,
             report_key = result["report_key"],
             report_sha256 = result["report_sha256"],
             html_key = result["html_key"],
@@ -1621,6 +1648,12 @@ async def run_distill(
         manifest["status"] = "failed"
         manifest["finished_at"] = max(time.time(), manifest["created_at"])
         manifest["error"] = _failure_message(error)
+        manifest["failure"] = domains.bd.distill.ai.domain.failure_context(
+            error,
+            manifest["progress"],
+            provider_kind = domains.settings.chat.domain.classify_error(error),
+            failed_at = manifest["finished_at"],
+        )
         manifest["progress"]["current_node"] = None
         manifest["progress"]["current_task"] = None
         manifest["progress"]["active_tasks"] = {}

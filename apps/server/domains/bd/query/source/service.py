@@ -1,6 +1,7 @@
 """Coordinate BD Query access to retrieval stores and saved-query history."""
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import infra
@@ -47,11 +48,29 @@ async def run_raw_query(backend: str, body_text: str) -> dict[str, Any]:
             ok = False,
             error = f"Query body exceeds {params.MAX_QUERY_BODY_CHARS} characters.",
         )
-    if backend == params.BACKEND_ELASTICSEARCH:
-        return await indexes.elasticsearch_index.service.run_raw_query(body_text)
-    if backend == params.BACKEND_QDRANT:
-        return await indexes.qdrant_index.service.run_raw_query(body_text)
-    return await indexes.neo4j_index.service.run_raw_query(body_text)
+    try:
+        async with asyncio.timeout(params.QUERY_EXECUTION_TIMEOUT_S):
+            schema = await query_schema(backend)
+            valid, error = await validate_query(backend, body_text, schema = schema)
+            if not valid:
+                return domain.bound_raw_response(domain.raw_response(
+                    backend,
+                    ok = False,
+                    error = error or "Query failed backend validation.",
+                ))
+            if backend == params.BACKEND_ELASTICSEARCH:
+                response = await indexes.elasticsearch_index.service.run_raw_query(body_text)
+            elif backend == params.BACKEND_QDRANT:
+                response = await indexes.qdrant_index.service.run_raw_query(body_text)
+            else:
+                response = await indexes.neo4j_index.service.run_raw_query(body_text)
+            return domain.bound_raw_response(response)
+    except TimeoutError:
+        return domain.raw_response(
+            backend,
+            ok = False,
+            error = f"Query validation and execution exceeded {params.QUERY_EXECUTION_TIMEOUT_S:g} seconds.",
+        )
 
 
 async def query_schema(backend: str) -> dict[str, Any]:

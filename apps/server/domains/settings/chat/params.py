@@ -1,6 +1,8 @@
 """chat router — tunables + env names (no behavior)."""
 from __future__ import annotations
 
+import os
+
 
 # How often a worker re-reads the Settings store for endpoint changes.
 ENDPOINT_RESOLVE_TTL_S: float = 10.0
@@ -28,6 +30,9 @@ POOL_TIMEOUT_S: float = 5.0
 # Hard wall-clock backstop = (timeout_s or DEFAULT_TIMEOUT_S) + margin.
 BACKSTOP_MARGIN_S: float = 15.0
 
+# Upper bound for transient provider retries outside Rotator capacity waits.
+PROVIDER_RETRY_MAX_WAIT_S: float = 30.0
+
 # The Rotator answers 429 `pool_exhausted` (Retry-After = soonest cooldown) or litellm's 500 "No deployments available" when no arm is usable right
 # now. That is capacity, not a bad request: wait it out (bounded) and call again instead of failing the node's attempt within a second.
 CAPACITY_WAIT_ATTEMPTS: int = 2
@@ -52,6 +57,15 @@ SETTLE_MIN_S: float = 10.0
 SETTLE_POLL_S: float = 5.0
 SETTLE_MAX_COOLING_FRAC: float = 0.25   # proceed once ≤25% of arms are cooling
 SETTLE_HEALTH_TIMEOUT_S: float = 8.0
+
+# Distributed admission control shared by every ChatOpenAI call in every
+# server/Celery worker. The Redis lease is renewed while a provider request is
+# in flight, then expires automatically if a worker disappears.
+LLM_ADMISSION_MAX_INFLIGHT: int = max(1, int(os.getenv("LLM_ADMISSION_MAX_INFLIGHT", "4")))
+LLM_ADMISSION_QUEUE_TIMEOUT_S: float = float(os.getenv("LLM_ADMISSION_QUEUE_TIMEOUT_S", "180"))
+LLM_ADMISSION_POLL_S: float = 0.25
+LLM_ADMISSION_LEASE_S: int = 360
+LLM_ADMISSION_LEASE_RENEW_S: int = 60
 
 # Env fallback, read at import.
 URL_ENVS: tuple[str, ...] = ("LLM_ENDPOINT_URL",)

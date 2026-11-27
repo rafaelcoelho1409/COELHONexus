@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
-from . import distill, ingestion, registry
+# Ask readiness embeds the typed stage summaries, so load Ingestion schemas first.
+from . import ingestion
+from . import ask, distill, query, registry
 
-__all__ = ["distill", "ingestion", "registry"]
+__all__ = ["ask", "distill", "ingestion", "query", "registry"]

@@ -67,6 +67,7 @@ const subResultSchema = z.looseObject({
 const askGraphStateSchema = z.looseObject({
   route: z.string().catch(""),
   active_node: z.string().nullish().catch(null),
+  active_nodes: z.array(z.string()).catch([]),
   visited_nodes: z.array(z.string()).catch([]),
   retrieval_sources: z.array(z.string()).catch([]),
   status: z.enum(["idle", "running", "done", "failed"]).catch("idle"),
@@ -87,6 +88,8 @@ const thinkingStateSchema = z.looseObject({
     .catch(null),
   graph: askGraphStateSchema.nullish().catch(null),
   book_id: z.string().nullish().catch(null),
+  external_search_status: z.string().nullish().catch(null),
+  external_search_provider: z.string().nullish().catch(null),
   citations: z.array(citationSchema).nullish().catch(null),
   duration_ms: z.number().nullish().catch(null),
   usage: llmCountersSchema.nullish().catch(null),

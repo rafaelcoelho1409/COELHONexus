@@ -5,6 +5,7 @@ Lifespan provisions: OTel (Alloy gRPC + LangFuse), MinIO bucket,
 AsyncPostgresSaver, Redis, Postgres, Neo4j, ES, Qdrant, LLM chains,
 and the FastMCP session manager.
 """
+
 import domains, entrypoints, infra
 
 import asyncio
@@ -27,6 +28,8 @@ mcp_app = mcp.http_app(
     stateless_http=True,
     host_origin_protection=False,
 )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     try:
@@ -44,8 +47,8 @@ async def lifespan(app: FastAPI):
     # this exact call and left the pod stuck at 1/2 Ready until killed.
     try:
         await asyncio.wait_for(
-            infra.minio.service.get_storage().ensure_bucket(), 
-            timeout=30.0)
+            infra.minio.service.get_storage().ensure_bucket(), timeout=30.0
+        )
     except asyncio.TimeoutError:
         logger.warning(
             "[lifespan] MinIO ensure_bucket timed out after 30s — "
@@ -119,7 +122,8 @@ async def lifespan(app: FastAPI):
     try:
         app.state.pg_url = infra.postgres.service.url()
         await domains.ycs.ask.conversation.service.ensure_conversation_table(
-            app.state.pg_url)
+            app.state.pg_url
+        )
     except Exception as e:
         logger.warning(
             f"[lifespan] YCS conversation table init failed: "
@@ -136,7 +140,9 @@ async def lifespan(app: FastAPI):
         )
 
     try:
-        app.state.llm = entrypoints.api.v1.ycs.agents.service.build_deprecated_llm_chain()
+        app.state.llm = (
+            entrypoints.api.v1.ycs.agents.service.build_deprecated_llm_chain()
+        )
     except Exception as e:
         app.state.llm = None
         logger.warning(
@@ -147,7 +153,9 @@ async def lifespan(app: FastAPI):
     # Dedicated FAST-mode client (short outputs, own bandit cell) —
     # direct_answer prefers it, falls back to app.state.llm when None.
     try:
-        app.state.llm_fast = entrypoints.api.v1.ycs.agents.service.build_fast_llm_chain()
+        app.state.llm_fast = (
+            entrypoints.api.v1.ycs.agents.service.build_fast_llm_chain()
+        )
     except Exception as e:
         app.state.llm_fast = None
         logger.warning(
@@ -160,23 +168,23 @@ async def lifespan(app: FastAPI):
         qdrant = infra.qdrant.service.get_qdrant()
         es_retriever = domains.ycs.ask.retriever.service.ElasticsearchRetriever(es)
         qdrant_retriever = domains.ycs.ask.retriever.service.QdrantHybridRetriever(
-            qdrant            = qdrant,
-            dense_embeddings  = domains.ycs.ingestion.embeddings.service.create_dense_embeddings(),
-            sparse_embeddings = domains.ycs.ingestion.embeddings.service.create_sparse_embeddings(),
-            es_client         = es,
+            qdrant=qdrant,
+            dense_embeddings=domains.ycs.ingestion.embeddings.service.create_dense_embeddings(),
+            sparse_embeddings=domains.ycs.ingestion.embeddings.service.create_sparse_embeddings(),
+            es_client=es,
         )
         neo4j_retriever = (
             domains.ycs.ask.retriever.service.Neo4jRetriever(
-                neo4j_graph = app.state.neo4j_graph,
-                llm         = app.state.llm,
+                neo4j_graph=app.state.neo4j_graph,
+                llm=app.state.llm,
             )
             if app.state.neo4j_graph is not None and app.state.llm is not None
             else None
         )
         app.state.smart_retriever = domains.ycs.ask.retriever.service.SmartRetriever(
-            es_retriever      = es_retriever,
-            qdrant_retriever  = qdrant_retriever,
-            neo4j_retriever   = neo4j_retriever,
+            es_retriever=es_retriever,
+            qdrant_retriever=qdrant_retriever,
+            neo4j_retriever=neo4j_retriever,
         )
     except Exception as e:
         app.state.smart_retriever = None
@@ -188,7 +196,8 @@ async def lifespan(app: FastAPI):
     try:
         app.state.grader = (
             domains.ycs.ask.grader.service.DocumentGrader(app.state.llm)
-            if app.state.llm is not None else None
+            if app.state.llm is not None
+            else None
         )
     except Exception as e:
         app.state.grader = None

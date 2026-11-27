@@ -17,7 +17,9 @@ class AdaptiveAskState(TypedDict, total = False):
     external_search_query: str
     external_search_status: str
     external_search_provider: str
+    external_search_error: str
     external_documents: list[dict]
+    web_search_result: dict
     research_plan: str
     sub_questions: list[str]
     queries: list[str]

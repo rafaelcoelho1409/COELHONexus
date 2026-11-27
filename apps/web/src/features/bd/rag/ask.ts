@@ -22,6 +22,7 @@ export type UsageTotal = { calls: number; tokens_in: number; tokens_out: number 
 export type AskGraphState = {
   route: string;
   active_node: string | null;
+  active_nodes: string[];
   visited_nodes: string[];
   retrieval_sources: string[];
   status: "idle" | "running" | "done" | "failed";
@@ -32,6 +33,7 @@ function normalizeGraph(
     | {
         route?: string;
         active_node?: string | null;
+        active_nodes?: string[];
         visited_nodes?: string[];
         retrieval_sources?: string[];
         status?: AskGraphState["status"];
@@ -43,6 +45,7 @@ function normalizeGraph(
   return {
     route: value?.route || fallback.route,
     active_node: value?.active_node === undefined ? fallback.active_node : value.active_node,
+    active_nodes: value?.active_nodes ?? fallback.active_nodes,
     visited_nodes: [...new Set([...fallback.visited_nodes, ...(value?.visited_nodes ?? [])])],
     retrieval_sources: value?.retrieval_sources ?? fallback.retrieval_sources,
     status: value?.status ?? fallback.status,
@@ -125,6 +128,7 @@ export function newLiveTurn(question: string, bookId: string | null = null): Ask
     graph: {
       route: "",
       active_node: "plan_research",
+      active_nodes: ["plan_research"],
       visited_nodes: [],
       retrieval_sources: [],
       status: "running",
@@ -188,6 +192,7 @@ const STAGE_MAP: Partial<Record<string, AskStageId>> = {
   elasticsearch: "retrieve",
   qdrant: "retrieve",
   neo4j: "retrieve",
+  web_search: "retrieve",
   fuse_evidence: "retrieve",
   search_external: "retrieve",
   synthesize: "generate",
@@ -212,6 +217,7 @@ const NODE_ACTION_TEXT: Partial<Record<string, string>> = {
   elasticsearch: "Searching Elasticsearch",
   qdrant: "Searching Qdrant",
   neo4j: "Searching Neo4j",
+  web_search: "Searching the configured external source",
   fuse_evidence: "Combining book evidence",
   search_external: "Searching the configured external source",
   direct_answer: "Composing answer",
@@ -257,7 +263,7 @@ export function applyAskEvent(turn: AskTurn, event: AskEvent): AskTurn {
       graph.route === "conversation"
         ? conversationStages(
             stageMark(turn.stages, "generate", "done"),
-            graph.visited_nodes.includes("search_external"),
+            graph.visited_nodes.includes("web_search") || graph.visited_nodes.includes("search_external"),
           )
         : stageMark(turn.stages, "verify", "done");
     return {
@@ -278,7 +284,10 @@ export function applyAskEvent(turn: AskTurn, event: AskEvent): AskTurn {
       graph,
       stages:
         graph.route === "conversation"
-          ? conversationStages(turn.stages, graph.visited_nodes.includes("search_external"))
+          ? conversationStages(
+              turn.stages,
+              graph.visited_nodes.includes("web_search") || graph.visited_nodes.includes("search_external"),
+            )
           : turn.stages,
       streaming: false,
       error: event.error ?? "stream error",
@@ -292,6 +301,7 @@ export function applyAskEvent(turn: AskTurn, event: AskEvent): AskTurn {
       event.graph?.route ||
       (event.intent === "conversation" ? "conversation" : event.mode || turn.graph.route),
     active_node: event.node,
+    active_nodes: event.graph?.active_nodes ?? [event.node],
     visited_nodes: turn.graph.visited_nodes.includes(event.node)
       ? turn.graph.visited_nodes
       : [...turn.graph.visited_nodes, event.node],
@@ -365,7 +375,8 @@ export function applyAskEvent(turn: AskTurn, event: AskEvent): AskTurn {
       ...next,
       stages: conversationStages(
         next.stages,
-        next.graph.visited_nodes.includes("search_external"),
+        next.graph.visited_nodes.includes("web_search") ||
+          next.graph.visited_nodes.includes("search_external"),
       ),
     };
   }
@@ -562,6 +573,7 @@ export function turnFromHistory(row: HistoryRow): AskTurn {
   const graph = normalizeGraph(ts?.graph, {
     route: hasDeep ? "deep" : row.mode,
     active_node: null,
+    active_nodes: [],
     visited_nodes: [],
     retrieval_sources: [],
     status: row.answer ? "done" : isTurnInProgress(ts, row.answer) ? "running" : "idle",
@@ -575,7 +587,10 @@ export function turnFromHistory(row: HistoryRow): AskTurn {
     mode: row.mode,
     stages:
       graph.route === "conversation"
-        ? conversationStages(historicalStages, graph.visited_nodes.includes("search_external"))
+        ? conversationStages(
+            historicalStages,
+            graph.visited_nodes.includes("web_search") || graph.visited_nodes.includes("search_external"),
+          )
         : historicalStages,
     deep: hasDeep
       ? {
@@ -634,7 +649,7 @@ export function statusFromEvent(prev: AskStatus, event: AskEvent): AskStatus {
       tone: "running",
     };
   }
-  if (event.node === "search_external") {
+  if (event.node === "web_search" || event.node === "search_external") {
     return { text: "Searching the configured external source.", tone: "running" };
   }
   if (event.node === "direct_answer") {

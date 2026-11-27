@@ -23,7 +23,13 @@ async def run_raw_query(body_text: str) -> dict[str, Any]:
     try:
         async with infra.neo4j.service.session(default_access_mode = "READ") as session:
             result = await session.run(body_text)
-            records = [dict(record) async for record in result]
+            records = []
+            truncated = False
+            async for record in result:
+                if len(records) >= params.MAX_QUERY_RESULT_HITS:
+                    truncated = True
+                    break
+                records.append(dict(record))
     except Exception as error:  # noqa: BLE001 - backend failures belong in the query result envelope.
         logger.warning(f"[bd:query:neo4j] failed: {type(error).__name__}: {error}")
         return domain.raw_response(
@@ -44,10 +50,17 @@ async def run_raw_query(body_text: str) -> dict[str, Any]:
             "summary": summary or "(empty row)",
             "raw": domain.neo4j_jsonify(record),
         })
+    notes = []
+    if truncated:
+        notes.append(
+            "Neo4j output was truncated: more than "
+            f"{params.MAX_QUERY_RESULT_HITS} rows matched; additional rows were omitted."
+        )
     return domain.raw_response(
         backend,
+        notes = notes,
         took_ms = int((time.monotonic() - started) * 1000),
-        total = len(hits),
+        total = None if truncated else len(hits),
         hits = hits,
     )
 
@@ -117,6 +130,7 @@ async def query_schema() -> dict[str, Any]:
         "observed_semantic_relationship_types": [],
         "observed_entity_types": [],
         "book_samples": [],
+        "live_schema_available": False,
         "live_data_available": False,
     }
     try:
@@ -153,7 +167,12 @@ async def query_schema() -> dict[str, Any]:
                 {"book_id": row["book_id"], "title": row["title"]}
                 async for row in book_result
             ]
-            schema["live_data_available"] = True
+            schema["live_schema_available"] = True
+            schema["live_data_available"] = bool(
+                schema["observed_entity_types"]
+                or schema["observed_semantic_relationship_types"]
+                or schema["book_samples"]
+            )
     except Exception as error:  # noqa: BLE001 - retain the index contract if live samples are unavailable.
         logger.warning(f"[bd:query:schema:neo4j] live value lookup failed: {type(error).__name__}: {error}")
     return schema

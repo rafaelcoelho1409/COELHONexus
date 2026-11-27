@@ -5,7 +5,7 @@ from . import components
 from fastmcp import FastMCP
 
 
-mcp = FastMCP("COELHO Nexus")
+mcp = FastMCP("COELHO Nexus", on_duplicate="error")
 components.registry.register_tools(mcp)
 components.registry.register_resources(mcp)
 components.registry.register_prompts(mcp)

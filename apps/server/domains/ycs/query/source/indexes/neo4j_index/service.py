@@ -108,7 +108,7 @@ async def query_simple(
 
 
 async def run_raw_query(
-    *, app: str, body_text: str, request: Request,
+    *, app: str, body_text: str, request: Request | None = None,
 ) -> dict[str, Any]:
     if not domain.is_supported(app, params.BACKEND_NEO4J):
         return _raw_disallowed(
@@ -127,7 +127,13 @@ async def run_raw_query(
         ):
             async with infra.neo4j.service.session(default_access_mode = "READ") as session:
                 result = await session.run(body_text)
-                records = [dict(r) async for r in result]
+                records = []
+                truncated = False
+                async for record in result:
+                    if len(records) >= params.MAX_RAW_RESULT_HITS:
+                        truncated = True
+                        break
+                    records.append(dict(record))
     except Exception as e:  # noqa: BLE001
         logger.warning(f"[ycs:query:raw_neo4j] failed: {type(e).__name__}: {e}")
         return _raw_envelope(
@@ -152,10 +158,16 @@ async def run_raw_query(
             "summary": "  ".join(bits) if bits else "(empty row)",
             "raw":     domain.neo4j_jsonify(r),
         })
+    notes = (
+        [f"Result rows were capped at {params.MAX_RAW_RESULT_HITS}."]
+        if truncated
+        else []
+    )
     return _raw_envelope(
         params.BACKEND_NEO4J, app, t0,
         hits  = projected,
         total = len(projected),
+        notes = notes,
     )
 
 

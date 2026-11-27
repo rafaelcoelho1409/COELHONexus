@@ -172,7 +172,7 @@ async def query_simple(
 
 
 async def run_raw_query(
-    *, app: str, body_text: str, request: Request,
+    *, app: str, body_text: str, request: Request | None = None,
 ) -> dict[str, Any]:
     if not domain.is_supported(app, params.BACKEND_QDRANT):
         return _raw_disallowed(

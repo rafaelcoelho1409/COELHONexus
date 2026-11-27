@@ -57,14 +57,14 @@ const VIEWS = [
     description: "Find source-linked concepts and relationships in the knowledge graph.",
   },
   {
+    id: "web_search",
+    label: "Search configured source",
+    description: "Use the optional Search MCP only when the plan calls for current or outside information.",
+  },
+  {
     id: "fuse_evidence",
     label: "Combine book evidence",
     description: "Merge the retrieval results while preserving their source references.",
-  },
-  {
-    id: "search_external",
-    label: "Search configured source",
-    description: "Use the optional Search MCP only when the plan calls for current or outside information.",
   },
   {
     id: "grade_documents",
@@ -166,12 +166,12 @@ const NODE_DETAILS: Record<AskNodeId, AskNodeDetails> = {
     },
   },
   fuse_evidence: {
-    reads: ["Elasticsearch, Qdrant and Neo4j results"],
+    reads: ["Elasticsearch, Qdrant, Neo4j and optional web-search results"],
     writes: ["Ranked evidence", "Evidence source labels"],
     llm: "Deterministic result fusion; no model call.",
     resources: NO_RESOURCES,
   },
-  search_external: {
+  web_search: {
     reads: ["Planned outside-information query", "Ready Search MCP connection from Settings"],
     writes: ["External evidence", "Source citations", "Search outcome"],
     llm: "No model call inside this step.",
@@ -241,22 +241,17 @@ const CONNECTIONS: readonly AgenticFlowConnection[] = [
     target: "neo4j",
     sourceHandle: "source-bottom-right",
   },
-  { source: "elasticsearch", target: "fuse_evidence" },
-  { source: "qdrant", target: "fuse_evidence" },
-  { source: "neo4j", target: "fuse_evidence" },
   {
-    source: "fuse_evidence",
-    target: "search_external",
+    source: "prepare_retrieval",
+    target: "web_search",
     sourceHandle: "source-bottom-left",
     targetHandle: "target-top-right",
   },
+  { source: "elasticsearch", target: "fuse_evidence" },
+  { source: "qdrant", target: "fuse_evidence" },
+  { source: "neo4j", target: "fuse_evidence" },
+  { source: "web_search", target: "fuse_evidence" },
   { source: "fuse_evidence", target: "grade_documents" },
-  {
-    source: "search_external",
-    target: "grade_documents",
-    sourceHandle: "source-right",
-    targetHandle: "target-top-left",
-  },
   {
     source: "grade_documents",
     target: "rewrite_query",
@@ -293,8 +288,8 @@ const POSITIONS: Readonly<Record<string, AgenticFlowPosition>> = {
   elasticsearch: { x: 16, y: 348 },
   qdrant: { x: 284, y: 348 },
   neo4j: { x: 552, y: 348 },
-  fuse_evidence: { x: 284, y: 514 },
-  search_external: { x: 16, y: 732 },
+  web_search: { x: 16, y: 514 },
+  fuse_evidence: { x: 284, y: 680 },
   grade_documents: { x: 284, y: 898 },
   rewrite_query: { x: 16, y: 898 },
   generate: { x: 552, y: 1064 },
@@ -304,7 +299,7 @@ const POSITIONS: Readonly<Record<string, AgenticFlowPosition>> = {
 };
 
 const RETRIEVAL_GROUPS = [
-  { id: "book_retrieval", label: "Book retrieval subgraph", x: 0, y: 158, width: 800, height: 530 },
+  { id: "book_retrieval", label: "Book retrieval subgraph", x: 0, y: 158, width: 800, height: 700 },
 ] as const;
 
 const VIEW_MODES: readonly { id: ViewMode; label: string }[] = [
@@ -337,6 +332,7 @@ function graphState(turn: AskTurn | null): AskTurn["graph"] {
   const graph = turn?.graph ?? {
     route: "",
     active_node: null,
+    active_nodes: [],
     visited_nodes: [],
     retrieval_sources: [],
     status: "idle" as const,
@@ -346,7 +342,8 @@ function graphState(turn: AskTurn | null): AskTurn["graph"] {
 
 function stepStatus(graph: AskTurn["graph"], aliases: readonly string[], selected: boolean): AskNodeStatus {
   const hasVisited = aliases.some((node) => graph.visited_nodes.includes(node));
-  const isActive = aliases.includes(graph.active_node ?? "");
+  const isActive =
+    aliases.includes(graph.active_node ?? "") || aliases.some((node) => graph.active_nodes.includes(node));
   const lastVisited = graph.visited_nodes.at(-1);
   if (
     graph.status === "failed" &&
@@ -372,7 +369,9 @@ function makeViews(turn: AskTurn | null): AskView[] {
   const routeKnown = Boolean(route);
   const isConversation = route === "conversation";
   const bookRoute = !isConversation;
-  const externalVisited = graph.visited_nodes.includes("search_external");
+  const externalVisited = graph.visited_nodes.some((node) =>
+    ["web_search", "search_external"].includes(node),
+  );
   const externalNotRequested = turn?.externalSearchStatus?.toLowerCase() === "not_requested";
   const externalPastDecision =
     graph.visited_nodes.includes("grade_documents") ||
@@ -383,7 +382,7 @@ function makeViews(turn: AskTurn | null): AskView[] {
     (externalPastDecision && !externalVisited);
   let externalStatus: AskNodeStatus = externalSkipped
     ? "skipped"
-    : stepStatus(graph, ["search_external"], true);
+    : stepStatus(graph, ["web_search", "search_external"], true);
   if (turn?.externalSearchStatus === "unavailable" && graph.status !== "failed") {
     externalStatus = "failed";
   }
@@ -400,12 +399,14 @@ function makeViews(turn: AskTurn | null): AskView[] {
     if (id === "direct_answer")
       return isConversation ? stepStatus(graph, [id], true) : routeKnown ? "skipped" : "queued";
     if (id === "prepare_retrieval") {
-      if (graph.active_node === "retrieve_evidence") return "active";
+      if (graph.active_node === "retrieve_evidence" && !graph.visited_nodes.includes(id)) return "active";
       if (
         graph.status === "failed" &&
         graph.visited_nodes.at(-1) === "retrieve_evidence" &&
         !graph.visited_nodes.some((node) =>
-          ["prepare_retrieval", "elasticsearch", "qdrant", "neo4j", "fuse_evidence"].includes(node),
+          ["prepare_retrieval", "elasticsearch", "qdrant", "neo4j", "web_search", "fuse_evidence"].includes(
+            node,
+          ),
         )
       ) {
         return "failed";
@@ -415,7 +416,7 @@ function makeViews(turn: AskTurn | null): AskView[] {
     if (id === "elasticsearch" || id === "qdrant" || id === "neo4j" || id === "fuse_evidence") {
       return stepStatus(graph, [id], bookRoute);
     }
-    if (id === "search_external") return externalStatus;
+    if (id === "web_search") return externalStatus;
     if (id === "grade_documents") return stepStatus(graph, [id], bookRoute);
     if (id === "rewrite_query") return rewriteStatus;
     if (id === "generate")
@@ -467,7 +468,7 @@ function makeViews(turn: AskTurn | null): AskView[] {
             ? `${graph.retrieval_sources.length} source${graph.retrieval_sources.length === 1 ? "" : "s"} returned evidence.`
             : null;
     }
-    if (view.id === "search_external") {
+    if (view.id === "web_search") {
       const external = turn?.externalSearchStatus?.toLowerCase();
       detail =
         external === "complete"
@@ -562,7 +563,10 @@ function AskNodeSheet({ step, turn, onClose }: { step: AskView; turn: AskTurn | 
         </section>
         <section>
           <h3 className="text-sm font-medium">
-            {step.id === "elasticsearch" || step.id === "qdrant" || step.id === "neo4j"
+            {step.id === "elasticsearch" ||
+            step.id === "qdrant" ||
+            step.id === "neo4j" ||
+            step.id === "web_search"
               ? "Retrieval resources"
               : "Agent resources"}
           </h3>
@@ -572,7 +576,7 @@ function AskNodeSheet({ step, turn, onClose }: { step: AskView; turn: AskTurn | 
             <p className="mt-1 text-xs leading-relaxed">{details.llm}</p>
           </div>
         </section>
-        {step.id === "search_external" ? (
+        {step.id === "web_search" ? (
           <section className="rounded-sm border border-border bg-muted/30 p-3">
             <h3 className="text-sm font-medium">Optional Search MCP</h3>
             <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
@@ -580,8 +584,7 @@ function AskNodeSheet({ step, turn, onClose }: { step: AskView; turn: AskTurn | 
               outside information.
             </p>
             <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
-              The shared retrieval graph also provides <code className="font-mono">bd_search_web</code> for
-              callers that opt into its Search MCP specialist.
+              It runs alongside the three book indexes and contributes evidence to the same fusion step.
             </p>
           </section>
         ) : null}

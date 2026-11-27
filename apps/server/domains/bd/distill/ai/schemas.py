@@ -945,6 +945,24 @@ class DistillProgress(BaseModel):
     total_chapters: int = 0
 
 
+class DistillFailureContext(BaseModel):
+    model_config = ConfigDict(extra = "forbid")
+
+    node: str | None = Field(default = None, max_length = 100)
+    task: str | None = Field(default = None, max_length = 240)
+    error_type: str = Field(min_length = 1, max_length = 120)
+    provider_kind: Literal[
+        "unknown",
+        "timeout",
+        "rate_limit",
+        "auth_error",
+        "content_filter",
+        "server_error",
+    ] = "unknown"
+    status_code: int | None = Field(default = None, ge = 100, le = 599, strict = True)
+    failed_at: float = Field(gt = 0)
+
+
 class StructuralQuality(BaseModel):
     model_config = ConfigDict(extra = "forbid")
 
@@ -968,7 +986,7 @@ class StructuralQuality(BaseModel):
 class DistillRunManifest(BaseModel):
     model_config = ConfigDict(extra = "forbid")
 
-    schema_version: Literal["1.0", "1.1", "1.2", "1.3", "1.4", "1.5", "1.6"] = versions.MANIFEST_SCHEMA_VERSION
+    schema_version: Literal["1.0", "1.1", "1.2", "1.3", "1.4", "1.5", "1.6", "1.7"] = versions.MANIFEST_SCHEMA_VERSION
     workflow_version: NonEmptyText = versions.WORKFLOW_VERSION
     prompt_version: NonEmptyText = versions.PROMPT_VERSION
     renderer_version: NonEmptyText = versions.RENDERER_VERSION
@@ -1012,19 +1030,20 @@ class DistillRunManifest(BaseModel):
     updated_at: float = Field(gt = 0)
     finished_at: float | None = None
     error: str | None = None
+    failure: DistillFailureContext | None = None
 
     @model_validator(mode = "after")
     def _validate_terminal_state(self) -> DistillRunManifest:
         if self.pdf_renderer_version is not None and (self.pdf_key is None or self.pdf_sha256 is None):
             raise ValueError("versioned Learning Guide PDFs require an object key and integrity hash")
-        if self.schema_version in {"1.1", "1.2", "1.3", "1.4", "1.5", "1.6"} and any(value is None for value in (
+        if self.schema_version in {"1.1", "1.2", "1.3", "1.4", "1.5", "1.6", "1.7"} and any(value is None for value in (
             self.selected_page_count,
             self.content_selection_key,
             self.content_selection_sha256,
             self.content_selection_revision,
         )):
             raise ValueError("Distill runs from schema 1.1 onward must pin their content-selection revision")
-        if self.schema_version in {"1.2", "1.3", "1.4", "1.5", "1.6"} and any(value is None for value in (
+        if self.schema_version in {"1.2", "1.3", "1.4", "1.5", "1.6", "1.7"} and any(value is None for value in (
             self.selected_page_count,
             self.content_selection_key,
             self.content_selection_sha256,

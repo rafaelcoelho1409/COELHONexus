@@ -1,0 +1,11 @@
+"""Bounds for YCS Ask MCP calls."""
+from __future__ import annotations
+
+MAX_QUESTION_CHARS = 8_000
+MAX_CHANNEL_IDS = 50
+MAX_CHANNEL_ID_CHARS = 256
+MAX_SUB_QUESTIONS = 5
+MAX_SUB_QUESTION_CHARS = 1_000
+ASK_TIMEOUT_S = 1_600.0
+ASK_DEADLINE_S = {"fast": 300.0, "standard": 600.0, "deep": 1_500.0}
+ASK_DEADLINE_DEFAULT_S = 900.0

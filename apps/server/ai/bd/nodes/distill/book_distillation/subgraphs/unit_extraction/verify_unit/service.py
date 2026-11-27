@@ -1,6 +1,7 @@
 """Assess whether exact source passages support extracted lesson candidates."""
 from __future__ import annotations
 import domains
+from . import errors
 from ....... import graphs, skills
 
 import json
@@ -95,22 +96,34 @@ async def verify_unit(
                 domains.bd.distill.ai.schemas.EvidenceReview,
             )
             if not isinstance(review, domains.bd.distill.ai.schemas.EvidenceReview):
-                raise TypeError("the evidence verifier returned no valid EvidenceReview")
+                raise errors.EvidenceReviewOutputError(
+                    "the evidence verifier returned no valid EvidenceReview",
+                )
             verdicts = {item.lesson_index: item for item in review.verdicts}
         except Exception as error:
-            if domains.settings.chat.domain.is_transient_provider_error(error):
+            if domains.settings.chat.domain.is_provider_error(error):
                 logger.warning(
-                    "[bd-distill] transient provider failure stage=evidence_verifier unit=%s page=%s kind=%s error=%s",
-                    ref.get("unit_id"),
+                    "[bd-distill] evidence verifier provider failure stage=evidence_verifier "
+                    "unit=%s page=%s kind=%s error_type=%s",
+                    ref["unit_id"],
                     ref.get("page_number"),
                     domains.settings.chat.domain.classify_error(error),
                     type(error).__name__,
                 )
                 raise
+            if not isinstance(error, errors.EvidenceReviewOutputError):
+                logger.exception(
+                    "[bd-distill] unexpected evidence verifier failure unit=%s page=%s error_type=%s",
+                    ref.get("unit_id"),
+                    ref.get("page_number"),
+                    type(error).__name__,
+                )
+                raise
             logger.warning(
-                "[bd-distill] evidence review unavailable; retaining cited lessons for review "
-                "unit=%s error_type=%s",
+                "[bd-distill] evidence verifier returned invalid structured output; "
+                "retaining cited lessons for review unit=%s page=%s error_type=%s",
                 ref["unit_id"],
+                ref.get("page_number"),
                 type(error).__name__,
             )
             review_error = error

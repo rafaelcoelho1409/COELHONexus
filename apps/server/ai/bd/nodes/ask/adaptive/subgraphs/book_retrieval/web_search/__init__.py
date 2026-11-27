@@ -1,4 +1,4 @@
-"""Optional, Settings-configured external Search MCP evidence lane."""
+"""Ask's optional Search MCP source in the shared BD retrieval subgraph."""
 from __future__ import annotations
 
 from . import node, params, service

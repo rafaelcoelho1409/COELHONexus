@@ -67,7 +67,7 @@ dependencies = [
     "deepagents>=0.6,<1.0",
     "langchain[mcp]>=1.4.0,<2.0",
     # FastMCP server mounted inside the FastAPI app at entrypoints/mcp/.
-    "fastmcp>=4.0.11,<5.0",
+    "fastmcp>=4.2.5,<4.3.0",
     # Directly imported but only pulled in transitively — declared explicitly
     # so an upstream version change can't silently break these imports (deptry DEP003).
     "botocore>=1.37,<2.0",
@@ -104,7 +104,10 @@ package = false
 # `uv sync --frozen`, so this only affects re-locking. Per-package exceptions are for security fixes that
 # were vetted by hand; remove an entry once its release is older than the window.
 exclude-newer = "7 days"
-exclude-newer-package = { fastmcp-slim = "2026-10-25T00:00:00Z", fastmcp = "2026-10-25T00:00:00Z", certifi = "2026-10-25T00:00:00Z", pypdf = "2026-10-25T00:00:00Z", brotli = "2026-10-25T00:00:00Z", docling = "2026-11-02T00:00:00Z", docling-slim = "2026-11-02T00:00:00Z", docling-core = "2026-11-02T00:00:00Z", docling-ibm-models = "2026-11-02T00:00:00Z", docling-parse = "2026-11-02T00:00:00Z" }
+# FastMCP 4.2.5 (2026-11-23) was reviewed for OAuth/token hardening and race fixes.
+# This narrow cutoff excludes 4.2.6 and newer from this lock.
+# Remove this exception after 2026-11-30, when 4.2.5 is outside the standard cooldown.
+exclude-newer-package = { fastmcp-slim = "2026-11-24T00:00:00Z", fastmcp = "2026-11-24T00:00:00Z", certifi = "2026-10-25T00:00:00Z", pypdf = "2026-10-25T00:00:00Z", brotli = "2026-10-25T00:00:00Z", docling = "2026-11-02T00:00:00Z", docling-slim = "2026-11-02T00:00:00Z", docling-core = "2026-11-02T00:00:00Z", docling-parse = "2026-11-02T00:00:00Z" }
 
 # No LiteLLM runtime in this project. crawl4ai's `unclecode-litellm` fork and Docling Graph's
 # optional default client are not used: Docling Graph receives the configured ChatOpenAI client.

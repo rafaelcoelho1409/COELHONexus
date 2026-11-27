@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import asyncio
 import time
 from typing import Any
 
@@ -31,11 +32,12 @@ async def run_raw_query(body_text: str) -> dict[str, Any]:
     try:
         client = infra.qdrant.service.get_qdrant()
         collection_result = await client.get_collections()
-        collection_names = sorted(
+        all_collection_names = sorted(
             collection.name
             for collection in collection_result.collections
             if collection.name.startswith(params.QDRANT_COLLECTION_PREFIX)
-        )[:params.QDRANT_MAX_COLLECTIONS]
+        )
+        collection_names = all_collection_names[:params.QDRANT_MAX_COLLECTIONS]
     except Exception as error:  # noqa: BLE001 - backend failures belong in the query result envelope.
         logger.warning(f"[bd:query:qdrant] collection lookup failed: {type(error).__name__}: {error}")
         return domain.raw_response(
@@ -53,11 +55,21 @@ async def run_raw_query(body_text: str) -> dict[str, Any]:
                 error = "The collection must belong to the BD RAG collection family.",
             )
         if requested_collection not in collection_names:
-            return domain.raw_response(
-                backend,
-                ok = False,
-                error = f"BD Qdrant collection {requested_collection!r} was not found.",
-            )
+            try:
+                exists = await client.collection_exists(requested_collection)
+            except Exception as error:  # noqa: BLE001 - report collection verification failures clearly.
+                return domain.raw_response(
+                    backend,
+                    ok = False,
+                    error = f"Could not verify the BD Qdrant collection: {type(error).__name__}.",
+                    took_ms = int((time.monotonic() - started) * 1000),
+                )
+            if not exists:
+                return domain.raw_response(
+                    backend,
+                    ok = False,
+                    error = f"BD Qdrant collection {requested_collection!r} was not found.",
+                )
         collection_names = [requested_collection]
     elif len(collection_names) > 1 and not query_text:
         notes.append(f"Queried {len(collection_names)} BD embedding collections.")
@@ -178,37 +190,86 @@ async def run_raw_query(body_text: str) -> dict[str, Any]:
 
 
 async def query_schema() -> dict[str, Any]:
-    client = infra.qdrant.service.get_qdrant()
     try:
+        configured_model = settings.embeddings.service.get_configured_model()
+        configured_collection_prefix = (
+            rag.source.indexes.qdrant_index.domain.collection_name(configured_model, 1)[:-4] + "__"
+        )
+    except Exception as error:  # noqa: BLE001 - keep schema guidance when settings are unavailable.
+        logger.warning(f"[bd:query:schema:qdrant] embedding profile lookup failed: {error}")
+        configured_model = None
+        configured_collection_prefix = None
+    try:
+        client = infra.qdrant.service.get_qdrant()
         result = await client.get_collections()
     except Exception as error:  # noqa: BLE001 - provide a declared schema if Qdrant is unavailable.
         logger.warning(f"[bd:query:schema:qdrant] collection lookup failed: {error}")
-        return {"collections": [], "observed_payload_keys": list(params.QDRANT_PAYLOAD_KEYS)}
-    collections = []
-    for item in result.collections:
-        name = item.name
-        if not name.startswith(params.QDRANT_COLLECTION_PREFIX):
-            continue
-        try:
-            info = await client.get_collection(name)
-            vectors = info.config.params.vectors
-            payload_schema = info.payload_schema or {}
-            points_count = int(info.points_count or 0)
-        except Exception as error:  # noqa: BLE001 - retain the collection if detail lookup fails.
-            logger.debug(f"[bd:query:schema:qdrant] collection detail lookup failed for {name}: {error}")
-            vectors = {}
-            payload_schema = {}
-            points_count = 0
-        collections.append({
+        return {
+            "collections": [],
+            "collection_count": 0,
+            "collections_truncated": False,
+            "observed_payload_keys": list(params.QDRANT_PAYLOAD_KEYS),
+            "configured_embedding_model": configured_model,
+            "configured_collection_prefix": configured_collection_prefix,
+            "configured_model_collections": [],
+            "live_schema_available": False,
+            "live_data_available": False,
+        }
+    all_collection_names = sorted(
+        item.name
+        for item in result.collections
+        if item.name.startswith(params.QDRANT_COLLECTION_PREFIX)
+    )
+    collection_names = list(all_collection_names)
+    if configured_collection_prefix:
+        collection_names.sort(key = lambda name: (not name.startswith(configured_collection_prefix), name))
+    semaphore = asyncio.Semaphore(8)
+
+    async def read_collection(name: str) -> dict[str, Any]:
+        async with semaphore:
+            try:
+                info = await client.get_collection(name)
+                vectors = info.config.params.vectors
+                payload_schema = info.payload_schema or {}
+                points_count = int(info.points_count or 0)
+            except Exception as error:  # noqa: BLE001 - retain the collection if detail lookup fails.
+                logger.debug(f"[bd:query:schema:qdrant] collection detail lookup failed for {name}: {error}")
+                vectors = {}
+                payload_schema = {}
+                points_count = 0
+        return {
             "name": name,
             "points_count": points_count,
             "vectors_config": domain.json_safe(vectors),
             "payload_schema": domain.json_safe(payload_schema),
             "observed_payload_keys": list(params.QDRANT_PAYLOAD_KEYS),
-        })
-        if len(collections) >= params.QDRANT_MAX_COLLECTIONS:
-            break
-    return {"collections": collections}
+        }
+
+    collections = await asyncio.gather(*(
+        read_collection(name)
+        for name in collection_names[:params.QDRANT_MAX_COLLECTIONS]
+    ))
+    configured_model_collections = [
+        collection["name"]
+        for collection in collections
+        if configured_collection_prefix
+        and collection["name"].startswith(configured_collection_prefix)
+    ]
+    return {
+        "collections": collections,
+        "collection_count": len(all_collection_names),
+        "collections_truncated": len(all_collection_names) > params.QDRANT_MAX_COLLECTIONS,
+        "configured_embedding_model": configured_model,
+        "configured_collection_prefix": configured_collection_prefix,
+        "configured_model_collections": configured_model_collections,
+        "active_collection": (
+            configured_model_collections[0]
+            if len(configured_model_collections) == 1
+            else None
+        ),
+        "live_schema_available": bool(collections),
+        "live_data_available": any(collection["points_count"] > 0 for collection in collections),
+    }
 
 
 async def validate_query(
@@ -226,10 +287,15 @@ async def validate_query(
         return False, str(error)
 
     collections = schema.get("collections", [])
-    if not isinstance(collections, list) or not collections:
-        return False, "No BD Qdrant collection is indexed yet."
+    if not isinstance(collections, list):
+        collections = []
     body = parsed.body
     query_text = body.get("query_text")
+    requested_collection = body.get("collection_name")
+    if not collections and not requested_collection:
+        if parsed.operation == "count":
+            return True, None
+        return False, "No BD Qdrant collection is indexed yet."
     if query_text is not None:
         if not isinstance(query_text, str) or not query_text.strip():
             return False, "`query_text` must contain the natural-language search text."
@@ -238,7 +304,15 @@ async def validate_query(
         if body.get("using", "dense") != "dense":
             return False, "Natural-language searches use the indexed `dense` vector."
 
-    requested_collection = body.get("collection_name")
+    if (
+        parsed.operation == "count"
+        and not requested_collection
+        and schema.get("collections_truncated")
+    ):
+        return False, (
+            "The BD Qdrant collection catalog is capped; specify one `collection_name` "
+            "to avoid returning a partial count."
+        )
     scoped_collections = [
         collection
         for collection in collections
@@ -246,18 +320,51 @@ async def validate_query(
         and (not requested_collection or collection.get("name") == requested_collection)
     ]
     if requested_collection and not scoped_collections:
-        return False, f"BD Qdrant collection {requested_collection!r} was not found."
-    if query_text and not requested_collection:
-        # A text query is embedded with the active indexing model, so it must not
-        # be sent to old collections created with different model dimensions.
+        try:
+            client = infra.qdrant.service.get_qdrant()
+            if not await client.collection_exists(requested_collection):
+                return False, f"BD Qdrant collection {requested_collection!r} was not found."
+            info = await client.get_collection(requested_collection)
+            scoped_collections = [{
+                "name": requested_collection,
+                "points_count": int(info.points_count or 0),
+                "vectors_config": domain.json_safe(info.config.params.vectors),
+                "payload_schema": domain.json_safe(info.payload_schema or {}),
+            }]
+        except Exception as error:  # noqa: BLE001 - live-check collections outside the schema page cap.
+            return False, (
+                "Could not verify BD Qdrant collection "
+                f"{requested_collection!r}: {type(error).__name__}."
+            )
+    if (
+        parsed.operation != "count"
+        and not query_text
+        and not requested_collection
+        and len(collections) > 1
+    ):
+        return False, (
+            "Specify a BD Qdrant `collection_name` for this operation. "
+            "Unscoped reads across embedding collections are not allowed."
+        )
+    if query_text:
+        configured_names = set(schema.get("configured_model_collections") or [])
+        if requested_collection and requested_collection not in configured_names:
+            return False, (
+                "Natural-language search uses the configured embedding model and must target its "
+                "matching BD Qdrant collection."
+            )
         scoped_collections = [
             collection
             for collection in scoped_collections
-            if isinstance(collection.get("vectors_config"), dict)
+            if collection.get("name") in configured_names
+            and isinstance(collection.get("vectors_config"), dict)
             and "dense" in collection["vectors_config"]
         ]
         if not scoped_collections:
-            return False, "No BD Qdrant collection has the `dense` vector required for semantic search."
+            return False, (
+                "No BD Qdrant collection is indexed for the configured embedding model. "
+                "Reindex BD RAG before running semantic searches."
+            )
 
     available_payload_keys = set(params.QDRANT_PAYLOAD_KEYS)
     available_vector_names: set[str] = set()

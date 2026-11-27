@@ -1,5 +1,6 @@
 """Compile chapter preparation, parallel synthesis, and coverage review."""
 from __future__ import annotations
+import domains
 from ... import entities, service, states
 from ...... import nodes
 
@@ -19,7 +20,10 @@ def chapter_guides_graph():
     workflow.add_node(
         "synthesize_chapter",
         nodes.distill.book_distillation.subgraphs.chapter_guides.synthesize_chapter.node.synthesize_chapter,
-        retry_policy = service.provider_retry_policy(),
+        retry_policy = service.provider_retry_policy(
+            retry_capacity_errors = False,
+            max_attempts = domains.bd.distill.ai.params.CHAPTER_SYNTHESIS_NODE_RETRY_ATTEMPTS,
+        ),
     )
     workflow.add_node(
         "review_chapter_coverage",

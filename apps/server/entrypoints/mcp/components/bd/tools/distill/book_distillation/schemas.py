@@ -17,6 +17,24 @@ class DistillNodeProgress(BaseModel):
     active_count: int = Field(default = 0, ge = 0)
 
 
+class DistillFailureSummary(BaseModel):
+    model_config = ConfigDict(extra = "forbid")
+
+    node: str | None = None
+    task: str | None = None
+    error_type: str
+    provider_kind: Literal[
+        "unknown",
+        "timeout",
+        "rate_limit",
+        "auth_error",
+        "content_filter",
+        "server_error",
+    ] = "unknown"
+    status_code: int | None = None
+    failed_at: float
+
+
 class DistillRunSummary(BaseModel):
     model_config = ConfigDict(extra = "forbid")
 
@@ -45,6 +63,7 @@ class DistillRunSummary(BaseModel):
     updated_at: float
     finished_at: float | None = None
     error: str | None = None
+    failure: DistillFailureSummary | None = None
 
 
 class DistillCommandResult(BaseModel):

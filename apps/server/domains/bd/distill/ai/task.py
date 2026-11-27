@@ -15,6 +15,19 @@ from . import params, service
 logger = logging.getLogger(__name__)
 
 
+def _terminal_task_result(manifest: dict) -> dict | None:
+    """Return the Celery result for a run that no longer accepts task deliveries."""
+    if manifest.get("status") not in {"done", "failed", "cancelled"}:
+        return None
+    return {
+        "book_id": manifest["book_id"],
+        "run_id": manifest["run_id"],
+        "status": manifest["status"],
+        "report_key": manifest.get("report_key"),
+        "error": manifest.get("error"),
+    }
+
+
 @infra.celery.service.app.task(
     name = params.TASK_NAME,
     bind = True,
@@ -31,13 +44,9 @@ def run_distill(self, book_id: str, run_id: str) -> dict:
         checkpointer_initialized = False
         try:
             manifest = await service.mark_run_started(book_id, run_id, self.request.id)
-            if manifest["status"] in {"done", "cancelled"}:
-                return {
-                    "book_id": book_id,
-                    "run_id": run_id,
-                    "status": manifest["status"],
-                    "report_key": manifest.get("report_key"),
-                }
+            terminal_result = _terminal_task_result(manifest)
+            if terminal_result is not None:
+                return terminal_result
             await infra.postgres.service.init_checkpointer()
             checkpointer_initialized = True
             result = await service.run_distill(
@@ -84,6 +93,10 @@ def run_distill(self, book_id: str, run_id: str) -> dict:
                     run_id,
                     current_owner,
                 )
+                manifest = await service.read_run(book_id, run_id)
+                terminal_result = _terminal_task_result(manifest) if manifest is not None else None
+                if terminal_result is not None:
+                    return terminal_result
                 return {"execution_lock_busy": True, "owner": current_owner}
 
             async def renew_execution_lease() -> None:

@@ -1,4 +1,5 @@
 """Run lifecycle and application services for BD Agentic RAG."""
+
 from __future__ import annotations
 
 import importlib
@@ -10,6 +11,7 @@ if TYPE_CHECKING:
         errors,
         keys,
         params,
+        progress,
         publication,
         replay,
         retrieval,
@@ -24,6 +26,7 @@ __all__ = [
     "errors",
     "keys",
     "params",
+    "progress",
     "publication",
     "replay",
     "retrieval",

@@ -17,6 +17,7 @@ from ... import ask
 from . import indexes, keys, params
 
 logger = logging.getLogger(__name__)
+_LOCAL_SCHEMA_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 
 
 @contextmanager
@@ -103,7 +104,7 @@ async def run_raw_query(
     *,
     app: str,
     body_text: str,
-    request: Request,
+    request: Request | None = None,
 ) -> dict[str, Any]:
     """Run one policy-checked, read-only query against the selected store."""
     if backend == params.BACKEND_ES:
@@ -133,7 +134,7 @@ async def run_raw_query(
 async def query_schema(
     backend: str,
     *,
-    request: Request,
+    request: Request | None = None,
     refresh: bool = False,
 ) -> dict[str, Any]:
     """Return the cached live-plus-declared schema for one YCS store."""
@@ -171,12 +172,20 @@ async def validate_query(
 async def _schema_cached(
     *,
     backend: str,
-    request: Request,
+    request: Request | None,
     refresh: bool,
     builder: Callable[[], Awaitable[dict[str, Any]]],
 ) -> dict[str, Any]:
     """Read-through Redis cache for a backend schema snapshot."""
-    redis_aio = getattr(request.app.state, "redis_aio", None)
+    if request is None and not refresh:
+        cached = _LOCAL_SCHEMA_CACHE.get(backend)
+        if cached is not None and time.monotonic() - cached[0] < params.SCHEMA_TTL_S:
+            return cached[1]
+    redis_aio = (
+        getattr(request.app.state, "redis_aio", None)
+        if request is not None
+        else None
+    )
     key = keys.SCHEMA_KEY.format(backend = backend)
     if redis_aio is not None and not refresh:
         try:
@@ -193,7 +202,9 @@ async def _schema_cached(
 
     result = await builder()
     result["cached_at"] = int(time.time())
-    if redis_aio is not None:
+    if request is None:
+        _LOCAL_SCHEMA_CACHE[backend] = (time.monotonic(), result)
+    elif redis_aio is not None:
         try:
             await redis_aio.set(key, json.dumps(result), ex = params.SCHEMA_TTL_S)
         except Exception as error:  # noqa: BLE001

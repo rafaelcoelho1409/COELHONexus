@@ -66,6 +66,10 @@ embedding:
 
 secretName: coelhonexus-secret
 
+# FastMCP Tasks workers share this Redis queue and concurrency budget.
+mcpTasks:
+  concurrency: 4
+
 # BYOK credential store: keys entered via /settings UI → Fernet-encrypted MinIO.
 # manageKek=false: store auto-generates KEK inside MinIO (zero-config, safe default).
 # manageKek=true: chart provisions a stable Helm-managed KEK Secret (stronger separation).

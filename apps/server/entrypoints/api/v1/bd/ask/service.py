@@ -1,7 +1,6 @@
 """HTTP orchestration for book-scoped Ask endpoints and streaming turns."""
+
 from __future__ import annotations
-import domains, infra
-from . import schemas
 
 import asyncio
 import json
@@ -12,6 +11,10 @@ import uuid
 from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
 
+import domains
+import infra
+
+from . import schemas
 
 logger = logging.getLogger(__name__)
 _ACTIVE_TASKS: dict[int, asyncio.Task] = {}
@@ -37,17 +40,24 @@ async def branch_thread(thread_id: str, payload: schemas.BranchRequest) -> dict:
     await domains.bd.ask.source.conversation.service.ensure_table()
     book_id = await domains.bd.ask.source.conversation.service.thread_book_id(thread_id)
     if not book_id:
-        raise HTTPException(status_code = 404, detail = "Ask thread not found")
+        raise HTTPException(status_code=404, detail="Ask thread not found")
     new_thread_id = uuid.uuid4().hex[:12]
     copied = await domains.bd.ask.source.conversation.service.branch_thread(
-        thread_id, new_thread_id, book_id, payload.up_to_created_at,
+        thread_id,
+        new_thread_id,
+        book_id,
+        payload.up_to_created_at,
     )
     return {"new_thread_id": new_thread_id, "copied": copied}
 
 
 async def delete_thread(thread_id: str) -> dict:
     await domains.bd.ask.source.conversation.service.ensure_table()
-    return {"deleted": await domains.bd.ask.source.conversation.service.delete_thread(thread_id)}
+    return {
+        "deleted": await domains.bd.ask.source.conversation.service.delete_thread(
+            thread_id
+        )
+    }
 
 
 async def cancel_turn(turn_id: int) -> dict:
@@ -64,29 +74,64 @@ def _citation_event(state: dict) -> list[dict]:
 
 
 def _thinking_update(thinking: dict, node: str, update: dict) -> None:
-    graph = thinking.setdefault("graph", {
-        "route": "",
-        "active_node": None,
-        "visited_nodes": [],
-        "retrieval_sources": [],
-        "status": "running",
-    })
+    graph = thinking.setdefault(
+        "graph",
+        {
+            "route": "",
+            "active_node": None,
+            "active_nodes": [],
+            "visited_nodes": [],
+            "retrieval_sources": [],
+            "status": "running",
+        },
+    )
     subgraph_node = node in {
         "prepare_retrieval",
         "elasticsearch",
         "qdrant",
         "neo4j",
+        "web_search",
         "fuse_evidence",
     }
-    graph_node = "retrieve_evidence" if subgraph_node else node
-    graph["active_node"] = graph_node
+    graph_node = node
     graph["status"] = "running"
-    if graph_node not in graph["visited_nodes"]:
-        graph["visited_nodes"].append(graph_node)
+    if subgraph_node and node not in graph["visited_nodes"]:
+        graph["visited_nodes"].append(node)
+    if subgraph_node:
+        active_nodes = graph.setdefault("active_nodes", [])
+        active_nodes[:] = [
+            active
+            for active in active_nodes
+            if active
+            in {
+                "prepare_retrieval",
+                "elasticsearch",
+                "qdrant",
+                "neo4j",
+                "web_search",
+                "fuse_evidence",
+            }
+        ]
+        node_status = update.get("status")
+        if node_status == "running":
+            if node not in active_nodes:
+                active_nodes.append(node)
+        elif node_status in {"done", "failed"}:
+            active_nodes[:] = [active for active in active_nodes if active != node]
+        graph["active_node"] = active_nodes[-1] if active_nodes else None
+    else:
+        graph["active_node"] = graph_node
+        graph["active_nodes"] = [graph_node]
+        if graph_node not in graph["visited_nodes"]:
+            graph["visited_nodes"].append(graph_node)
     if update.get("intent") == "conversation":
         graph["route"] = "conversation"
     elif update.get("mode") in {"fast", "standard", "deep"}:
         graph["route"] = update["mode"]
+    if update.get("external_search_status") is not None:
+        thinking["external_search_status"] = update["external_search_status"]
+    if update.get("external_search_provider") is not None:
+        thinking["external_search_provider"] = update["external_search_provider"]
     if update.get("retrieval_sources") is not None:
         graph["retrieval_sources"] = list(update.get("retrieval_sources") or [])
     node_stage = {
@@ -96,6 +141,7 @@ def _thinking_update(thinking: dict, node: str, update: dict) -> None:
         "elasticsearch": ("retrieve", "Searching Elasticsearch"),
         "qdrant": ("retrieve", "Searching Qdrant"),
         "neo4j": ("retrieve", "Searching Neo4j"),
+        "web_search": ("retrieve", "Searching the configured external source"),
         "fuse_evidence": ("retrieve", "Combining book evidence"),
         "search_external": ("retrieve", "Searching the configured external source"),
         "rewrite_query": ("retrieve", "Refining the book search"),
@@ -111,18 +157,25 @@ def _thinking_update(thinking: dict, node: str, update: dict) -> None:
         stage, action = node_stage[node]
         index = order.index(stage)
         for position, name in enumerate(order):
-            value = thinking["stages"].setdefault(name, {"status": "queued", "action": ""})
+            value = thinking["stages"].setdefault(
+                name, {"status": "queued", "action": ""}
+            )
             if position < index:
-                value.update(status = "done", action = "")
+                value.update(status="done", action="")
             elif position == index:
-                value.update(status = "active", action = action)
+                value.update(status="active", action=action)
     if update.get("mode"):
         thinking["mode"] = update["mode"]
     if update.get("sub_questions"):
         thinking["deep"] = {
             "research_plan": update.get("research_plan", ""),
             "sub_questions": [
-                {"question": question, "status": "queued", "answer": "", "answer_preview": ""}
+                {
+                    "question": question,
+                    "status": "queued",
+                    "answer": "",
+                    "answer_preview": "",
+                }
                 for question in update["sub_questions"]
             ],
             "confidence_score": None,
@@ -130,11 +183,21 @@ def _thinking_update(thinking: dict, node: str, update: dict) -> None:
     if update.get("research_plan") and isinstance(thinking.get("deep"), dict):
         thinking["deep"]["research_plan"] = update["research_plan"]
     if update.get("sub_results") and isinstance(thinking.get("deep"), dict):
-        answers = {item.get("sub_question"): item.get("answer", "") for item in update["sub_results"] if isinstance(item, dict)}
+        answers = {
+            item.get("sub_question"): item.get("answer", "")
+            for item in update["sub_results"]
+            if isinstance(item, dict)
+        }
         for item in thinking["deep"].get("sub_questions", []):
             if item["question"] in answers:
-                item.update(status = "done", answer = answers[item["question"]], answer_preview = answers[item["question"]][:200])
-    if update.get("confidence_score") is not None and isinstance(thinking.get("deep"), dict):
+                item.update(
+                    status="done",
+                    answer=answers[item["question"]],
+                    answer_preview=answers[item["question"]][:200],
+                )
+    if update.get("confidence_score") is not None and isinstance(
+        thinking.get("deep"), dict
+    ):
         thinking["deep"]["confidence_score"] = update["confidence_score"]
     if update.get("citations"):
         thinking["citations"] = update["citations"]
@@ -152,10 +215,21 @@ def _event(
     if graph is not None:
         event["graph"] = graph
     for key in (
-        "mode", "intent", "generation", "confidence_score", "citations", "sub_questions",
-        "research_plan", "sub_results", "latest_sub_question", "latest_sub_answer",
-        "latest_sub_answer_preview", "retrieval_sources", "verification_status",
-        "external_search_status", "external_search_provider",
+        "mode",
+        "intent",
+        "generation",
+        "confidence_score",
+        "citations",
+        "sub_questions",
+        "research_plan",
+        "sub_results",
+        "latest_sub_question",
+        "latest_sub_answer",
+        "latest_sub_answer_preview",
+        "retrieval_sources",
+        "verification_status",
+        "external_search_status",
+        "external_search_provider",
     ):
         if key in update:
             event[key] = update[key]
@@ -169,62 +243,79 @@ def _event(
 
 async def ask_stream(payload: schemas.AskRequest) -> StreamingResponse:
     await domains.bd.ask.source.conversation.service.ensure_table()
-    prior_book = await domains.bd.ask.source.conversation.service.thread_book_id(payload.thread_id)
+    prior_book = await domains.bd.ask.source.conversation.service.thread_book_id(
+        payload.thread_id
+    )
     if prior_book is not None and prior_book != payload.book_id:
-        raise HTTPException(status_code = 409, detail = "An Ask thread is locked to its original book")
+        raise HTTPException(
+            status_code=409, detail="An Ask thread is locked to its original book"
+        )
     index = await domains.bd.rag.ai.runs.service.read_current_index(payload.book_id)
     if index is None:
         raise HTTPException(
-            status_code = 409,
-            detail = "This book has no completed Ingestion retrieval index to ask about",
+            status_code=409,
+            detail="This book has no completed Ingestion retrieval index to ask about",
         )
     # app.state.llm is built once during server startup. Settings can change
     # after that, so build a per-turn model using the current chat endpoint.
     try:
-        model = domains.settings.chat.service.build_chat_model(timeout_s = 600.0)
+        model = domains.settings.chat.service.build_chat_model(timeout_s=600.0)
     except Exception as error:
         logger.exception("[bd:ask] configured chat model is unavailable")
         raise HTTPException(
-            status_code = 503,
-            detail = "The configured chat endpoint is unavailable",
+            status_code=503,
+            detail="The configured chat endpoint is unavailable",
         ) from error
     import ai
 
-    planner = ai.bd.agents.ask.planner.agent.planner(model)
-    grader = ai.bd.agents.ask.grader.agent.grader(model)
-    answerer = ai.bd.agents.ask.answer.agent.answerer(model)
-    critic = ai.bd.agents.ask.critic.agent.critic(model)
-    graph = ai.bd.graphs.ask.adaptive.service.adaptive_ask_graph()
-    history = await domains.bd.ask.source.conversation.service.history(payload.thread_id)
+    history = await domains.bd.ask.source.conversation.service.history(
+        payload.thread_id
+    )
     turn_token = uuid.uuid4().hex
-    active_turn_key = domains.bd.ask.source.conversation.keys.active_turn_key(payload.book_id, turn_token)
+    active_turn_key = domains.bd.ask.source.conversation.keys.active_turn_key(
+        payload.book_id, turn_token
+    )
     try:
         async with (
             infra.redis.service.client() as redis,
             redis.lock(
-                domains.bd.ingestion.ai.progress.keys.book_mutation_lock_key(payload.book_id),
-                timeout = 120,
-                blocking_timeout = 30,
+                domains.bd.ingestion.ai.progress.keys.book_mutation_lock_key(
+                    payload.book_id
+                ),
+                timeout=120,
+                blocking_timeout=30,
             ),
         ):
-            prior_book = await domains.bd.ask.source.conversation.service.thread_book_id(payload.thread_id)
+            prior_book = (
+                await domains.bd.ask.source.conversation.service.thread_book_id(
+                    payload.thread_id
+                )
+            )
             if prior_book is not None and prior_book != payload.book_id:
-                raise HTTPException(status_code = 409, detail = "An Ask thread is locked to its original book")
-            index = await domains.bd.rag.ai.runs.service.read_current_index(payload.book_id)
+                raise HTTPException(
+                    status_code=409,
+                    detail="An Ask thread is locked to its original book",
+                )
+            index = await domains.bd.rag.ai.runs.service.read_current_index(
+                payload.book_id
+            )
             if index is None:
                 raise HTTPException(
-                    status_code = 409,
-                    detail = "This book has no completed Ingestion retrieval index to ask about",
+                    status_code=409,
+                    detail="This book has no completed Ingestion retrieval index to ask about",
                 )
             indexed_run_id = index["agentic_run_id"]
             await redis.set(
                 active_turn_key,
                 "1",
-                ex = domains.bd.ask.source.conversation.keys.ACTIVE_TURN_TTL_S,
+                ex=domains.bd.ask.source.conversation.keys.ACTIVE_TURN_TTL_S,
             )
             try:
                 turn_id = await domains.bd.ask.source.conversation.service.insert_turn(
-                    payload.book_id, indexed_run_id, payload.thread_id, payload.question,
+                    payload.book_id,
+                    indexed_run_id,
+                    payload.thread_id,
+                    payload.question,
                 )
             except Exception:
                 await redis.delete(active_turn_key)
@@ -233,33 +324,34 @@ async def ask_stream(payload: schemas.AskRequest) -> StreamingResponse:
         raise
     except Exception as error:
         logger.exception("[bd:ask] could not reserve or create conversation turn")
-        raise HTTPException(status_code = 503, detail = "Ask conversation storage is unavailable") from error
-    context = ai.bd.graphs.ask.adaptive.entities.AskContext(
-        book_id = payload.book_id,
-        run_id = indexed_run_id,
-        model = model,
-        planner = planner,
-        grader = grader,
-        answerer = answerer,
-        critic = critic,
-        counter_run_id = payload.thread_id,
+        raise HTTPException(
+            status_code=503, detail="Ask conversation storage is unavailable"
+        ) from error
+    try:
+        runtime = domains.bd.ask.ai.service.build_runtime(
+            payload.book_id,
+            indexed_run_id,
+            counter_run_id=payload.thread_id,
+            model=model,
+        )
+    except Exception as error:
+        logger.exception("[bd:ask] could not construct the adaptive Ask graph")
+        raise HTTPException(
+            status_code=503,
+            detail="The BD Ask graph could not be constructed",
+        ) from error
+    graph = runtime.graph
+    context = runtime.context
+    initial_state = domains.bd.ask.ai.service.initial_state(
+        question=payload.question,
+        thread_id=payload.thread_id,
+        turn_id=str(turn_id),
+        conversation_history=history,
+        force_mode=payload.force_mode,
+        sub_questions=payload.sub_questions,
     )
-    initial_state = {
-        "question": payload.question,
-        "thread_id": payload.thread_id,
-        "turn_id": str(turn_id),
-        "conversation_history": history,
-        "force_mode": payload.force_mode or "",
-        "supplied_sub_questions": payload.sub_questions,
-        "mode": "",
-        "queries": [],
-        "documents": [],
-        "sub_results": [],
-        "citations": [],
-        "retry_count": 0,
-    }
     run_id = payload.thread_id
-    domains.settings.llm_counter.service.set_context(ns = "bd", run_id = run_id)
+    domains.settings.llm_counter.service.set_context(ns="bd", run_id=run_id)
     started = time.monotonic()
     thinking = {
         "stages": {
@@ -274,6 +366,7 @@ async def ask_stream(payload: schemas.AskRequest) -> StreamingResponse:
         "graph": {
             "route": "",
             "active_node": "plan_research",
+            "active_nodes": ["plan_research"],
             "visited_nodes": [],
             "retrieval_sources": [],
             "status": "running",
@@ -285,7 +378,11 @@ async def ask_stream(payload: schemas.AskRequest) -> StreamingResponse:
     config = {
         "configurable": {"thread_id": payload.thread_id},
         "recursion_limit": ai.bd.graphs.ask.adaptive.params.RECURSION_LIMIT,
-        "callbacks": [callback for callback in (infra.langfuse.service.build_langchain_callback(),) if callback is not None],
+        "callbacks": [
+            callback
+            for callback in (infra.langfuse.service.build_langchain_callback(),)
+            if callback is not None
+        ],
     }
 
     async def _produce() -> None:
@@ -293,7 +390,9 @@ async def ask_stream(payload: schemas.AskRequest) -> StreamingResponse:
 
         async def _heartbeat() -> None:
             while True:
-                await asyncio.sleep(ai.bd.graphs.ask.adaptive.params.HEARTBEAT_INTERVAL_S)
+                await asyncio.sleep(
+                    ai.bd.graphs.ask.adaptive.params.HEARTBEAT_INTERVAL_S
+                )
                 try:
                     async with infra.redis.service.client() as redis:
                         await redis.expire(
@@ -306,14 +405,21 @@ async def ask_stream(payload: schemas.AskRequest) -> StreamingResponse:
                 thinking["duration_ms"] = int((time.monotonic() - started) * 1000)
                 async with snapshot_lock:
                     await domains.bd.ask.source.conversation.service.update_snapshot(
-                        turn_id, thinking.get("mode", ""), thinking,
+                        turn_id,
+                        thinking.get("mode", ""),
+                        thinking,
                     )
                 await queue.put(("heartbeat", None))
 
-        heartbeat_task = asyncio.create_task(_heartbeat(), name = f"bd-ask-heartbeat-{turn_id}")
+        heartbeat_task = asyncio.create_task(
+            _heartbeat(), name=f"bd-ask-heartbeat-{turn_id}"
+        )
         try:
             async for streamed in graph.astream(
-                initial_state, context = context, config = config, stream_mode = ["updates", "custom"],
+                initial_state,
+                context=context,
+                config=config,
+                stream_mode=["updates", "custom"],
             ):
                 if isinstance(streamed, tuple) and len(streamed) == 2:
                     stream_kind, values = streamed
@@ -321,12 +427,25 @@ async def ask_stream(payload: schemas.AskRequest) -> StreamingResponse:
                         if isinstance(values, dict):
                             custom_node = str(values.get("node") or "retrieve_evidence")
                             _thinking_update(thinking, custom_node, values)
-                            thinking["duration_ms"] = int((time.monotonic() - started) * 1000)
+                            thinking["duration_ms"] = int(
+                                (time.monotonic() - started) * 1000
+                            )
                             async with snapshot_lock:
                                 await domains.bd.ask.source.conversation.service.update_snapshot(
-                                    turn_id, thinking.get("mode", ""), thinking,
+                                    turn_id,
+                                    thinking.get("mode", ""),
+                                    thinking,
                                 )
-                            await queue.put(("event", {**values, "turn_id": turn_id, "graph": thinking.get("graph")}))
+                            await queue.put(
+                                (
+                                    "event",
+                                    {
+                                        **values,
+                                        "turn_id": turn_id,
+                                        "graph": thinking.get("graph"),
+                                    },
+                                )
+                            )
                         continue
                 else:
                     values = streamed
@@ -339,46 +458,92 @@ async def ask_stream(payload: schemas.AskRequest) -> StreamingResponse:
                     _thinking_update(thinking, node, update)
                     thinking["duration_ms"] = int((time.monotonic() - started) * 1000)
                     async with snapshot_lock:
-                        await domains.bd.ask.source.conversation.service.update_snapshot(
-                            turn_id, final_state.get("mode", ""), thinking,
+                        await (
+                            domains.bd.ask.source.conversation.service.update_snapshot(
+                                turn_id,
+                                final_state.get("mode", ""),
+                                thinking,
+                            )
                         )
-                    await queue.put(("event", _event(node, update, turn_id, graph=thinking.get("graph"))))
+                    await queue.put(
+                        (
+                            "event",
+                            _event(node, update, turn_id, graph=thinking.get("graph")),
+                        )
+                    )
             for stage in thinking["stages"].values():
-                stage.update(status = "done", action = "")
-            thinking["graph"].update(active_node = None, status = "done")
+                stage.update(status="done", action="")
+            thinking["graph"].update(active_node=None, active_nodes=[], status="done")
             duration_ms = int((time.monotonic() - started) * 1000)
             thinking["duration_ms"] = duration_ms
-            try:
-                thinking["usage"] = await domains.settings.llm_counter.service.read_counters("bd", run_id)
-            except Exception:
-                thinking["usage"] = None
+            thinking[
+                "usage"
+            ] = await domains.settings.llm_counter.service.read_counters("bd", run_id)
             answer = str(final_state.get("generation", ""))
             await domains.bd.ask.source.conversation.service.update_turn(
-                turn_id, answer, final_state.get("mode", "standard"), thinking,
+                turn_id,
+                answer,
+                final_state.get("mode", "standard"),
+                thinking,
             )
-            await queue.put(("event", {"node": "end", "turn_id": turn_id, "duration_ms": duration_ms,
-                                        "usage": thinking.get("usage"), "citations": _citation_event(final_state),
-                                        "graph": thinking.get("graph")}))
+            await queue.put(
+                (
+                    "event",
+                    {
+                        "node": "end",
+                        "turn_id": turn_id,
+                        "duration_ms": duration_ms,
+                        "usage": thinking.get("usage"),
+                        "citations": _citation_event(final_state),
+                        "graph": thinking.get("graph"),
+                    },
+                )
+            )
         except asyncio.CancelledError:
             raise
-        except Exception as error:  # noqa: BLE001 — report an actionable stream error and finish the persisted snapshot.
+        except Exception as error:
             logger.exception("[bd:ask] graph execution failed")
-            failure = f"Error generating answer: {type(error).__name__}: {str(error)[:240]}"
+            failure = (
+                f"Error generating answer: {type(error).__name__}: {str(error)[:240]}"
+            )
             for stage in thinking["stages"].values():
-                stage.update(status = "done", action = "")
-            thinking["graph"].update(active_node = None, status = "failed")
+                stage.update(status="done", action="")
+            thinking["graph"].update(active_node=None, active_nodes=[], status="failed")
             thinking["duration_ms"] = int((time.monotonic() - started) * 1000)
             try:
                 await domains.bd.ask.source.conversation.service.update_turn(
-                    turn_id, failure, final_state.get("mode", "standard"), thinking,
+                    turn_id,
+                    failure,
+                    final_state.get("mode", "standard"),
+                    thinking,
                 )
             except Exception:
                 logger.exception("[bd:ask] failed to persist graph error")
-            await queue.put(("event", {"node": "error", "turn_id": turn_id, "error": failure, "graph": thinking.get("graph")}))
-            await queue.put(("event", {"node": "end", "turn_id": turn_id, "duration_ms": thinking["duration_ms"], "graph": thinking.get("graph")}))
+            await queue.put(
+                (
+                    "event",
+                    {
+                        "node": "error",
+                        "turn_id": turn_id,
+                        "error": failure,
+                        "graph": thinking.get("graph"),
+                    },
+                )
+            )
+            await queue.put(
+                (
+                    "event",
+                    {
+                        "node": "end",
+                        "turn_id": turn_id,
+                        "duration_ms": thinking["duration_ms"],
+                        "graph": thinking.get("graph"),
+                    },
+                )
+            )
         finally:
             heartbeat_task.cancel()
-            await asyncio.gather(heartbeat_task, return_exceptions = True)
+            await asyncio.gather(heartbeat_task, return_exceptions=True)
             try:
                 async with infra.redis.service.client() as redis:
                     await redis.delete(active_turn_key)
@@ -387,7 +552,7 @@ async def ask_stream(payload: schemas.AskRequest) -> StreamingResponse:
             _ACTIVE_TASKS.pop(turn_id, None)
             await queue.put(("done", None))
 
-    task = asyncio.create_task(_produce(), name = f"bd-ask-{turn_id}")
+    task = asyncio.create_task(_produce(), name=f"bd-ask-{turn_id}")
     _ACTIVE_TASKS[turn_id] = task
 
     async def _stream():
@@ -399,6 +564,8 @@ async def ask_stream(payload: schemas.AskRequest) -> StreamingResponse:
             if kind == "heartbeat":
                 yield ": keepalive\n\n"
                 continue
-            yield "data: " + json.dumps(value, ensure_ascii = False, default = str) + "\n\n"
+            yield "data: " + json.dumps(value, ensure_ascii=False, default=str) + "\n\n"
 
-    return StreamingResponse(_stream(), media_type = "text/event-stream", headers = {"Cache-Control": "no-cache"})
+    return StreamingResponse(
+        _stream(), media_type="text/event-stream", headers={"Cache-Control": "no-cache"}
+    )

@@ -15,14 +15,17 @@ BOOK_CITATION_FIELDS = frozenset({
     "overview_learning_unit_ids",
     "recommendation_learning_unit_ids",
 })
-# Chapter synthesis can return a large structured guide and routinely outlives the
-# shared chat adapter's 30-second default. Match the long-running Distill stage to
-# the Rotator's supported wall budget while limiting its simultaneous requests.
-CHAPTER_SYNTHESIS_CONCURRENCY = 2
-CHAPTER_SYNTHESIS_TIMEOUT_S = 240.0
+# Chapter synthesis can return a large structured guide. Keep one chapter request
+# in flight per run; the shared Chat adapter also enforces a cross-worker limit.
+CHAPTER_SYNTHESIS_CONCURRENCY = 1
 CHAPTER_SYNTHESIS_SETTLE_CAP_S = 130.0
-CHAPTER_AGENT_RESPONSE_ATTEMPTS = 3
-CHAPTER_CITATION_REPAIR_ATTEMPTS = 1
+# The DeepAgent applies ChapterSynthesis response_format and gets one bounded
+# correction invocation if its final structured response is still invalid.
+CHAPTER_STRUCTURED_OUTPUT_ATTEMPTS = 2
+# One graph-owned retry for transient provider errors after the first request.
+CHAPTER_SYNTHESIS_NODE_RETRY_ATTEMPTS = 2
+# Kept as the explicit zero-nested-provider-retry contract for graph-bound synthesis.
+CHAPTER_SYNTHESIS_PROVIDER_ATTEMPTS = 1
 CHAPTER_VISUAL_REPAIR_ATTEMPTS = 1
 BOOK_AGENT_RESPONSE_ATTEMPTS = 4
 BOOK_SYNTHESIS_MAX_TOKENS = 3800
@@ -33,9 +36,11 @@ GRAPH_CONCURRENCY = 4
 # Keep extraction batches compact; chapter work gets its own graph task for per-chapter scheduling and progress.
 FANOUT_UNIT_BATCH_SIZE = 8
 FANOUT_CHAPTER_BATCH_SIZE = 1
-# Retry transient provider failures at the graph node boundary as well as within each model call.
-AGENT_CALL_ATTEMPTS = 3
+# Provider-backed graph nodes retry at the graph boundary; inner calls make one provider attempt.
+AGENT_CALL_ATTEMPTS = 1
 AGENT_CALL_RETRY_WAIT_BASE_S = 5.0
+# Optional external research catches failures and falls back inside its node, so it owns a small retry loop.
+OPTIONAL_RESEARCH_PROVIDER_ATTEMPTS = 3
 # Chapter coverage review is optional; report a visible fallback rather than
 # holding downstream report stages open through repeated provider retries.
 COVERAGE_REVIEW_HEARTBEAT_S = 15.0
@@ -43,7 +48,6 @@ COVERAGE_REVIEW_CONCURRENCY = 2
 COVERAGE_REVIEW_MAX_CORRECTIONS = 2
 COVERAGE_REVIEW_AREAS = frozenset({"coverage", "evidence", "consistency", "clarity"})
 COVERAGE_CORRECTOR_RESPONSE_ATTEMPTS = 2
-COVERAGE_CORRECTOR_PROVIDER_ATTEMPTS = 1
 RUN_EXECUTION_LOCK_LEASE_S = 300
 RUN_EXECUTION_LOCK_RENEW_S = 30
 RUN_EXECUTION_LOCK_RETRY_S = 15

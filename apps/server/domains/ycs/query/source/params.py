@@ -69,6 +69,7 @@ CYPHER_WRITE_KEYWORDS: tuple[str, ...] = (
 
 ES_DEFAULT_SIZE = 20
 QDRANT_DEFAULT_LIMIT = 20
+MAX_RAW_RESULT_HITS = 200
 QDRANT_READ_OPS: tuple[str, ...] = ("search", "scroll", "query_points", "count")
 
 # Qdrant payload field shape — must match `domains.ycs.ingestion.domain

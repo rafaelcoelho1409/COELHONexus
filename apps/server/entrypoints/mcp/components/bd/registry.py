@@ -1,4 +1,5 @@
 """Register FastMCP capabilities owned by the BD domain."""
+
 from __future__ import annotations
 from . import prompts, resources, tools
 
@@ -11,7 +12,7 @@ def register_tools(mcp: FastMCP) -> None:
 
 
 def register_resources(mcp: FastMCP) -> None:
-    """Register BD-owned run and index resources."""
+    """Register BD-owned workflow, index, and query-schema resources."""
     resources.registry.register_resources(mcp)
 
 
